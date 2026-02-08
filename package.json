@@ -4,6 +4,11 @@
   "description": "DevPlan — AI-powered development plan management MCP server, powered by aifastdb",
   "main": "dist/index.js",
   "types": "dist/index.d.ts",
+  "files": [
+    "dist",
+    "README.md",
+    "LICENSE"
+  ],
   "bin": {
     "aifastdb-devplan": "./dist/mcp-server/index.js"
   },
@@ -15,7 +20,7 @@
     "clean": "rimraf dist"
   },
   "dependencies": {
-    "aifastdb": "file:../ai_db/packages/node",
+    "aifastdb": "^2.2.6",
     "@modelcontextprotocol/sdk": "^1.0.0"
   },
   "devDependencies": {
