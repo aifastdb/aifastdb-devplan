@@ -92,7 +92,7 @@ Or in Claude Desktop (`claude_desktop_config.json`):
 }
 ```
 
-Once configured, your AI assistant can use 18 `devplan_*` tools to manage your development plans.
+Once configured, your AI assistant can use 16 `devplan_*` tools to manage your development plans.
 
 #### Option B: As an npm Package (Programmatic)
 
@@ -125,7 +125,7 @@ const progress = plan.getProgress();
 console.log(progress);
 ```
 
-### MCP Tools (18 total)
+### MCP Tools (16 total)
 
 #### 📋 Document Management
 
@@ -261,7 +261,7 @@ npm install -g aifastdb-devplan
 }
 ```
 
-配置完成后，AI 助手即可使用 18 个 `devplan_*` 工具来管理你的开发计划。
+配置完成后，AI 助手即可使用 16 个 `devplan_*` 工具来管理你的开发计划。
 
 #### 方式 B：作为 npm 包编程使用
 
@@ -294,7 +294,7 @@ const progress = plan.getProgress();
 console.log(progress);
 ```
 
-### MCP 工具一览（18 个）
+### MCP 工具一览（16 个）
 
 #### 📋 文档管理
 
