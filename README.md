@@ -47,14 +47,17 @@ In the age of AI-assisted programming, developers collaborate with AI assistants
 
 | Feature | Description |
 |---------|-------------|
+| **Dual Storage Engine** | Choose between `graph` (SocialGraphV2, default) or `document` (JSONL) per project |
+| **Graph Visualization** | Built-in HTTP server + vis-network page to visualize tasks/modules as an interactive graph |
 | **11 Document Section Types** | overview, requirements, api_design, technical_notes, architecture, and more |
 | **Two-Level Task Hierarchy** | MainTask + SubTask with priority levels (P0–P3) and status transitions |
 | **Module Registry** | Aggregate tasks and docs by module for intuitive project architecture |
 | **Git Commit Anchoring** | Auto-record commit hash on task completion; `sync_git` detects rollbacks |
 | **Auto Progress Tracking** | Automatically update parent task progress when subtasks are completed |
 | **Idempotent Task Import** | `upsert_task` prevents duplicates, ideal for batch initialization |
+| **Data Migration** | Seamlessly migrate between `document` and `graph` engines with backup support |
 | **Markdown Export** | Generate structured development plan documents for sharing and archiving |
-| **Zero-Config Storage** | Local JSONL storage in the project's `.devplan/` directory — no external database needed |
+| **Zero-Config Storage** | Local storage in the project's `.devplan/` directory — no external database needed |
 
 ### Quick Start
 
@@ -92,7 +95,7 @@ Or in Claude Desktop (`claude_desktop_config.json`):
 }
 ```
 
-Once configured, your AI assistant can use 16 `devplan_*` tools to manage your development plans.
+Once configured, your AI assistant can use 19 `devplan_*` tools to manage your development plans.
 
 #### Option B: As an npm Package (Programmatic)
 
@@ -125,13 +128,13 @@ const progress = plan.getProgress();
 console.log(progress);
 ```
 
-### MCP Tools (16 total)
+### MCP Tools (19 total)
 
 #### 📋 Document Management
 
 | Tool | Description |
 |------|-------------|
-| `devplan_init` | Initialize a development plan |
+| `devplan_init` | Initialize a development plan (auto-detects storage engine) |
 | `devplan_save_section` | Save/update a document section (11 standard types) |
 | `devplan_get_section` | Read a specific document section |
 | `devplan_list_sections` | List all document sections |
@@ -161,17 +164,54 @@ console.log(progress);
 | Tool | Description |
 |------|-------------|
 | `devplan_export_markdown` | Export full Markdown development plan |
+| `devplan_export_graph` | Export graph structure `{ nodes, edges }` for visualization (graph engine only) |
+| `devplan_migrate_engine` | Migrate data between `document` and `graph` engines |
 | `devplan_sync_git` | Sync Git history and detect rollbacks |
+
+### Dual Storage Engine
+
+Each project can independently choose its storage engine:
+
+| Engine | Backend | Default | Features |
+|--------|---------|---------|----------|
+| `graph` | SocialGraphV2 (WAL + sharding) | ✅ New projects | Graph visualization, entity-relation model |
+| `document` | EnhancedDocumentStore (JSONL) | Auto-detected for legacy | Lightweight, human-readable files |
+
+Engine selection priority:
+1. Explicit `engine` parameter in `createDevPlan()`
+2. `.devplan/{project}/engine.json` configuration
+3. Auto-detect existing JSONL files → `document`
+4. New projects → `graph`
+
+### Graph Visualization
+
+Visualize your development plan as an interactive graph:
+
+```bash
+npm run visualize -- --project my-project --base-path /path/to/.devplan
+# or
+aifastdb-devplan-visual --project my-project --port 3210
+```
+
+The built-in HTTP server serves a self-contained HTML page with [vis-network](https://visjs.github.io/vis-network/), featuring:
+
+- **5 node types**: project (star), module (diamond), main-task (circle), sub-task (dot), document (box)
+- **Status-based coloring**: completed (green), in-progress (blue), pending (gray)
+- **Interactive features**: click for details panel, filter by type, stats bar with progress
+- **Dark theme**: consistent with modern development tools
 
 ### Data Storage
 
-Data is stored locally in JSONL format — **no external database required**:
+Data is stored locally — **no external database required**:
 
 ```
 .devplan/{projectName}/
-├── documents.jsonl    # Document sections
-├── tasks.jsonl        # Main tasks + subtasks
-└── modules.jsonl      # Feature modules
+├── engine.json        # Engine configuration (graph or document)
+├── documents.jsonl    # Document sections (document engine)
+├── tasks.jsonl        # Main tasks + subtasks (document engine)
+├── modules.jsonl      # Feature modules (document engine)
+└── graph-data/        # WAL-based graph storage (graph engine)
+    └── wal/           # Write-ahead log shards
 ```
 
 Storage path resolution priority:
@@ -216,14 +256,17 @@ Storage path resolution priority:
 
 | 特性 | 说明 |
 |------|------|
+| **双存储引擎** | 每个项目可独立选择 `graph`（SocialGraphV2，默认）或 `document`（JSONL）引擎 |
+| **图谱可视化** | 内置 HTTP 服务器 + vis-network 页面，将任务/模块以交互式图谱展示 |
 | **11 种文档片段** | overview, requirements, api_design, technical_notes, architecture 等标准类型 |
 | **两级任务层级** | 主任务 (MainTask) + 子任务 (SubTask)，支持优先级 (P0-P3) 和状态流转 |
 | **功能模块注册表** | 按模块维度聚合任务和文档，直观展示项目架构 |
 | **Git Commit 锚定** | 完成任务时自动记录 commit hash，`sync_git` 可检测代码回滚 |
 | **自动进度统计** | 完成子任务时自动更新主任务进度百分比 |
 | **幂等任务导入** | `upsert_task` 支持防重复导入，适合批量初始化 |
+| **数据迁移** | 在 `document` 和 `graph` 引擎间无缝迁移，支持备份 |
 | **Markdown 导出** | 生成结构化的开发计划文档，方便分享和归档 |
-| **零配置存储** | JSONL 格式本地存储，数据保存在项目 `.devplan/` 目录中 |
+| **零配置存储** | 本地存储，数据保存在项目 `.devplan/` 目录中，无需外部数据库 |
 
 ### 快速开始
 
@@ -261,7 +304,7 @@ npm install -g aifastdb-devplan
 }
 ```
 
-配置完成后，AI 助手即可使用 16 个 `devplan_*` 工具来管理你的开发计划。
+配置完成后，AI 助手即可使用 19 个 `devplan_*` 工具来管理你的开发计划。
 
 #### 方式 B：作为 npm 包编程使用
 
@@ -294,13 +337,13 @@ const progress = plan.getProgress();
 console.log(progress);
 ```
 
-### MCP 工具一览（16 个）
+### MCP 工具一览（19 个）
 
 #### 📋 文档管理
 
 | 工具 | 说明 |
 |------|------|
-| `devplan_init` | 初始化开发计划 |
+| `devplan_init` | 初始化开发计划（自动检测存储引擎） |
 | `devplan_save_section` | 保存/更新文档片段（11 种标准类型） |
 | `devplan_get_section` | 读取指定文档片段 |
 | `devplan_list_sections` | 列出所有文档片段 |
@@ -330,17 +373,54 @@ console.log(progress);
 | 工具 | 说明 |
 |------|------|
 | `devplan_export_markdown` | 导出完整 Markdown 格式开发计划 |
+| `devplan_export_graph` | 导出图结构 `{ nodes, edges }` 用于可视化（仅 graph 引擎） |
+| `devplan_migrate_engine` | 在 `document` 和 `graph` 引擎间迁移数据 |
 | `devplan_sync_git` | 同步 Git 历史，检测代码回滚 |
+
+### 双存储引擎
+
+每个项目可独立选择存储引擎：
+
+| 引擎 | 后端 | 默认 | 特点 |
+|------|------|------|------|
+| `graph` | SocialGraphV2（WAL + 分片） | ✅ 新项目 | 图可视化、实体-关系模型 |
+| `document` | EnhancedDocumentStore（JSONL） | 旧项目自动检测 | 轻量、文件可读 |
+
+引擎选择优先级：
+1. `createDevPlan()` 显式传入 `engine` 参数
+2. `.devplan/{project}/engine.json` 配置文件
+3. 已有 JSONL 数据文件 → 自动识别为 `document`
+4. 新项目 → 默认使用 `graph`
+
+### 图谱可视化
+
+将开发计划以交互式图谱形式展示：
+
+```bash
+npm run visualize -- --project my-project --base-path /path/to/.devplan
+# 或
+aifastdb-devplan-visual --project my-project --port 3210
+```
+
+内置 HTTP 服务器提供自包含 HTML 页面，使用 [vis-network](https://visjs.github.io/vis-network/) 渲染：
+
+- **5 种节点类型**：项目（星形）、模块（菱形）、主任务（圆形）、子任务（小圆点）、文档（方形）
+- **状态着色**：已完成（绿色）、进行中（蓝色）、待开始（灰色）
+- **交互功能**：点击查看详情面板、按类型过滤、顶部统计栏 + 进度条
+- **暗色主题**：与现代开发工具风格一致
 
 ### 数据存储
 
-数据以 JSONL 格式存储在本地，**无需外部数据库**：
+数据存储在本地，**无需外部数据库**：
 
 ```
 .devplan/{projectName}/
-├── documents.jsonl    # 文档片段
-├── tasks.jsonl        # 主任务 + 子任务
-└── modules.jsonl      # 功能模块
+├── engine.json        # 引擎配置（graph 或 document）
+├── documents.jsonl    # 文档片段（document 引擎）
+├── tasks.jsonl        # 主任务 + 子任务（document 引擎）
+├── modules.jsonl      # 功能模块（document 引擎）
+└── graph-data/        # WAL 图存储（graph 引擎）
+    └── wal/           # 预写日志分片
 ```
 
 存储路径解析优先级：
@@ -367,8 +447,9 @@ console.log(progress);
 
 ## Tech Stack / 技术栈
 
-- **Storage Engine / 存储引擎**: [aifastdb](https://github.com/aifastdb/aifastdb) — High-performance JSONL document store built with Rust + N-API
+- **Storage Engine / 存储引擎**: [aifastdb](https://github.com/aifastdb/aifastdb) — Dual engine: SocialGraphV2 (graph) + EnhancedDocumentStore (JSONL), built with Rust + N-API
 - **Protocol / 通信协议**: [MCP (Model Context Protocol)](https://modelcontextprotocol.io) — Standard protocol for AI assistant tool invocation
+- **Visualization / 可视化**: [vis-network](https://visjs.github.io/vis-network/) — Interactive graph visualization (CDN, zero dependencies)
 - **Runtime / 运行时**: Node.js ≥ 18
 - **Language / 语言**: TypeScript (strict mode)
 

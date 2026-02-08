@@ -36,27 +36,40 @@ import {
 } from '@modelcontextprotocol/sdk/types.js';
 
 import {
-  DevPlanStore,
   createDevPlan,
   listDevPlans,
+  getProjectEngine,
+  type DevPlanEngine,
+} from '../dev-plan-factory';
+import { migrateEngine } from '../dev-plan-migrate';
+import type { IDevPlanStore } from '../dev-plan-interface';
+import {
   ALL_SECTIONS,
   SECTION_DESCRIPTIONS,
   type DevPlanSection,
   type TaskStatus,
   type TaskPriority,
-} from '../dev-plan-store';
+} from '../types';
 
 // ============================================================================
 // DevPlan Store Cache
 // ============================================================================
 
-const devPlanCache = new Map<string, DevPlanStore>();
+const devPlanCache = new Map<string, IDevPlanStore>();
 
-function getDevPlan(projectName: string): DevPlanStore {
-  if (!devPlanCache.has(projectName)) {
-    devPlanCache.set(projectName, createDevPlan(projectName));
+function getDevPlan(projectName: string, engine?: DevPlanEngine): IDevPlanStore {
+  const cacheKey = projectName;
+  if (engine) {
+    // 显式指定引擎时，清除缓存以使用新引擎
+    devPlanCache.delete(cacheKey);
+    const plan = createDevPlan(projectName, undefined, engine);
+    devPlanCache.set(cacheKey, plan);
+    return plan;
   }
-  return devPlanCache.get(projectName)!;
+  if (!devPlanCache.has(cacheKey)) {
+    devPlanCache.set(cacheKey, createDevPlan(projectName));
+  }
+  return devPlanCache.get(cacheKey)!;
 }
 
 // ============================================================================
@@ -488,6 +501,55 @@ const TOOLS = [
       required: ['projectName', 'moduleId'],
     },
   },
+  {
+    name: 'devplan_export_graph',
+    description: 'Export the DevPlan as a graph structure (nodes + edges) for visualization. Only available when the project uses the "graph" engine (SocialGraphV2). Returns { nodes, edges } compatible with vis-network.\n将 DevPlan 导出为图结构（节点+边）用于可视化。仅在项目使用 "graph" 引擎 (SocialGraphV2) 时可用。返回兼容 vis-network 的 { nodes, edges }。',
+    inputSchema: {
+      type: 'object' as const,
+      properties: {
+        projectName: {
+          type: 'string',
+          description: 'Project name\n项目名称',
+        },
+        includeDocuments: {
+          type: 'boolean',
+          description: 'Whether to include document nodes (default: true)\n是否包含文档节点（默认 true）',
+        },
+        includeModules: {
+          type: 'boolean',
+          description: 'Whether to include module nodes (default: true)\n是否包含模块节点（默认 true）',
+        },
+      },
+      required: ['projectName'],
+    },
+  },
+  {
+    name: 'devplan_migrate_engine',
+    description: 'Migrate project data between storage engines. Supports migration from "document" (EnhancedDocumentStore/JSONL) to "graph" (SocialGraphV2) or vice versa. Automatically backs up old data before migration. Use dryRun=true to preview without changes.\n在存储引擎之间迁移项目数据。支持从 "document"（EnhancedDocumentStore/JSONL）迁移到 "graph"（SocialGraphV2），或反向迁移。迁移前自动备份旧数据。使用 dryRun=true 可预览而不实际修改。',
+    inputSchema: {
+      type: 'object' as const,
+      properties: {
+        projectName: {
+          type: 'string',
+          description: 'Project name\n项目名称',
+        },
+        targetEngine: {
+          type: 'string',
+          enum: ['graph', 'document'],
+          description: 'Target engine to migrate to\n目标引擎类型',
+        },
+        backup: {
+          type: 'boolean',
+          description: 'Whether to backup old data before migration (default: true)\n是否在迁移前备份旧数据（默认 true）',
+        },
+        dryRun: {
+          type: 'boolean',
+          description: 'If true, only preview what would be migrated without making changes (default: false)\n为 true 时仅预览迁移内容，不实际修改（默认 false）',
+        },
+      },
+      required: ['projectName', 'targetEngine'],
+    },
+  },
 ];
 
 // ============================================================================
@@ -518,18 +580,32 @@ interface ToolArgs {
   moduleId?: string;
   /** 功能模块名称 */
   name?: string;
+  /** devplan_export_graph: 是否包含文档节点 */
+  includeDocuments?: boolean;
+  /** devplan_export_graph: 是否包含模块节点 */
+  includeModules?: boolean;
+  /** devplan_migrate_engine: 目标引擎 */
+  targetEngine?: string;
+  /** devplan_migrate_engine: 是否备份 */
+  backup?: boolean;
 }
 
 async function handleToolCall(name: string, args: ToolArgs): Promise<string> {
   switch (name) {
     case 'devplan_init': {
       if (!args.projectName) {
-        // List existing plans
+        // List existing plans with engine info
         const plans = listDevPlans();
+        const planDetails = plans.map((name) => ({
+          name,
+          engine: getProjectEngine(name) || 'unknown',
+        }));
         return JSON.stringify({
-          existingPlans: plans,
+          existingPlans: planDetails,
           availableSections: ALL_SECTIONS,
           sectionDescriptions: SECTION_DESCRIPTIONS,
+          availableEngines: ['graph', 'document'],
+          defaultEngine: 'graph',
           message: plans.length > 0
             ? `Found ${plans.length} existing plan(s). Provide a projectName to initialize a new one.`
             : 'No existing plans. Provide a projectName to create one.',
@@ -537,12 +613,14 @@ async function handleToolCall(name: string, args: ToolArgs): Promise<string> {
       }
 
       const plan = getDevPlan(args.projectName);
+      const engine = getProjectEngine(args.projectName) || 'graph';
       return JSON.stringify({
         success: true,
         projectName: args.projectName,
+        engine,
         availableSections: ALL_SECTIONS,
         sectionDescriptions: SECTION_DESCRIPTIONS,
-        message: `DevPlan initialized for "${args.projectName}". Use devplan_save_section to add document sections and devplan_create_main_task to add development phases.`,
+        message: `DevPlan initialized for "${args.projectName}" with engine "${engine}". Use devplan_save_section to add document sections and devplan_create_main_task to add development phases.`,
       });
     }
 
@@ -1056,6 +1134,89 @@ async function handleToolCall(name: string, args: ToolArgs): Promise<string> {
       }
 
       return JSON.stringify({ success: true, module: updated });
+    }
+
+    case 'devplan_export_graph': {
+      if (!args.projectName) {
+        throw new McpError(ErrorCode.InvalidParams, 'Missing required: projectName');
+      }
+
+      const plan = getDevPlan(args.projectName);
+      const engine = getProjectEngine(args.projectName);
+
+      if (engine !== 'graph' || !plan.exportGraph) {
+        return JSON.stringify({
+          error: `Graph export is only available for projects using the "graph" engine. Project "${args.projectName}" uses "${engine || 'document'}" engine.`,
+          hint: 'Re-initialize the project with engine "graph" to enable graph export.',
+        });
+      }
+
+      try {
+        const graph = plan.exportGraph({
+          includeDocuments: args.includeDocuments,
+          includeModules: args.includeModules,
+        });
+
+        return JSON.stringify({
+          success: true,
+          projectName: args.projectName,
+          engine: 'graph',
+          nodeCount: graph?.nodes.length || 0,
+          edgeCount: graph?.edges.length || 0,
+          graph,
+        });
+      } catch (err) {
+        throw new McpError(ErrorCode.InternalError,
+          err instanceof Error ? err.message : String(err));
+      }
+    }
+
+    case 'devplan_migrate_engine': {
+      if (!args.projectName || !args.targetEngine) {
+        throw new McpError(ErrorCode.InvalidParams, 'Missing required: projectName, targetEngine');
+      }
+
+      const validEngines = ['graph', 'document'];
+      if (!validEngines.includes(args.targetEngine)) {
+        throw new McpError(ErrorCode.InvalidParams,
+          `Invalid targetEngine "${args.targetEngine}". Must be one of: ${validEngines.join(', ')}`);
+      }
+
+      try {
+        const result = migrateEngine(
+          args.projectName,
+          args.targetEngine as DevPlanEngine,
+          undefined,
+          {
+            backup: args.backup,
+            dryRun: args.dryRun,
+          }
+        );
+
+        // 迁移成功后清除缓存，下次访问时使用新引擎
+        if (result.success && !args.dryRun) {
+          devPlanCache.delete(args.projectName);
+        }
+
+        const statusIcon = result.success ? '✅' : '⚠️';
+        const modeLabel = args.dryRun ? ' (dry run)' : '';
+
+        return JSON.stringify({
+          ...result,
+          summary: result.fromEngine === result.toEngine
+            ? `ℹ️ Project "${args.projectName}" already uses "${result.toEngine}" engine. No migration needed.`
+            : result.success
+              ? `${statusIcon} Successfully migrated "${args.projectName}" from "${result.fromEngine}" to "${result.toEngine}"${modeLabel}. ` +
+                `Stats: ${result.stats.modules} modules, ${result.stats.documents} documents, ` +
+                `${result.stats.mainTasks} main tasks, ${result.stats.subTasks} sub-tasks. ` +
+                `Duration: ${result.durationMs}ms.` +
+                (result.backupPath ? ` Backup: ${result.backupPath}` : '')
+              : `${statusIcon} Migration failed with ${result.errors.length} error(s): ${result.errors.join('; ')}`,
+        });
+      } catch (err) {
+        throw new McpError(ErrorCode.InternalError,
+          err instanceof Error ? err.message : String(err));
+      }
     }
 
     default:

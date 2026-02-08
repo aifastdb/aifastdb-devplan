@@ -1,0 +1,1289 @@
+/**
+ * DevPlanGraphStore — 基于 SocialGraphV2 的开发计划存储实现
+ *
+ * 使用 aifastdb 的 SocialGraphV2（图结构存储）作为存储引擎。
+ * 实现 IDevPlanStore 接口，是 DevPlan 系统的两个存储后端之一。
+ *
+ * 特性：
+ * - 图结构存储，天然支持实体间关系
+ * - exportGraph() 输出 vis-network 兼容的 { nodes, edges }，可在 aifastdb_admin 中可视化
+ * - 原地更新（updateEntity），无需 delete+put 去重
+ * - 分片并发存储，高性能
+ *
+ * 数据模型：
+ * - Entity 类型: devplan-project, devplan-doc, devplan-main-task, devplan-sub-task, devplan-module
+ * - Relation 类型: has_document, has_main_task, has_sub_task, module_has_task, module_has_doc
+ */
+
+import {
+  SocialGraphV2,
+  type Entity,
+  type Relation,
+} from 'aifastdb';
+
+import type { IDevPlanStore } from './dev-plan-interface';
+import type {
+  DevPlanSection,
+  DevPlanDocInput,
+  DevPlanDoc,
+  MainTaskInput,
+  MainTask,
+  SubTaskInput,
+  SubTask,
+  CompleteSubTaskResult,
+  ProjectProgress,
+  MainTaskProgress,
+  ModuleInput,
+  Module,
+  ModuleDetail,
+  ModuleStatus,
+  TaskStatus,
+  TaskPriority,
+  SyncGitResult,
+  RevertedTask,
+  DevPlanGraphStoreConfig,
+  DevPlanExportedGraph,
+  DevPlanGraphNode,
+  DevPlanGraphEdge,
+} from './types';
+
+// ============================================================================
+// Constants
+// ============================================================================
+
+/** Entity 类型常量 */
+const ET = {
+  PROJECT: 'devplan-project',
+  DOC: 'devplan-doc',
+  MAIN_TASK: 'devplan-main-task',
+  SUB_TASK: 'devplan-sub-task',
+  MODULE: 'devplan-module',
+} as const;
+
+/** Relation 类型常量 */
+const RT = {
+  HAS_DOCUMENT: 'has_document',
+  HAS_MAIN_TASK: 'has_main_task',
+  HAS_SUB_TASK: 'has_sub_task',
+  MODULE_HAS_TASK: 'module_has_task',
+  MODULE_HAS_DOC: 'module_has_doc',
+} as const;
+
+// ============================================================================
+// Helper
+// ============================================================================
+
+function sectionImportance(section: DevPlanSection): number {
+  const m: Record<DevPlanSection, number> = {
+    overview: 1.0, core_concepts: 0.95, api_design: 0.9,
+    file_structure: 0.7, config: 0.7, examples: 0.6,
+    technical_notes: 0.8, api_endpoints: 0.75, milestones: 0.85,
+    changelog: 0.5, custom: 0.6,
+  };
+  return m[section] ?? 0.6;
+}
+
+/** 生成 section+subSection 的唯一 key */
+function sectionKey(section: string, subSection?: string): string {
+  return subSection ? `${section}|${subSection}` : section;
+}
+
+// ============================================================================
+// DevPlanGraphStore Implementation
+// ============================================================================
+
+/**
+ * 基于 SocialGraphV2 的开发计划存储
+ *
+ * 将 DevPlan 的实体（文档、任务、模块）映射为图节点（Entity），
+ * 层级关系（项目→主任务→子任务、模块→任务）映射为图边（Relation）。
+ */
+export class DevPlanGraphStore implements IDevPlanStore {
+  private graph: SocialGraphV2;
+  private projectName: string;
+  /** 缓存的项目根实体 ID */
+  private projectEntityId: string | null = null;
+
+  constructor(projectName: string, config: DevPlanGraphStoreConfig) {
+    this.projectName = projectName;
+    this.graph = new SocialGraphV2({
+      path: config.graphPath,
+      shardCount: config.shardCount || 4,
+      walEnabled: true,
+      mode: 'balanced',
+      shardNames: ['entities', 'relations', 'index', 'meta'],
+    });
+    // 恢复 WAL 数据
+    this.graph.recover();
+    // 确保项目根实体存在
+    this.ensureProjectEntity();
+  }
+
+  // ==========================================================================
+  // Project Entity
+  // ==========================================================================
+
+  private ensureProjectEntity(): void {
+    const existing = this.findProjectEntity();
+    if (existing) {
+      this.projectEntityId = existing.id;
+    } else {
+      const entity = this.graph.addEntity(this.projectName, ET.PROJECT, {
+        projectName: this.projectName,
+        createdAt: Date.now(),
+      });
+      this.projectEntityId = entity.id;
+      this.graph.flush();
+    }
+  }
+
+  private findProjectEntity(): Entity | null {
+    const entities = this.graph.listEntitiesByType(ET.PROJECT);
+    return entities.find(
+      (e) => (e.properties as any)?.projectName === this.projectName
+    ) || null;
+  }
+
+  private getProjectId(): string {
+    if (!this.projectEntityId) {
+      this.ensureProjectEntity();
+    }
+    return this.projectEntityId!;
+  }
+
+  // ==========================================================================
+  // Generic Entity Helpers
+  // ==========================================================================
+
+  /** 按 entityType 列出所有实体并按属性过滤 */
+  private findEntitiesByType(entityType: string): Entity[] {
+    return this.graph.listEntitiesByType(entityType).filter(
+      (e) => (e.properties as any)?.projectName === this.projectName
+    );
+  }
+
+  /** 按属性在指定类型中查找唯一实体 */
+  private findEntityByProp(entityType: string, key: string, value: string): Entity | null {
+    const entities = this.findEntitiesByType(entityType);
+    return entities.find((e) => (e.properties as any)?.[key] === value) || null;
+  }
+
+  /** 获取实体的出向关系 */
+  private getOutRelations(entityId: string, relationType?: string): Relation[] {
+    const filter: any = { sourceId: entityId };
+    if (relationType) filter.relationType = relationType;
+    return this.graph.listRelations(filter);
+  }
+
+  /** 获取实体的入向关系 */
+  private getInRelations(entityId: string, relationType?: string): Relation[] {
+    const filter: any = { targetId: entityId };
+    if (relationType) filter.relationType = relationType;
+    return this.graph.listRelations(filter);
+  }
+
+  // ==========================================================================
+  // Entity <-> DevPlan Type Conversion
+  // ==========================================================================
+
+  private entityToDevPlanDoc(e: Entity): DevPlanDoc {
+    const p = e.properties as any;
+    return {
+      id: e.id,
+      projectName: this.projectName,
+      section: p.section || 'custom',
+      title: p.title || e.name,
+      content: p.content || '',
+      version: p.version || '1.0.0',
+      subSection: p.subSection || undefined,
+      relatedSections: p.relatedSections || [],
+      moduleId: p.moduleId || undefined,
+      createdAt: p.createdAt || e.created_at,
+      updatedAt: p.updatedAt || e.updated_at,
+    };
+  }
+
+  private entityToMainTask(e: Entity): MainTask {
+    const p = e.properties as any;
+    return {
+      id: e.id,
+      projectName: this.projectName,
+      taskId: p.taskId || '',
+      title: p.title || e.name,
+      priority: p.priority || 'P2',
+      description: p.description || undefined,
+      estimatedHours: p.estimatedHours || undefined,
+      relatedSections: p.relatedSections || [],
+      moduleId: p.moduleId || undefined,
+      totalSubtasks: p.totalSubtasks || 0,
+      completedSubtasks: p.completedSubtasks || 0,
+      status: p.status || 'pending',
+      createdAt: p.createdAt || e.created_at,
+      updatedAt: p.updatedAt || e.updated_at,
+      completedAt: p.completedAt || null,
+    };
+  }
+
+  private entityToSubTask(e: Entity): SubTask {
+    const p = e.properties as any;
+    return {
+      id: e.id,
+      projectName: this.projectName,
+      taskId: p.taskId || '',
+      parentTaskId: p.parentTaskId || '',
+      title: p.title || e.name,
+      estimatedHours: p.estimatedHours || undefined,
+      relatedFiles: p.relatedFiles || [],
+      description: p.description || undefined,
+      status: p.status || 'pending',
+      createdAt: p.createdAt || e.created_at,
+      updatedAt: p.updatedAt || e.updated_at,
+      completedAt: p.completedAt || null,
+      completedAtCommit: p.completedAtCommit || undefined,
+      revertReason: p.revertReason || undefined,
+    };
+  }
+
+  private entityToModule(e: Entity): Module {
+    const p = e.properties as any;
+    const moduleId = p.moduleId || '';
+
+    // 计算关联计数
+    const mainTasks = this.listMainTasks({ moduleId });
+    let subTaskCount = 0;
+    let completedSubTaskCount = 0;
+    for (const mt of mainTasks) {
+      const subs = this.listSubTasks(mt.taskId);
+      subTaskCount += subs.length;
+      completedSubTaskCount += subs.filter((s) => s.status === 'completed').length;
+    }
+
+    const docRelations = this.getOutRelations(e.id, RT.MODULE_HAS_DOC);
+    const docCount = docRelations.length;
+
+    return {
+      id: e.id,
+      projectName: this.projectName,
+      moduleId,
+      name: p.name || e.name,
+      description: p.description || undefined,
+      status: p.status || 'active',
+      mainTaskCount: mainTasks.length,
+      subTaskCount,
+      completedSubTaskCount,
+      docCount,
+      createdAt: p.createdAt || e.created_at,
+      updatedAt: p.updatedAt || e.updated_at,
+    };
+  }
+
+  // ==========================================================================
+  // Document Section Operations
+  // ==========================================================================
+
+  saveSection(input: DevPlanDocInput): string {
+    const existing = this.getSection(input.section, input.subSection);
+    const now = Date.now();
+    const version = input.version || '1.0.0';
+    const finalModuleId = input.moduleId || existing?.moduleId;
+
+    if (existing) {
+      // 更新已有文档
+      this.graph.updateEntity(existing.id, {
+        properties: {
+          title: input.title,
+          content: input.content,
+          version,
+          subSection: input.subSection || null,
+          relatedSections: input.relatedSections || [],
+          moduleId: finalModuleId || null,
+          updatedAt: now,
+        },
+      });
+
+      // 如果模块关联变化，更新关系
+      if (finalModuleId && finalModuleId !== existing.moduleId) {
+        this.updateModuleDocRelation(existing.id, existing.moduleId, finalModuleId);
+      }
+
+      this.graph.flush();
+      return existing.id;
+    }
+
+    // 新建文档
+    const entity = this.graph.addEntity(input.title, ET.DOC, {
+      projectName: this.projectName,
+      section: input.section,
+      title: input.title,
+      content: input.content,
+      version,
+      subSection: input.subSection || null,
+      relatedSections: input.relatedSections || [],
+      moduleId: finalModuleId || null,
+      createdAt: now,
+      updatedAt: now,
+    });
+
+    // 创建 project -> doc 关系
+    this.graph.putRelation(this.getProjectId(), entity.id, RT.HAS_DOCUMENT);
+
+    // 如果有模块关联，创建 module -> doc 关系
+    if (finalModuleId) {
+      const modEntity = this.findEntityByProp(ET.MODULE, 'moduleId', finalModuleId);
+      if (modEntity) {
+        this.graph.putRelation(modEntity.id, entity.id, RT.MODULE_HAS_DOC);
+      }
+    }
+
+    this.graph.flush();
+    return entity.id;
+  }
+
+  getSection(section: DevPlanSection, subSection?: string): DevPlanDoc | null {
+    const docs = this.findEntitiesByType(ET.DOC);
+    const key = sectionKey(section, subSection);
+
+    for (const doc of docs) {
+      const p = doc.properties as any;
+      const docKey = sectionKey(p.section, p.subSection || undefined);
+      if (docKey === key) {
+        return this.entityToDevPlanDoc(doc);
+      }
+    }
+    return null;
+  }
+
+  listSections(): DevPlanDoc[] {
+    return this.findEntitiesByType(ET.DOC).map((e) => this.entityToDevPlanDoc(e));
+  }
+
+  updateSection(section: DevPlanSection, content: string, subSection?: string): string {
+    const existing = this.getSection(section, subSection);
+    if (!existing) {
+      throw new Error(
+        `Section "${section}"${subSection ? ` (${subSection})` : ''} not found for project "${this.projectName}"`
+      );
+    }
+    return this.saveSection({
+      projectName: this.projectName,
+      section,
+      title: existing.title,
+      content,
+      version: existing.version,
+      subSection,
+      relatedSections: existing.relatedSections,
+    });
+  }
+
+  searchSections(query: string, limit: number = 10): DevPlanDoc[] {
+    const queryLower = query.toLowerCase();
+    return this.listSections()
+      .filter(
+        (doc) =>
+          doc.content.toLowerCase().includes(queryLower) ||
+          doc.title.toLowerCase().includes(queryLower)
+      )
+      .slice(0, limit);
+  }
+
+  deleteSection(section: DevPlanSection, subSection?: string): boolean {
+    const existing = this.getSection(section, subSection);
+    if (!existing) return false;
+    this.graph.deleteEntity(existing.id);
+    this.graph.flush();
+    return true;
+  }
+
+  // ==========================================================================
+  // Main Task Operations
+  // ==========================================================================
+
+  createMainTask(input: MainTaskInput): MainTask {
+    const existing = this.getMainTask(input.taskId);
+    if (existing) {
+      throw new Error(`Main task "${input.taskId}" already exists for project "${this.projectName}"`);
+    }
+
+    const now = Date.now();
+    const entity = this.graph.addEntity(input.title, ET.MAIN_TASK, {
+      projectName: this.projectName,
+      taskId: input.taskId,
+      title: input.title,
+      priority: input.priority,
+      description: input.description || '',
+      estimatedHours: input.estimatedHours || 0,
+      relatedSections: input.relatedSections || [],
+      moduleId: input.moduleId || null,
+      totalSubtasks: 0,
+      completedSubtasks: 0,
+      status: 'pending',
+      createdAt: now,
+      updatedAt: now,
+      completedAt: null,
+    });
+
+    // project -> main task 关系
+    this.graph.putRelation(this.getProjectId(), entity.id, RT.HAS_MAIN_TASK);
+
+    // module -> main task 关系
+    if (input.moduleId) {
+      const modEntity = this.findEntityByProp(ET.MODULE, 'moduleId', input.moduleId);
+      if (modEntity) {
+        this.graph.putRelation(modEntity.id, entity.id, RT.MODULE_HAS_TASK);
+      }
+    }
+
+    this.graph.flush();
+    return this.entityToMainTask(entity);
+  }
+
+  upsertMainTask(input: MainTaskInput, options?: {
+    preserveStatus?: boolean;
+    status?: TaskStatus;
+  }): MainTask {
+    const preserveStatus = options?.preserveStatus !== false;
+    const targetStatus = options?.status || 'pending';
+    const existing = this.getMainTask(input.taskId);
+
+    if (!existing) {
+      const task = this.createMainTask(input);
+      if (targetStatus !== 'pending') {
+        return this.updateMainTaskStatus(task.taskId, targetStatus) || task;
+      }
+      return task;
+    }
+
+    // 决定最终状态
+    let finalStatus = targetStatus;
+    if (preserveStatus) {
+      const statusPriority: Record<TaskStatus, number> = {
+        cancelled: 0, pending: 1, in_progress: 2, completed: 3,
+      };
+      if (statusPriority[existing.status] >= statusPriority[targetStatus]) {
+        finalStatus = existing.status;
+      }
+    }
+
+    const now = Date.now();
+    const completedAt = finalStatus === 'completed' ? (existing.completedAt || now) : null;
+    const finalModuleId = input.moduleId || existing.moduleId;
+
+    this.graph.updateEntity(existing.id, {
+      name: input.title,
+      properties: {
+        title: input.title,
+        priority: input.priority,
+        description: input.description || existing.description || '',
+        estimatedHours: input.estimatedHours || existing.estimatedHours || 0,
+        relatedSections: input.relatedSections || existing.relatedSections || [],
+        moduleId: finalModuleId || null,
+        status: finalStatus,
+        updatedAt: now,
+        completedAt,
+      },
+    });
+
+    // 更新模块关系
+    if (finalModuleId && finalModuleId !== existing.moduleId) {
+      this.updateModuleTaskRelation(existing.id, existing.moduleId, finalModuleId);
+    }
+
+    this.graph.flush();
+
+    const updated = this.graph.getEntity(existing.id);
+    return updated ? this.entityToMainTask(updated) : existing;
+  }
+
+  getMainTask(taskId: string): MainTask | null {
+    const entity = this.findEntityByProp(ET.MAIN_TASK, 'taskId', taskId);
+    return entity ? this.entityToMainTask(entity) : null;
+  }
+
+  listMainTasks(filter?: {
+    status?: TaskStatus;
+    priority?: TaskPriority;
+    moduleId?: string;
+  }): MainTask[] {
+    let entities = this.findEntitiesByType(ET.MAIN_TASK);
+
+    if (filter?.status) {
+      entities = entities.filter((e) => (e.properties as any).status === filter.status);
+    }
+    if (filter?.priority) {
+      entities = entities.filter((e) => (e.properties as any).priority === filter.priority);
+    }
+    if (filter?.moduleId) {
+      entities = entities.filter((e) => (e.properties as any).moduleId === filter.moduleId);
+    }
+
+    return entities.map((e) => this.entityToMainTask(e));
+  }
+
+  updateMainTaskStatus(taskId: string, status: TaskStatus): MainTask | null {
+    const mainTask = this.getMainTask(taskId);
+    if (!mainTask) return null;
+
+    const now = Date.now();
+    const completedAt = status === 'completed' ? now : mainTask.completedAt;
+
+    this.graph.updateEntity(mainTask.id, {
+      properties: {
+        status,
+        updatedAt: now,
+        completedAt,
+      },
+    });
+
+    this.graph.flush();
+    const updated = this.graph.getEntity(mainTask.id);
+    return updated ? this.entityToMainTask(updated) : null;
+  }
+
+  // ==========================================================================
+  // Sub Task Operations
+  // ==========================================================================
+
+  addSubTask(input: SubTaskInput): SubTask {
+    const existing = this.getSubTask(input.taskId);
+    if (existing) {
+      throw new Error(`Sub task "${input.taskId}" already exists for project "${this.projectName}"`);
+    }
+
+    const mainTask = this.getMainTask(input.parentTaskId);
+    if (!mainTask) {
+      throw new Error(`Parent main task "${input.parentTaskId}" not found for project "${this.projectName}"`);
+    }
+
+    const now = Date.now();
+    const entity = this.graph.addEntity(input.title, ET.SUB_TASK, {
+      projectName: this.projectName,
+      taskId: input.taskId,
+      parentTaskId: input.parentTaskId,
+      title: input.title,
+      estimatedHours: input.estimatedHours || 0,
+      relatedFiles: input.relatedFiles || [],
+      description: input.description || '',
+      status: 'pending',
+      createdAt: now,
+      updatedAt: now,
+      completedAt: null,
+    });
+
+    // main task -> sub task 关系
+    this.graph.putRelation(mainTask.id, entity.id, RT.HAS_SUB_TASK);
+
+    // 更新主任务计数
+    this.refreshMainTaskCounts(input.parentTaskId);
+    this.graph.flush();
+
+    return this.entityToSubTask(entity);
+  }
+
+  upsertSubTask(input: SubTaskInput, options?: {
+    preserveStatus?: boolean;
+    status?: TaskStatus;
+  }): SubTask {
+    const preserveStatus = options?.preserveStatus !== false;
+    const targetStatus = options?.status || 'pending';
+    const existing = this.getSubTask(input.taskId);
+
+    if (!existing) {
+      const mainTask = this.getMainTask(input.parentTaskId);
+      if (!mainTask) {
+        throw new Error(`Parent main task "${input.parentTaskId}" not found for project "${this.projectName}"`);
+      }
+
+      const now = Date.now();
+      const entity = this.graph.addEntity(input.title, ET.SUB_TASK, {
+        projectName: this.projectName,
+        taskId: input.taskId,
+        parentTaskId: input.parentTaskId,
+        title: input.title,
+        estimatedHours: input.estimatedHours || 0,
+        relatedFiles: input.relatedFiles || [],
+        description: input.description || '',
+        status: targetStatus,
+        createdAt: now,
+        updatedAt: now,
+        completedAt: targetStatus === 'completed' ? now : null,
+      });
+
+      this.graph.putRelation(mainTask.id, entity.id, RT.HAS_SUB_TASK);
+      this.refreshMainTaskCounts(input.parentTaskId);
+      this.graph.flush();
+
+      return this.entityToSubTask(entity);
+    }
+
+    // 决定最终状态
+    let finalStatus = targetStatus;
+    if (preserveStatus) {
+      const statusPriority: Record<TaskStatus, number> = {
+        cancelled: 0, pending: 1, in_progress: 2, completed: 3,
+      };
+      if (statusPriority[existing.status] >= statusPriority[targetStatus]) {
+        finalStatus = existing.status;
+      }
+    }
+
+    // 检查是否有实质变化
+    if (
+      existing.title === input.title &&
+      existing.description === (input.description || '') &&
+      existing.status === finalStatus &&
+      existing.estimatedHours === (input.estimatedHours || 0)
+    ) {
+      return existing;
+    }
+
+    const now = Date.now();
+    const completedAt = finalStatus === 'completed' ? (existing.completedAt || now) : null;
+
+    this.graph.updateEntity(existing.id, {
+      name: input.title,
+      properties: {
+        title: input.title,
+        estimatedHours: input.estimatedHours || existing.estimatedHours || 0,
+        relatedFiles: input.relatedFiles || existing.relatedFiles || [],
+        description: input.description || existing.description || '',
+        status: finalStatus,
+        updatedAt: now,
+        completedAt,
+      },
+    });
+
+    this.refreshMainTaskCounts(input.parentTaskId);
+    this.graph.flush();
+
+    const updated = this.graph.getEntity(existing.id);
+    return updated ? this.entityToSubTask(updated) : existing;
+  }
+
+  getSubTask(taskId: string): SubTask | null {
+    const entity = this.findEntityByProp(ET.SUB_TASK, 'taskId', taskId);
+    return entity ? this.entityToSubTask(entity) : null;
+  }
+
+  listSubTasks(parentTaskId: string, filter?: {
+    status?: TaskStatus;
+  }): SubTask[] {
+    let entities = this.findEntitiesByType(ET.SUB_TASK).filter(
+      (e) => (e.properties as any).parentTaskId === parentTaskId
+    );
+
+    if (filter?.status) {
+      entities = entities.filter((e) => (e.properties as any).status === filter.status);
+    }
+
+    return entities.map((e) => this.entityToSubTask(e));
+  }
+
+  updateSubTaskStatus(taskId: string, status: TaskStatus, options?: {
+    completedAtCommit?: string;
+    revertReason?: string;
+  }): SubTask | null {
+    const subTask = this.getSubTask(taskId);
+    if (!subTask) return null;
+
+    const now = Date.now();
+    const completedAt = status === 'completed' ? now : (status === 'pending' ? null : subTask.completedAt);
+    const completedAtCommit = status === 'completed'
+      ? (options?.completedAtCommit || subTask.completedAtCommit)
+      : (status === 'pending' ? null : subTask.completedAtCommit);
+    const revertReason = options?.revertReason || (status === 'pending' ? null : subTask.revertReason);
+
+    this.graph.updateEntity(subTask.id, {
+      properties: {
+        status,
+        updatedAt: now,
+        completedAt,
+        completedAtCommit: completedAtCommit || null,
+        revertReason: revertReason || null,
+      },
+    });
+
+    this.graph.flush();
+    const updated = this.graph.getEntity(subTask.id);
+    return updated ? this.entityToSubTask(updated) : null;
+  }
+
+  // ==========================================================================
+  // Completion Workflow
+  // ==========================================================================
+
+  completeSubTask(taskId: string): CompleteSubTaskResult {
+    const commitHash = this.getCurrentGitCommit();
+
+    const updatedSubTask = this.updateSubTaskStatus(taskId, 'completed', {
+      completedAtCommit: commitHash,
+    });
+    if (!updatedSubTask) {
+      throw new Error(`Sub task "${taskId}" not found for project "${this.projectName}"`);
+    }
+
+    const updatedMainTask = this.refreshMainTaskCounts(updatedSubTask.parentTaskId);
+    if (!updatedMainTask) {
+      throw new Error(`Parent main task "${updatedSubTask.parentTaskId}" not found`);
+    }
+
+    const mainTaskCompleted =
+      updatedMainTask.totalSubtasks > 0 &&
+      updatedMainTask.completedSubtasks >= updatedMainTask.totalSubtasks;
+
+    if (mainTaskCompleted && updatedMainTask.status !== 'completed') {
+      const completedMain = this.updateMainTaskStatus(updatedSubTask.parentTaskId, 'completed');
+      if (completedMain) {
+        this.autoUpdateMilestones(completedMain);
+        return {
+          subTask: updatedSubTask,
+          mainTask: completedMain,
+          mainTaskCompleted: true,
+          completedAtCommit: commitHash,
+        };
+      }
+    }
+
+    return {
+      subTask: updatedSubTask,
+      mainTask: updatedMainTask,
+      mainTaskCompleted,
+      completedAtCommit: commitHash,
+    };
+  }
+
+  completeMainTask(taskId: string): MainTask {
+    const result = this.updateMainTaskStatus(taskId, 'completed');
+    if (!result) {
+      throw new Error(`Main task "${taskId}" not found for project "${this.projectName}"`);
+    }
+    this.autoUpdateMilestones(result);
+    return result;
+  }
+
+  // ==========================================================================
+  // Progress & Export
+  // ==========================================================================
+
+  getProgress(): ProjectProgress {
+    const sections = this.listSections();
+    const mainTasks = this.listMainTasks();
+
+    let totalSub = 0;
+    let completedSub = 0;
+    const taskProgressList: MainTaskProgress[] = [];
+
+    for (const mt of mainTasks) {
+      const subs = this.listSubTasks(mt.taskId);
+      const subCompleted = subs.filter((s) => s.status === 'completed').length;
+
+      totalSub += subs.length;
+      completedSub += subCompleted;
+
+      taskProgressList.push({
+        taskId: mt.taskId,
+        title: mt.title,
+        priority: mt.priority,
+        status: mt.status,
+        total: subs.length,
+        completed: subCompleted,
+        percent: subs.length > 0 ? Math.round((subCompleted / subs.length) * 100) : 0,
+      });
+    }
+
+    return {
+      projectName: this.projectName,
+      sectionCount: sections.length,
+      mainTaskCount: mainTasks.length,
+      completedMainTasks: mainTasks.filter((mt) => mt.status === 'completed').length,
+      subTaskCount: totalSub,
+      completedSubTasks: completedSub,
+      overallPercent: totalSub > 0 ? Math.round((completedSub / totalSub) * 100) : 0,
+      tasks: taskProgressList,
+    };
+  }
+
+  exportToMarkdown(): string {
+    const sections = this.listSections();
+    const progress = this.getProgress();
+
+    let md = `# ${this.projectName} - 开发计划\n\n`;
+    md += `> 生成时间: ${new Date().toISOString()}\n`;
+    md += `> 总体进度: ${progress.overallPercent}% (${progress.completedSubTasks}/${progress.subTaskCount})\n`;
+    md += `> 存储引擎: SocialGraphV2\n\n`;
+
+    const sectionOrder: DevPlanSection[] = [
+      'overview', 'core_concepts', 'api_design', 'file_structure',
+      'config', 'examples', 'technical_notes', 'api_endpoints',
+      'milestones', 'changelog', 'custom',
+    ];
+
+    for (const sectionType of sectionOrder) {
+      const sectionDocs = sections.filter((s) => s.section === sectionType);
+      for (const doc of sectionDocs) {
+        md += doc.content + '\n\n---\n\n';
+      }
+    }
+
+    md += '## 开发任务进度\n\n';
+    for (const taskProg of progress.tasks) {
+      const statusIcon = taskProg.status === 'completed' ? '✅'
+        : taskProg.status === 'in_progress' ? '🔄'
+        : taskProg.status === 'cancelled' ? '❌' : '⬜';
+      md += `### ${statusIcon} ${taskProg.title} (${taskProg.completed}/${taskProg.total})\n\n`;
+
+      const subs = this.listSubTasks(taskProg.taskId);
+      if (subs.length > 0) {
+        md += '| 任务 | 描述 | 状态 | 完成日期 |\n';
+        md += '|-----|------|------|--------|\n';
+        for (const sub of subs) {
+          const subIcon = sub.status === 'completed' ? '✅ 已完成'
+            : sub.status === 'in_progress' ? '🔄 进行中'
+            : sub.status === 'cancelled' ? '❌ 已取消' : '⬜ 待开始';
+          const date = sub.completedAt
+            ? new Date(sub.completedAt).toISOString().split('T')[0]
+            : '-';
+          md += `| ${sub.taskId} | ${sub.title} | ${subIcon} | ${date} |\n`;
+        }
+        md += '\n';
+      }
+    }
+
+    return md;
+  }
+
+  exportTaskSummary(): string {
+    const progress = this.getProgress();
+
+    let md = `# ${this.projectName} - 任务进度总览\n\n`;
+    md += `> 更新时间: ${new Date().toISOString()}\n`;
+    md += `> 总体进度: **${progress.overallPercent}%** (${progress.completedSubTasks}/${progress.subTaskCount} 子任务完成)\n`;
+    md += `> 主任务完成: ${progress.completedMainTasks}/${progress.mainTaskCount}\n`;
+    md += `> 存储引擎: SocialGraphV2\n\n`;
+
+    for (const tp of progress.tasks) {
+      const bar = this.progressBar(tp.percent);
+      const statusIcon = tp.status === 'completed' ? '✅'
+        : tp.status === 'in_progress' ? '🔄' : '⬜';
+      md += `${statusIcon} **${tp.title}** [${tp.priority}]\n`;
+      md += `   ${bar} ${tp.percent}% (${tp.completed}/${tp.total})\n\n`;
+    }
+
+    return md;
+  }
+
+  // ==========================================================================
+  // Module Operations
+  // ==========================================================================
+
+  createModule(input: ModuleInput): Module {
+    const existing = this.getModule(input.moduleId);
+    if (existing) {
+      throw new Error(`Module "${input.moduleId}" already exists for project "${this.projectName}"`);
+    }
+
+    const now = Date.now();
+    const status = input.status || 'active';
+
+    const entity = this.graph.addEntity(input.name, ET.MODULE, {
+      projectName: this.projectName,
+      moduleId: input.moduleId,
+      name: input.name,
+      description: input.description || '',
+      status,
+      createdAt: now,
+      updatedAt: now,
+    });
+
+    // project -> module (通过类型区分即可，不需要额外关系)
+    this.graph.flush();
+
+    return {
+      id: entity.id,
+      projectName: this.projectName,
+      moduleId: input.moduleId,
+      name: input.name,
+      description: input.description,
+      status,
+      mainTaskCount: 0,
+      subTaskCount: 0,
+      completedSubTaskCount: 0,
+      docCount: 0,
+      createdAt: now,
+      updatedAt: now,
+    };
+  }
+
+  getModule(moduleId: string): Module | null {
+    const entity = this.findEntityByProp(ET.MODULE, 'moduleId', moduleId);
+    return entity ? this.entityToModule(entity) : null;
+  }
+
+  listModules(filter?: { status?: ModuleStatus }): Module[] {
+    let entities = this.findEntitiesByType(ET.MODULE);
+    if (filter?.status) {
+      entities = entities.filter((e) => (e.properties as any).status === filter.status);
+    }
+    return entities.map((e) => this.entityToModule(e));
+  }
+
+  updateModule(moduleId: string, updates: {
+    name?: string;
+    description?: string;
+    status?: ModuleStatus;
+  }): Module | null {
+    const existing = this.getModule(moduleId);
+    if (!existing) return null;
+
+    const now = Date.now();
+    this.graph.updateEntity(existing.id, {
+      name: updates.name || existing.name,
+      properties: {
+        name: updates.name || existing.name,
+        description: updates.description !== undefined ? updates.description : existing.description,
+        status: updates.status || existing.status,
+        updatedAt: now,
+      },
+    });
+
+    this.graph.flush();
+    return this.getModule(moduleId);
+  }
+
+  deleteModule(moduleId: string): boolean {
+    const existing = this.getModule(moduleId);
+    if (!existing) return false;
+    this.graph.deleteEntity(existing.id);
+    this.graph.flush();
+    return true;
+  }
+
+  getModuleDetail(moduleId: string): ModuleDetail | null {
+    const mod = this.getModule(moduleId);
+    if (!mod) return null;
+
+    const mainTasks = this.listMainTasks({ moduleId });
+    const subTasks: SubTask[] = [];
+    for (const mt of mainTasks) {
+      subTasks.push(...this.listSubTasks(mt.taskId));
+    }
+
+    // 获取关联文档
+    const modEntity = this.findEntityByProp(ET.MODULE, 'moduleId', moduleId);
+    let documents: DevPlanDoc[] = [];
+    if (modEntity) {
+      const docRelations = this.getOutRelations(modEntity.id, RT.MODULE_HAS_DOC);
+      for (const rel of docRelations) {
+        const docEntity = this.graph.getEntity(rel.target);
+        if (docEntity) {
+          documents.push(this.entityToDevPlanDoc(docEntity));
+        }
+      }
+    }
+
+    // 同时包含按 moduleId 属性关联的文档
+    const allDocs = this.listSections().filter((d) => d.moduleId === moduleId);
+    const docIds = new Set(documents.map((d) => d.id));
+    for (const d of allDocs) {
+      if (!docIds.has(d.id)) {
+        documents.push(d);
+      }
+    }
+
+    return { module: mod, mainTasks, subTasks, documents };
+  }
+
+  // ==========================================================================
+  // Utility
+  // ==========================================================================
+
+  sync(): void {
+    this.graph.flush();
+  }
+
+  getProjectName(): string {
+    return this.projectName;
+  }
+
+  syncWithGit(dryRun: boolean = false): SyncGitResult {
+    const currentHead = this.getCurrentGitCommit();
+
+    if (!currentHead) {
+      return {
+        checked: 0,
+        reverted: [],
+        currentHead: 'unknown',
+        error: 'Git not available or not in a Git repository',
+      };
+    }
+
+    const mainTasks = this.listMainTasks();
+    const reverted: RevertedTask[] = [];
+    let checked = 0;
+
+    for (const mt of mainTasks) {
+      const subs = this.listSubTasks(mt.taskId);
+      for (const sub of subs) {
+        if (sub.status !== 'completed' || !sub.completedAtCommit) continue;
+        checked++;
+
+        if (!this.isAncestor(sub.completedAtCommit, currentHead)) {
+          const reason = `Commit ${sub.completedAtCommit} not found in current branch (HEAD: ${currentHead})`;
+
+          if (!dryRun) {
+            this.updateSubTaskStatus(sub.taskId, 'pending', { revertReason: reason });
+            this.refreshMainTaskCounts(sub.parentTaskId);
+
+            const parentMain = this.getMainTask(sub.parentTaskId);
+            if (parentMain && parentMain.status === 'completed') {
+              this.updateMainTaskStatus(sub.parentTaskId, 'in_progress');
+            }
+          }
+
+          reverted.push({
+            taskId: sub.taskId,
+            title: sub.title,
+            parentTaskId: sub.parentTaskId,
+            completedAtCommit: sub.completedAtCommit,
+            reason,
+          });
+        }
+      }
+    }
+
+    return { checked, reverted, currentHead };
+  }
+
+  // ==========================================================================
+  // Graph Export (核心差异能力)
+  // ==========================================================================
+
+  /**
+   * 导出 DevPlan 的图结构用于可视化
+   *
+   * 返回 vis-network 兼容的 { nodes, edges } 格式。
+   */
+  exportGraph(options?: {
+    includeDocuments?: boolean;
+    includeModules?: boolean;
+  }): DevPlanExportedGraph {
+    const includeDocuments = options?.includeDocuments !== false;
+    const includeModules = options?.includeModules !== false;
+
+    const nodes: DevPlanGraphNode[] = [];
+    const edges: DevPlanGraphEdge[] = [];
+
+    // 项目根节点
+    nodes.push({
+      id: this.getProjectId(),
+      label: this.projectName,
+      type: 'project',
+      properties: { entityType: ET.PROJECT },
+    });
+
+    // 主任务节点
+    const mainTasks = this.listMainTasks();
+    for (const mt of mainTasks) {
+      nodes.push({
+        id: mt.id,
+        label: mt.title,
+        type: 'main-task',
+        properties: {
+          taskId: mt.taskId,
+          priority: mt.priority,
+          status: mt.status,
+          totalSubtasks: mt.totalSubtasks,
+          completedSubtasks: mt.completedSubtasks,
+        },
+      });
+      edges.push({
+        from: this.getProjectId(),
+        to: mt.id,
+        label: RT.HAS_MAIN_TASK,
+      });
+
+      // 子任务节点
+      const subTasks = this.listSubTasks(mt.taskId);
+      for (const st of subTasks) {
+        nodes.push({
+          id: st.id,
+          label: st.title,
+          type: 'sub-task',
+          properties: {
+            taskId: st.taskId,
+            parentTaskId: st.parentTaskId,
+            status: st.status,
+          },
+        });
+        edges.push({
+          from: mt.id,
+          to: st.id,
+          label: RT.HAS_SUB_TASK,
+        });
+      }
+    }
+
+    // 文档节点
+    if (includeDocuments) {
+      const docs = this.listSections();
+      for (const doc of docs) {
+        nodes.push({
+          id: doc.id,
+          label: doc.title,
+          type: 'document',
+          properties: {
+            section: doc.section,
+            subSection: doc.subSection,
+            version: doc.version,
+          },
+        });
+        edges.push({
+          from: this.getProjectId(),
+          to: doc.id,
+          label: RT.HAS_DOCUMENT,
+        });
+      }
+    }
+
+    // 模块节点
+    if (includeModules) {
+      const modules = this.listModules();
+      for (const mod of modules) {
+        nodes.push({
+          id: mod.id,
+          label: mod.name,
+          type: 'module',
+          properties: {
+            moduleId: mod.moduleId,
+            status: mod.status,
+            mainTaskCount: mod.mainTaskCount,
+          },
+        });
+
+        // 模块→主任务 关系
+        const moduleTasks = this.listMainTasks({ moduleId: mod.moduleId });
+        for (const mt of moduleTasks) {
+          edges.push({
+            from: mod.id,
+            to: mt.id,
+            label: RT.MODULE_HAS_TASK,
+          });
+        }
+      }
+    }
+
+    return { nodes, edges };
+  }
+
+  // ==========================================================================
+  // Private Helpers
+  // ==========================================================================
+
+  private refreshMainTaskCounts(mainTaskId: string): MainTask | null {
+    const mainTask = this.getMainTask(mainTaskId);
+    if (!mainTask) return null;
+
+    const subs = this.listSubTasks(mainTaskId);
+    const completedCount = subs.filter((s) => s.status === 'completed').length;
+
+    if (mainTask.totalSubtasks === subs.length && mainTask.completedSubtasks === completedCount) {
+      return mainTask;
+    }
+
+    this.graph.updateEntity(mainTask.id, {
+      properties: {
+        totalSubtasks: subs.length,
+        completedSubtasks: completedCount,
+        updatedAt: Date.now(),
+      },
+    });
+
+    this.graph.flush();
+    const updated = this.graph.getEntity(mainTask.id);
+    return updated ? this.entityToMainTask(updated) : mainTask;
+  }
+
+  private autoUpdateMilestones(completedMainTask: MainTask): void {
+    const milestonesDoc = this.getSection('milestones');
+    if (!milestonesDoc) return;
+
+    const dateStr = new Date().toISOString().split('T')[0];
+    const appendLine = `\n| ${completedMainTask.taskId} | ${completedMainTask.title} | ${dateStr} | ✅ 已完成 |`;
+    const updatedContent = milestonesDoc.content + appendLine;
+
+    this.saveSection({
+      projectName: this.projectName,
+      section: 'milestones',
+      title: milestonesDoc.title,
+      content: updatedContent,
+      version: milestonesDoc.version,
+      relatedSections: milestonesDoc.relatedSections,
+    });
+  }
+
+  private updateModuleDocRelation(docEntityId: string, oldModuleId?: string, newModuleId?: string): void {
+    // 移除旧模块关系
+    if (oldModuleId) {
+      const oldMod = this.findEntityByProp(ET.MODULE, 'moduleId', oldModuleId);
+      if (oldMod) {
+        const rel = this.graph.getRelationBetween(oldMod.id, docEntityId);
+        if (rel) this.graph.deleteRelation(rel.id);
+      }
+    }
+    // 添加新模块关系
+    if (newModuleId) {
+      const newMod = this.findEntityByProp(ET.MODULE, 'moduleId', newModuleId);
+      if (newMod) {
+        this.graph.putRelation(newMod.id, docEntityId, RT.MODULE_HAS_DOC);
+      }
+    }
+  }
+
+  private updateModuleTaskRelation(taskEntityId: string, oldModuleId?: string, newModuleId?: string): void {
+    if (oldModuleId) {
+      const oldMod = this.findEntityByProp(ET.MODULE, 'moduleId', oldModuleId);
+      if (oldMod) {
+        const rel = this.graph.getRelationBetween(oldMod.id, taskEntityId);
+        if (rel) this.graph.deleteRelation(rel.id);
+      }
+    }
+    if (newModuleId) {
+      const newMod = this.findEntityByProp(ET.MODULE, 'moduleId', newModuleId);
+      if (newMod) {
+        this.graph.putRelation(newMod.id, taskEntityId, RT.MODULE_HAS_TASK);
+      }
+    }
+  }
+
+  private getCurrentGitCommit(): string | undefined {
+    try {
+      const { execSync } = require('child_process');
+      return execSync('git rev-parse --short HEAD', {
+        encoding: 'utf-8',
+        timeout: 5000,
+        stdio: ['pipe', 'pipe', 'pipe'],
+      }).trim();
+    } catch {
+      return undefined;
+    }
+  }
+
+  private isAncestor(commit: string, target: string): boolean {
+    try {
+      const { execSync } = require('child_process');
+      execSync(`git merge-base --is-ancestor ${commit} ${target}`, {
+        timeout: 5000,
+        stdio: ['pipe', 'pipe', 'pipe'],
+      });
+      return true;
+    } catch {
+      return false;
+    }
+  }
+
+  private progressBar(percent: number): string {
+    const total = 20;
+    const filled = Math.round((percent / 100) * total);
+    const empty = total - filled;
+    return `[${'█'.repeat(filled)}${'░'.repeat(empty)}]`;
+  }
+}

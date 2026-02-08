@@ -10,14 +10,16 @@
     "LICENSE"
   ],
   "bin": {
-    "aifastdb-devplan": "./dist/mcp-server/index.js"
+    "aifastdb-devplan": "./dist/mcp-server/index.js",
+    "aifastdb-devplan-visual": "./dist/visualize/server.js"
   },
   "scripts": {
     "build": "tsc",
     "dev": "tsc --watch",
     "test": "jest --passWithNoTests",
     "typecheck": "tsc --noEmit",
-    "clean": "rimraf dist"
+    "clean": "rimraf dist",
+    "visualize": "node dist/visualize/server.js"
   },
   "dependencies": {
     "aifastdb": "^2.2.6",
