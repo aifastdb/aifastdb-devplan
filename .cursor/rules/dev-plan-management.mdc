@@ -1,0 +1,84 @@
+---
+description: DevPlan 开发计划管理工具说明。当用户提到开发计划、任务进度、文档管理时激活。
+globs: []
+alwaysApply: false
+---
+
+# DevPlan — 开发计划管理
+
+## MCP Server
+
+```
+mcpServers: aifastdb-devplan
+```
+
+## 快捷操作
+
+### 初始化 / 查看现有计划
+```
+devplan_init()                                    # 列出所有已有计划
+devplan_init(projectName: "my-project")           # 初始化新计划
+```
+
+### 查看项目进度
+```
+devplan_get_progress(projectName: "<项目名>")
+```
+
+### 查看任务列表
+```
+devplan_list_tasks(projectName: "<项目名>")                             # 列出所有主任务
+devplan_list_tasks(projectName: "<项目名>", parentTaskId: "phase-1")    # 指定主任务的子任务
+devplan_list_tasks(projectName: "<项目名>", status: "pending")          # 跨所有主任务查询未完成子任务
+```
+
+### 创建任务
+```
+devplan_create_main_task(projectName: "<项目名>", taskId: "phase-1", title: "阶段一", priority: "P0")
+devplan_add_sub_task(projectName: "<项目名>", taskId: "T1.1", parentTaskId: "phase-1", title: "子任务")
+devplan_upsert_task(...)   # 幂等导入（推荐批量导入使用）
+```
+
+### 完成任务
+```
+devplan_complete_task(projectName: "<项目名>", taskId: "T1.1")         # 完成子任务（自动更新进度）
+devplan_complete_task(projectName: "<项目名>", taskId: "phase-1", taskType: "main")  # 手动完成主任务
+```
+
+### Git 同步检查
+```
+devplan_sync_git(projectName: "<项目名>", dryRun: true)   # 先预览
+devplan_sync_git(projectName: "<项目名>")                  # 实际执行回退
+```
+
+### 文档管理
+```
+devplan_save_section(projectName: "<项目名>", section: "overview", title: "概述", content: "...")
+devplan_list_sections(projectName: "<项目名>")
+devplan_get_section(projectName: "<项目名>", section: "overview")
+devplan_export_markdown(projectName: "<项目名>", scope: "tasks")
+```
+
+### 功能模块
+```
+devplan_create_module(projectName: "<项目名>", moduleId: "auth", name: "认证模块")
+devplan_list_modules(projectName: "<项目名>")
+devplan_get_module(projectName: "<项目名>", moduleId: "auth")
+```
+
+## 数据存储
+
+数据存储在项目内 `.devplan/` 目录（JSONL 格式），天然跟随 Git 版本管理：
+
+```
+.devplan/{projectName}/
+├── documents.jsonl    # 文档片段
+├── tasks.jsonl        # 主任务 + 子任务
+└── modules.jsonl      # 功能模块
+```
+
+## 注意事项
+
+1. **通过 MCP 操作任务**：任务状态管理使用 `devplan_*` 系列 MCP 工具，不要手动编辑 JSONL 文件
+2. **完成任务后同步**：完成代码实现后，调用 `devplan_complete_task` 持久化状态（自动锚定 Git commit）
+3. **Git 回滚后检查**：如果执行了 `git reset` 或切换分支，运行 `devplan_sync_git` 检查任务状态一致性
