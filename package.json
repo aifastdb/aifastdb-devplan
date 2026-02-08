@@ -43,5 +43,13 @@
     "cursor",
     "ai"
   ],
-  "license": "MIT"
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/aifastdb/aifastdb-devplan.git"
+  },
+  "homepage": "https://github.com/aifastdb/aifastdb-devplan#readme",
+  "bugs": {
+    "url": "https://github.com/aifastdb/aifastdb-devplan/issues"
+  }
 }
