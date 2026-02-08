@@ -66,51 +66,51 @@ function getDevPlan(projectName: string): DevPlanStore {
 const TOOLS = [
   {
     name: 'devplan_init',
-    description: 'Initialize a development plan for a project. Creates an empty plan structure. Also lists existing plans if no projectName is given.',
+    description: 'Initialize a development plan for a project. Creates an empty plan structure. Also lists existing plans if no projectName is given.\n初始化项目的开发计划。创建空的计划结构。如果不提供 projectName 则列出已有的计划。',
     inputSchema: {
       type: 'object' as const,
       properties: {
         projectName: {
           type: 'string',
-          description: 'Project name (e.g., "federation-db", "aidb-viewer"). Omit to list existing plans.',
+          description: 'Project name (e.g., "federation-db", "aidb-viewer"). Omit to list existing plans.\n项目名称（如 "federation-db"）。省略则列出已有计划。',
         },
       },
     },
   },
   {
     name: 'devplan_save_section',
-    description: 'Save or update a document section in the dev plan. Sections are typed: overview, core_concepts, api_design, file_structure, config, examples, technical_notes, api_endpoints, milestones, changelog, custom. technical_notes and custom support subSection for multiple sub-documents.',
+    description: 'Save or update a document section in the dev plan. Sections are typed: overview, core_concepts, api_design, file_structure, config, examples, technical_notes, api_endpoints, milestones, changelog, custom. technical_notes and custom support subSection for multiple sub-documents.\n保存或更新开发计划中的文档片段。支持 11 种标准类型。technical_notes 和 custom 支持通过 subSection 存储多个子文档。',
     inputSchema: {
       type: 'object' as const,
       properties: {
         projectName: {
           type: 'string',
-          description: 'Project name',
+          description: 'Project name\n项目名称',
         },
         section: {
           type: 'string',
           enum: ['overview', 'core_concepts', 'api_design', 'file_structure', 'config', 'examples', 'technical_notes', 'api_endpoints', 'milestones', 'changelog', 'custom'],
-          description: 'Document section type',
+          description: 'Document section type\n文档片段类型',
         },
         title: {
           type: 'string',
-          description: 'Section title (e.g., "概述 - 背景与目标")',
+          description: 'Section title (e.g., "Overview - Background")\n片段标题（如 "概述 - 背景与目标"）',
         },
         content: {
           type: 'string',
-          description: 'Markdown content for this section',
+          description: 'Markdown content for this section\n该片段的 Markdown 内容',
         },
         version: {
           type: 'string',
-          description: 'Optional version string (default: "1.0.0")',
+          description: 'Optional version string (default: "1.0.0")\n可选版本号（默认 "1.0.0"）',
         },
         subSection: {
           type: 'string',
-          description: 'Optional sub-section name for technical_notes/custom (e.g., "security", "resilience")',
+          description: 'Optional sub-section name for technical_notes/custom (e.g., "security", "resilience")\n可选子片段名称，用于 technical_notes/custom（如 "security"）',
         },
         moduleId: {
           type: 'string',
-          description: 'Optional: Associate with a feature module',
+          description: 'Optional: Associate with a feature module\n可选：关联到功能模块',
         },
       },
       required: ['projectName', 'section', 'title', 'content'],
@@ -118,22 +118,22 @@ const TOOLS = [
   },
   {
     name: 'devplan_get_section',
-    description: 'Read a specific document section from the dev plan.',
+    description: 'Read a specific document section from the dev plan.\n读取开发计划中的指定文档片段。',
     inputSchema: {
       type: 'object' as const,
       properties: {
         projectName: {
           type: 'string',
-          description: 'Project name',
+          description: 'Project name\n项目名称',
         },
         section: {
           type: 'string',
           enum: ['overview', 'core_concepts', 'api_design', 'file_structure', 'config', 'examples', 'technical_notes', 'api_endpoints', 'milestones', 'changelog', 'custom'],
-          description: 'Document section type',
+          description: 'Document section type\n文档片段类型',
         },
         subSection: {
           type: 'string',
-          description: 'Optional sub-section name',
+          description: 'Optional sub-section name\n可选子片段名称',
         },
       },
       required: ['projectName', 'section'],
@@ -141,13 +141,13 @@ const TOOLS = [
   },
   {
     name: 'devplan_list_sections',
-    description: 'List all document sections in the dev plan for a project.',
+    description: 'List all document sections in the dev plan for a project.\n列出项目开发计划中的所有文档片段。',
     inputSchema: {
       type: 'object' as const,
       properties: {
         projectName: {
           type: 'string',
-          description: 'Project name',
+          description: 'Project name\n项目名称',
         },
       },
       required: ['projectName'],
@@ -155,38 +155,38 @@ const TOOLS = [
   },
   {
     name: 'devplan_create_main_task',
-    description: 'Create a main task (development phase) in the dev plan. A main task groups multiple sub-tasks.',
+    description: 'Create a main task (development phase) in the dev plan. A main task groups multiple sub-tasks.\n在开发计划中创建主任务（开发阶段）。一个主任务下包含多个子任务。',
     inputSchema: {
       type: 'object' as const,
       properties: {
         projectName: {
           type: 'string',
-          description: 'Project name',
+          description: 'Project name\n项目名称',
         },
         taskId: {
           type: 'string',
-          description: 'Main task ID (e.g., "phase-7", "phase-14B")',
+          description: 'Main task ID (e.g., "phase-7", "phase-14B")\n主任务 ID（如 "phase-7"）',
         },
         title: {
           type: 'string',
-          description: 'Task title (e.g., "阶段七：Store Trait 与适配器")',
+          description: 'Task title (e.g., "Phase 7: Store Trait & Adapters")\n任务标题（如 "阶段七：Store Trait 与适配器"）',
         },
         priority: {
           type: 'string',
           enum: ['P0', 'P1', 'P2'],
-          description: 'Priority level',
+          description: 'Priority level\n优先级',
         },
         description: {
           type: 'string',
-          description: 'Optional task description',
+          description: 'Optional task description\n可选任务描述',
         },
         estimatedHours: {
           type: 'number',
-          description: 'Optional estimated hours',
+          description: 'Optional estimated hours\n可选预估工时',
         },
         moduleId: {
           type: 'string',
-          description: 'Optional: Associate with a feature module',
+          description: 'Optional: Associate with a feature module\n可选：关联到功能模块',
         },
       },
       required: ['projectName', 'taskId', 'title', 'priority'],
@@ -194,33 +194,33 @@ const TOOLS = [
   },
   {
     name: 'devplan_add_sub_task',
-    description: 'Add a sub-task under a main task. Sub-tasks correspond to Cursor TodoList items.',
+    description: 'Add a sub-task under a main task. Sub-tasks correspond to Cursor TodoList items.\n在主任务下添加子任务。子任务对应 Cursor 的 TodoList 条目。',
     inputSchema: {
       type: 'object' as const,
       properties: {
         projectName: {
           type: 'string',
-          description: 'Project name',
+          description: 'Project name\n项目名称',
         },
         taskId: {
           type: 'string',
-          description: 'Sub-task ID (e.g., "T7.2", "T14.8")',
+          description: 'Sub-task ID (e.g., "T7.2", "T14.8")\n子任务 ID（如 "T7.2"）',
         },
         parentTaskId: {
           type: 'string',
-          description: 'Parent main task ID (e.g., "phase-7")',
+          description: 'Parent main task ID (e.g., "phase-7")\n所属主任务 ID（如 "phase-7"）',
         },
         title: {
           type: 'string',
-          description: 'Sub-task title',
+          description: 'Sub-task title\n子任务标题',
         },
         estimatedHours: {
           type: 'number',
-          description: 'Optional estimated hours',
+          description: 'Optional estimated hours\n可选预估工时',
         },
         description: {
           type: 'string',
-          description: 'Optional task description',
+          description: 'Optional task description\n可选任务描述',
         },
       },
       required: ['projectName', 'taskId', 'parentTaskId', 'title'],
@@ -228,56 +228,56 @@ const TOOLS = [
   },
   {
     name: 'devplan_upsert_task',
-    description: 'Idempotent import (upsert) for main tasks or sub-tasks. If the task does not exist, it will be created. If it already exists, it will be updated with the new data while preserving the higher-priority status (e.g., completed tasks will not be reverted to pending). This is the recommended tool for bulk data import to prevent duplicates.',
+    description: 'Idempotent import (upsert) for main tasks or sub-tasks. If the task does not exist, it will be created. If it already exists, it will be updated with the new data while preserving the higher-priority status (e.g., completed tasks will not be reverted to pending). This is the recommended tool for bulk data import to prevent duplicates.\n幂等导入（upsert）主任务或子任务。任务不存在则创建，已存在则更新（保留更高优先级的状态，如已完成的任务不会被回退为待处理）。推荐用于批量数据导入以防重复。',
     inputSchema: {
       type: 'object' as const,
       properties: {
         projectName: {
           type: 'string',
-          description: 'Project name',
+          description: 'Project name\n项目名称',
         },
         taskType: {
           type: 'string',
           enum: ['main', 'sub'],
-          description: 'Whether this is a main task or sub-task',
+          description: 'Whether this is a main task or sub-task\n任务类型：主任务 (main) 或子任务 (sub)',
         },
         taskId: {
           type: 'string',
-          description: 'Task ID (e.g., "phase-7" for main, "T7.2" for sub)',
+          description: 'Task ID (e.g., "phase-7" for main, "T7.2" for sub)\n任务 ID（主任务如 "phase-7"，子任务如 "T7.2"）',
         },
         title: {
           type: 'string',
-          description: 'Task title',
+          description: 'Task title\n任务标题',
         },
         priority: {
           type: 'string',
           enum: ['P0', 'P1', 'P2'],
-          description: 'Priority level (required for main tasks)',
+          description: 'Priority level (required for main tasks)\n优先级（主任务必填）',
         },
         parentTaskId: {
           type: 'string',
-          description: 'Parent main task ID (required for sub-tasks)',
+          description: 'Parent main task ID (required for sub-tasks)\n所属主任务 ID（子任务必填）',
         },
         description: {
           type: 'string',
-          description: 'Optional task description',
+          description: 'Optional task description\n可选任务描述',
         },
         estimatedHours: {
           type: 'number',
-          description: 'Optional estimated hours',
+          description: 'Optional estimated hours\n可选预估工时',
         },
         status: {
           type: 'string',
           enum: ['pending', 'in_progress', 'completed', 'cancelled'],
-          description: 'Target status (default: pending). Higher-priority existing status is preserved unless preserveStatus is false.',
+          description: 'Target status (default: pending). Higher-priority existing status is preserved unless preserveStatus is false.\n目标状态（默认 pending）。已有的更高优先级状态会被保留，除非 preserveStatus 为 false。',
         },
         preserveStatus: {
           type: 'boolean',
-          description: 'If true (default), existing higher-priority status is preserved. Set to false to force overwrite.',
+          description: 'If true (default), existing higher-priority status is preserved. Set to false to force overwrite.\n为 true（默认）时保留已有的更高优先级状态。设为 false 强制覆盖。',
         },
         moduleId: {
           type: 'string',
-          description: 'Optional: Associate with a feature module (main tasks only)',
+          description: 'Optional: Associate with a feature module (main tasks only)\n可选：关联到功能模块（仅主任务）',
         },
       },
       required: ['projectName', 'taskType', 'taskId', 'title'],
@@ -285,22 +285,22 @@ const TOOLS = [
   },
   {
     name: 'devplan_complete_task',
-    description: 'Mark a task as completed. For sub-tasks: auto-updates parent main task progress count and completedAt timestamp. If all sub-tasks are done, the main task is also auto-completed. For main tasks: directly marks as completed.',
+    description: 'Mark a task as completed. For sub-tasks: auto-updates parent main task progress count and completedAt timestamp. If all sub-tasks are done, the main task is also auto-completed. For main tasks: directly marks as completed.\n将任务标记为已完成。子任务完成时自动更新主任务的进度计数和完成时间戳。当所有子任务完成时，主任务也会自动标记为完成。',
     inputSchema: {
       type: 'object' as const,
       properties: {
         projectName: {
           type: 'string',
-          description: 'Project name',
+          description: 'Project name\n项目名称',
         },
         taskId: {
           type: 'string',
-          description: 'Task ID (sub-task like "T7.2" or main task like "phase-7")',
+          description: 'Task ID (sub-task like "T7.2" or main task like "phase-7")\n任务 ID（子任务如 "T7.2"，主任务如 "phase-7"）',
         },
         taskType: {
           type: 'string',
           enum: ['sub', 'main'],
-          description: 'Whether this is a sub-task or main task (default: "sub")',
+          description: 'Whether this is a sub-task or main task (default: "sub")\n任务类型：子任务 (sub) 或主任务 (main)，默认 "sub"',
         },
       },
       required: ['projectName', 'taskId'],
@@ -308,31 +308,31 @@ const TOOLS = [
   },
   {
     name: 'devplan_list_tasks',
-    description: 'List tasks in the dev plan. Can list main tasks, or sub-tasks of a specific main task. When parentTaskId is omitted but status is provided, aggregates sub-tasks across ALL main tasks matching the status filter.',
+    description: 'List tasks in the dev plan. Can list main tasks, or sub-tasks of a specific main task. When parentTaskId is omitted but status is provided, aggregates sub-tasks across ALL main tasks matching the status filter.\n列出开发计划中的任务。可列出主任务，或指定主任务下的子任务。省略 parentTaskId 但提供 status 时，跨所有主任务聚合匹配状态的子任务。',
     inputSchema: {
       type: 'object' as const,
       properties: {
         projectName: {
           type: 'string',
-          description: 'Project name',
+          description: 'Project name\n项目名称',
         },
         parentTaskId: {
           type: 'string',
-          description: 'Optional: List sub-tasks of this main task ID. If omitted, lists main tasks.',
+          description: 'Optional: List sub-tasks of this main task ID. If omitted, lists main tasks.\n可选：指定主任务 ID 以列出其子任务。省略则列出主任务。',
         },
         status: {
           type: 'string',
           enum: ['pending', 'in_progress', 'completed', 'cancelled'],
-          description: 'Optional: Filter by status',
+          description: 'Optional: Filter by status\n可选：按状态筛选',
         },
         priority: {
           type: 'string',
           enum: ['P0', 'P1', 'P2'],
-          description: 'Optional: Filter by priority (main tasks only)',
+          description: 'Optional: Filter by priority (main tasks only)\n可选：按优先级筛选（仅主任务）',
         },
         moduleId: {
           type: 'string',
-          description: 'Optional: Filter by feature module ID',
+          description: 'Optional: Filter by feature module ID\n可选：按功能模块 ID 筛选',
         },
       },
       required: ['projectName'],
@@ -340,13 +340,13 @@ const TOOLS = [
   },
   {
     name: 'devplan_get_progress',
-    description: 'Get overall project progress: section count, main task count, sub-task completion rates, per-phase progress bars.',
+    description: 'Get overall project progress: section count, main task count, sub-task completion rates, per-phase progress bars.\n获取项目整体进度概览：文档片段数、主任务数、子任务完成率、各阶段进度条。',
     inputSchema: {
       type: 'object' as const,
       properties: {
         projectName: {
           type: 'string',
-          description: 'Project name',
+          description: 'Project name\n项目名称',
         },
       },
       required: ['projectName'],
@@ -354,18 +354,18 @@ const TOOLS = [
   },
   {
     name: 'devplan_export_markdown',
-    description: 'Export the dev plan as a Markdown document. Scope can be "full" (documents + tasks) or "tasks" (task summary only).',
+    description: 'Export the dev plan as a Markdown document. Scope can be "full" (documents + tasks) or "tasks" (task summary only).\n将开发计划导出为 Markdown 文档。scope 可选 "full"（文档+任务）或 "tasks"（仅任务摘要）。',
     inputSchema: {
       type: 'object' as const,
       properties: {
         projectName: {
           type: 'string',
-          description: 'Project name',
+          description: 'Project name\n项目名称',
         },
         scope: {
           type: 'string',
           enum: ['full', 'tasks'],
-          description: 'Export scope: "full" for documents + tasks, "tasks" for task summary only (default: "tasks")',
+          description: 'Export scope: "full" for documents + tasks, "tasks" for task summary only (default: "tasks")\n导出范围："full" 包含文档和任务，"tasks" 仅任务摘要（默认 "tasks"）',
         },
       },
       required: ['projectName'],
@@ -373,17 +373,17 @@ const TOOLS = [
   },
   {
     name: 'devplan_sync_git',
-    description: 'Synchronize DevPlan task statuses with Git history. Checks if completed tasks\' commits are still ancestors of the current HEAD. If a completed task\'s commit was rolled back (e.g., via git reset), the task is automatically reverted to pending. Use dryRun=true to preview changes without modifying data.',
+    description: 'Synchronize DevPlan task statuses with Git history. Checks if completed tasks\' commits are still ancestors of the current HEAD. If a completed task\'s commit was rolled back (e.g., via git reset), the task is automatically reverted to pending. Use dryRun=true to preview changes without modifying data.\n将 DevPlan 任务状态与 Git 历史同步。检查已完成任务的 commit 是否仍是当前 HEAD 的祖先。如果已完成任务的 commit 被回滚（如 git reset），任务会自动回退为待处理。使用 dryRun=true 可预览变更而不修改数据。',
     inputSchema: {
       type: 'object' as const,
       properties: {
         projectName: {
           type: 'string',
-          description: 'Project name',
+          description: 'Project name\n项目名称',
         },
         dryRun: {
           type: 'boolean',
-          description: 'If true, only report which tasks would be reverted without actually changing them (default: false)',
+          description: 'If true, only report which tasks would be reverted without actually changing them (default: false)\n为 true 时仅报告哪些任务会被回退，不实际修改数据（默认 false）',
         },
       },
       required: ['projectName'],
@@ -391,30 +391,30 @@ const TOOLS = [
   },
   {
     name: 'devplan_create_module',
-    description: 'Create/register a feature module in the dev plan. Modules represent independent functional areas of the project (e.g., "vector-store", "permission-system"). Main tasks and documents can be associated with modules.',
+    description: 'Create/register a feature module in the dev plan. Modules represent independent functional areas of the project (e.g., "vector-store", "permission-system"). Main tasks and documents can be associated with modules.\n在开发计划中创建/注册功能模块。模块代表项目的独立功能区域（如 "vector-store"、"permission-system"）。主任务和文档可以关联到模块。',
     inputSchema: {
       type: 'object' as const,
       properties: {
         projectName: {
           type: 'string',
-          description: 'Project name',
+          description: 'Project name\n项目名称',
         },
         moduleId: {
           type: 'string',
-          description: 'Module identifier (e.g., "vector-store", "permission")',
+          description: 'Module identifier (e.g., "vector-store", "permission")\n模块标识符（如 "vector-store"、"permission"）',
         },
         name: {
           type: 'string',
-          description: 'Module display name (e.g., "向量存储模块")',
+          description: 'Module display name (e.g., "Vector Store Module")\n模块显示名称（如 "向量存储模块"）',
         },
         description: {
           type: 'string',
-          description: 'Optional module description',
+          description: 'Optional module description\n可选模块描述',
         },
         status: {
           type: 'string',
           enum: ['planning', 'active', 'completed', 'deprecated'],
-          description: 'Module status (default: active)',
+          description: 'Module status (default: active)\n模块状态（默认 active）',
         },
       },
       required: ['projectName', 'moduleId', 'name'],
@@ -422,18 +422,18 @@ const TOOLS = [
   },
   {
     name: 'devplan_list_modules',
-    description: 'List all feature modules in the dev plan, with main task count, sub-task count (total and completed), and document counts.',
+    description: 'List all feature modules in the dev plan, with main task count, sub-task count (total and completed), and document counts.\n列出开发计划中的所有功能模块，包含主任务数、子任务数（总数和已完成数）、文档数。',
     inputSchema: {
       type: 'object' as const,
       properties: {
         projectName: {
           type: 'string',
-          description: 'Project name',
+          description: 'Project name\n项目名称',
         },
         status: {
           type: 'string',
           enum: ['planning', 'active', 'completed', 'deprecated'],
-          description: 'Optional: Filter by module status',
+          description: 'Optional: Filter by module status\n可选：按模块状态筛选',
         },
       },
       required: ['projectName'],
@@ -441,17 +441,17 @@ const TOOLS = [
   },
   {
     name: 'devplan_get_module',
-    description: 'Get module details including all associated main tasks, sub-tasks, and documents.',
+    description: 'Get module details including all associated main tasks, sub-tasks, and documents.\n获取模块详情，包含所有关联的主任务、子任务和文档。',
     inputSchema: {
       type: 'object' as const,
       properties: {
         projectName: {
           type: 'string',
-          description: 'Project name',
+          description: 'Project name\n项目名称',
         },
         moduleId: {
           type: 'string',
-          description: 'Module identifier',
+          description: 'Module identifier\n模块标识符',
         },
       },
       required: ['projectName', 'moduleId'],
@@ -459,30 +459,30 @@ const TOOLS = [
   },
   {
     name: 'devplan_update_module',
-    description: 'Update module information (name, description, status).',
+    description: 'Update module information (name, description, status).\n更新模块信息（名称、描述、状态）。',
     inputSchema: {
       type: 'object' as const,
       properties: {
         projectName: {
           type: 'string',
-          description: 'Project name',
+          description: 'Project name\n项目名称',
         },
         moduleId: {
           type: 'string',
-          description: 'Module identifier',
+          description: 'Module identifier\n模块标识符',
         },
         name: {
           type: 'string',
-          description: 'New module name',
+          description: 'New module name\n新的模块名称',
         },
         description: {
           type: 'string',
-          description: 'New module description',
+          description: 'New module description\n新的模块描述',
         },
         status: {
           type: 'string',
           enum: ['planning', 'active', 'completed', 'deprecated'],
-          description: 'New module status',
+          description: 'New module status\n新的模块状态',
         },
       },
       required: ['projectName', 'moduleId'],
