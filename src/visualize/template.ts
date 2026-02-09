@@ -202,6 +202,12 @@ var allEdges = [];
 var nodesDataSet = null;
 var edgesDataSet = null;
 var hiddenTypes = {};
+var ctrlPressed = false;
+
+// 监听 Ctrl 按键状态
+document.addEventListener('keydown', function(e) { if (e.key === 'Control') ctrlPressed = true; });
+document.addEventListener('keyup', function(e) { if (e.key === 'Control') ctrlPressed = false; });
+window.addEventListener('blur', function() { ctrlPressed = false; });
 
 // ========== Node Styles ==========
 var STATUS_COLORS = {
@@ -371,6 +377,57 @@ function renderGraph() {
     network.on('click', function(params) {
       if (params.nodes.length > 0) showPanel(params.nodes[0]);
       else closePanel();
+    });
+
+    // ========== Ctrl+拖拽整体移动关联节点 ==========
+    var groupDrag = { active: false, nodeId: null, connectedIds: [], startPositions: {} };
+
+    network.on('dragStart', function(params) {
+      if (!ctrlPressed || params.nodes.length === 0) {
+        groupDrag.active = false;
+        return;
+      }
+      var draggedId = params.nodes[0];
+      // 获取所有直接关联的节点
+      var connected = network.getConnectedNodes(draggedId);
+      groupDrag.active = true;
+      groupDrag.nodeId = draggedId;
+      groupDrag.connectedIds = connected;
+      // 记录所有关联节点的初始位置
+      groupDrag.startPositions = {};
+      var positions = network.getPositions([draggedId].concat(connected));
+      groupDrag.startPositions = positions;
+      groupDrag.dragStartPos = positions[draggedId];
+      log('Ctrl+拖拽: 整体移动 ' + (connected.length + 1) + ' 个节点', true);
+    });
+
+    network.on('dragging', function(params) {
+      if (!groupDrag.active || params.nodes.length === 0) return;
+      var draggedId = groupDrag.nodeId;
+      // 获取当前被拖拽节点的位置
+      var currentPos = network.getPositions([draggedId])[draggedId];
+      if (!currentPos || !groupDrag.dragStartPos) return;
+      // 计算位移差
+      var dx = currentPos.x - groupDrag.dragStartPos.x;
+      var dy = currentPos.y - groupDrag.dragStartPos.y;
+      // 移动所有关联节点
+      for (var i = 0; i < groupDrag.connectedIds.length; i++) {
+        var cid = groupDrag.connectedIds[i];
+        var startPos = groupDrag.startPositions[cid];
+        if (startPos) {
+          network.moveNode(cid, startPos.x + dx, startPos.y + dy);
+        }
+      }
+    });
+
+    network.on('dragEnd', function(params) {
+      if (groupDrag.active) {
+        log('整体移动完成', true);
+        groupDrag.active = false;
+        groupDrag.nodeId = null;
+        groupDrag.connectedIds = [];
+        groupDrag.startPositions = {};
+      }
     });
 
     // 超时回退

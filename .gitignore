@@ -3,3 +3,4 @@ dist/
 *.node
 *.tsbuildinfo
 .DS_Store
+*.gwal
