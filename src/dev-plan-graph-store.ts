@@ -67,6 +67,7 @@ const RT = {
   HAS_SUB_TASK: 'has_sub_task',
   MODULE_HAS_TASK: 'module_has_task',
   MODULE_HAS_DOC: 'module_has_doc',
+  TASK_HAS_DOC: 'task_has_doc',
 } as const;
 
 // ============================================================================
@@ -182,6 +183,16 @@ export class DevPlanGraphStore implements IDevPlanStore {
     return this.graph.listRelations(filter);
   }
 
+  /** 按 section + subSection 查找文档实体（返回原始 Entity） */
+  private findDocEntityBySection(section: string, subSection?: string): Entity | null {
+    const key = sectionKey(section, subSection);
+    const docs = this.findEntitiesByType(ET.DOC);
+    return docs.find((e) => {
+      const p = e.properties as any;
+      return sectionKey(p.section, p.subSection || undefined) === key;
+    }) || null;
+  }
+
   // ==========================================================================
   // Entity <-> DevPlan Type Conversion
   // ==========================================================================
@@ -198,6 +209,7 @@ export class DevPlanGraphStore implements IDevPlanStore {
       subSection: p.subSection || undefined,
       relatedSections: p.relatedSections || [],
       moduleId: p.moduleId || undefined,
+      relatedTaskIds: p.relatedTaskIds || [],
       createdAt: p.createdAt || e.created_at,
       updatedAt: p.updatedAt || e.updated_at,
     };
@@ -289,6 +301,7 @@ export class DevPlanGraphStore implements IDevPlanStore {
 
     if (existing) {
       // 更新已有文档
+      const finalRelatedTaskIds = input.relatedTaskIds || existing.relatedTaskIds || [];
       this.graph.updateEntity(existing.id, {
         properties: {
           title: input.title,
@@ -296,6 +309,7 @@ export class DevPlanGraphStore implements IDevPlanStore {
           version,
           subSection: input.subSection || null,
           relatedSections: input.relatedSections || [],
+          relatedTaskIds: finalRelatedTaskIds,
           moduleId: finalModuleId || null,
           updatedAt: now,
         },
@@ -304,6 +318,22 @@ export class DevPlanGraphStore implements IDevPlanStore {
       // 如果模块关联变化，更新关系
       if (finalModuleId && finalModuleId !== existing.moduleId) {
         this.updateModuleDocRelation(existing.id, existing.moduleId, finalModuleId);
+      }
+
+      // 更新 task -> doc 关系
+      if (finalRelatedTaskIds.length) {
+        // 删除旧的 TASK_HAS_DOC 入向关系（指向本文档的）
+        const oldTaskRels = this.getInRelations(existing.id, RT.TASK_HAS_DOC);
+        for (const rel of oldTaskRels) {
+          this.graph.deleteRelation(rel.id);
+        }
+        // 建立新的 TASK_HAS_DOC 关系
+        for (const taskId of finalRelatedTaskIds) {
+          const taskEntity = this.findEntityByProp(ET.MAIN_TASK, 'taskId', taskId);
+          if (taskEntity) {
+            this.graph.putRelation(taskEntity.id, existing.id, RT.TASK_HAS_DOC);
+          }
+        }
       }
 
       this.graph.flush();
@@ -319,6 +349,7 @@ export class DevPlanGraphStore implements IDevPlanStore {
       version,
       subSection: input.subSection || null,
       relatedSections: input.relatedSections || [],
+      relatedTaskIds: input.relatedTaskIds || [],
       moduleId: finalModuleId || null,
       createdAt: now,
       updatedAt: now,
@@ -332,6 +363,16 @@ export class DevPlanGraphStore implements IDevPlanStore {
       const modEntity = this.findEntityByProp(ET.MODULE, 'moduleId', finalModuleId);
       if (modEntity) {
         this.graph.putRelation(modEntity.id, entity.id, RT.MODULE_HAS_DOC);
+      }
+    }
+
+    // task -> doc 关系（从文档侧建立）
+    if (input.relatedTaskIds?.length) {
+      for (const taskId of input.relatedTaskIds) {
+        const taskEntity = this.findEntityByProp(ET.MAIN_TASK, 'taskId', taskId);
+        if (taskEntity) {
+          this.graph.putRelation(taskEntity.id, entity.id, RT.TASK_HAS_DOC);
+        }
       }
     }
 
@@ -433,6 +474,17 @@ export class DevPlanGraphStore implements IDevPlanStore {
       }
     }
 
+    // task -> doc 关系（通过 relatedSections 建立）
+    if (input.relatedSections?.length) {
+      for (const sk of input.relatedSections) {
+        const [sec, sub] = sk.split('|');
+        const docEntity = this.findDocEntityBySection(sec, sub);
+        if (docEntity) {
+          this.graph.putRelation(entity.id, docEntity.id, RT.TASK_HAS_DOC);
+        }
+      }
+    }
+
     this.graph.flush();
     return this.entityToMainTask(entity);
   }
@@ -486,6 +538,24 @@ export class DevPlanGraphStore implements IDevPlanStore {
     // 更新模块关系
     if (finalModuleId && finalModuleId !== existing.moduleId) {
       this.updateModuleTaskRelation(existing.id, existing.moduleId, finalModuleId);
+    }
+
+    // 更新 task -> doc 关系
+    const newRelatedSections = input.relatedSections || existing.relatedSections || [];
+    if (newRelatedSections.length) {
+      // 删除旧的 TASK_HAS_DOC 关系
+      const oldDocRels = this.getOutRelations(existing.id, RT.TASK_HAS_DOC);
+      for (const rel of oldDocRels) {
+        this.graph.deleteRelation(rel.id);
+      }
+      // 建立新的 TASK_HAS_DOC 关系
+      for (const sk of newRelatedSections) {
+        const [sec, sub] = sk.split('|');
+        const docEntity = this.findDocEntityBySection(sec, sub);
+        if (docEntity) {
+          this.graph.putRelation(existing.id, docEntity.id, RT.TASK_HAS_DOC);
+        }
+      }
     }
 
     this.graph.flush();
@@ -993,6 +1063,46 @@ export class DevPlanGraphStore implements IDevPlanStore {
   }
 
   // ==========================================================================
+  // Document-Task Relationship Queries
+  // ==========================================================================
+
+  /**
+   * 获取主任务关联的文档列表（通过 TASK_HAS_DOC 出向关系）
+   */
+  getTaskRelatedDocs(taskId: string): DevPlanDoc[] {
+    const taskEntity = this.findEntityByProp(ET.MAIN_TASK, 'taskId', taskId);
+    if (!taskEntity) return [];
+
+    const rels = this.getOutRelations(taskEntity.id, RT.TASK_HAS_DOC);
+    const docs: DevPlanDoc[] = [];
+    for (const rel of rels) {
+      const docEntity = this.graph.getEntity(rel.target);
+      if (docEntity) {
+        docs.push(this.entityToDevPlanDoc(docEntity));
+      }
+    }
+    return docs;
+  }
+
+  /**
+   * 获取文档关联的主任务列表（通过 TASK_HAS_DOC 入向关系）
+   */
+  getDocRelatedTasks(section: DevPlanSection, subSection?: string): MainTask[] {
+    const doc = this.getSection(section, subSection);
+    if (!doc) return [];
+
+    const rels = this.getInRelations(doc.id, RT.TASK_HAS_DOC);
+    const tasks: MainTask[] = [];
+    for (const rel of rels) {
+      const taskEntity = this.graph.getEntity(rel.source);
+      if (taskEntity) {
+        tasks.push(this.entityToMainTask(taskEntity));
+      }
+    }
+    return tasks;
+  }
+
+  // ==========================================================================
   // Utility
   // ==========================================================================
 
@@ -1093,6 +1203,7 @@ export class DevPlanGraphStore implements IDevPlanStore {
           status: mt.status,
           totalSubtasks: mt.totalSubtasks,
           completedSubtasks: mt.completedSubtasks,
+          completedAt: mt.completedAt || null,
         },
       });
       edges.push({
@@ -1112,12 +1223,23 @@ export class DevPlanGraphStore implements IDevPlanStore {
             taskId: st.taskId,
             parentTaskId: st.parentTaskId,
             status: st.status,
+            completedAt: st.completedAt || null,
           },
         });
         edges.push({
           from: mt.id,
           to: st.id,
           label: RT.HAS_SUB_TASK,
+        });
+      }
+
+      // task -> doc 关系
+      const taskDocRels = this.getOutRelations(mt.id, RT.TASK_HAS_DOC);
+      for (const rel of taskDocRels) {
+        edges.push({
+          from: mt.id,
+          to: rel.target,
+          label: RT.TASK_HAS_DOC,
         });
       }
     }

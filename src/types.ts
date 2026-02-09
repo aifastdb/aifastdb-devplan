@@ -66,6 +66,8 @@ export interface DevPlanDocInput {
   relatedSections?: string[];
   /** 关联的功能模块 */
   moduleId?: string;
+  /** 关联的主任务 ID 列表 */
+  relatedTaskIds?: string[];
 }
 
 /**
@@ -90,6 +92,8 @@ export interface DevPlanDoc {
   relatedSections?: string[];
   /** 关联的功能模块 ID */
   moduleId?: string;
+  /** 关联的主任务 ID 列表 */
+  relatedTaskIds?: string[];
   /** 创建时间 */
   createdAt: number;
   /** 更新时间 */

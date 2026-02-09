@@ -95,7 +95,7 @@ Or in Claude Desktop (`claude_desktop_config.json`):
 }
 ```
 
-Once configured, your AI assistant can use 19 `devplan_*` tools to manage your development plans.
+Once configured, your AI assistant can use 20 `devplan_*` tools to manage your development plans.
 
 #### Option B: As an npm Package (Programmatic)
 
@@ -128,7 +128,7 @@ const progress = plan.getProgress();
 console.log(progress);
 ```
 
-### MCP Tools (19 total)
+### MCP Tools (20 total)
 
 #### 📋 Document Management
 
@@ -167,6 +167,7 @@ console.log(progress);
 | `devplan_export_graph` | Export graph structure `{ nodes, edges }` for visualization (graph engine only) |
 | `devplan_migrate_engine` | Migrate data between `document` and `graph` engines |
 | `devplan_sync_git` | Sync Git history and detect rollbacks |
+| `devplan_start_visual` | Start the graph visualization HTTP server and open browser |
 
 ### Dual Storage Engine
 
@@ -199,6 +200,141 @@ The built-in HTTP server serves a self-contained HTML page with [vis-network](ht
 - **Status-based coloring**: completed (green), in-progress (blue), pending (gray)
 - **Interactive features**: click for details panel, filter by type, stats bar with progress
 - **Dark theme**: consistent with modern development tools
+
+### Enable DevPlan in Other Projects (Step-by-Step Guide)
+
+Here's a complete guide to enable devplan in any project (e.g., `my-app`).
+
+#### Method 1: npm Published Version (Recommended)
+
+**Step 1: Install globally**
+
+```bash
+npm install -g aifastdb-devplan
+```
+
+**Step 2: Configure MCP Server in your project**
+
+Create `.cursor/mcp.json` in your project root:
+
+```json
+{
+  "mcpServers": {
+    "aifastdb-devplan": {
+      "command": "npx",
+      "args": ["aifastdb-devplan"]
+    }
+  }
+}
+```
+
+**Step 3: Start using with AI assistant**
+
+Open Cursor in your project directory and tell the AI:
+
+```
+Initialize a development plan for my-app project
+```
+
+The AI will call `devplan_init` and data will be stored in `.devplan/my-app/` under your project root (auto-detected via `.git` or `package.json`).
+
+#### Method 2: Local Development Version
+
+If you're working with a local clone of `aifastdb-devplan` (not yet published or testing changes):
+
+**Step 1: Build locally**
+
+```bash
+cd /path/to/aifastdb-devplan
+npm install
+npm run build
+```
+
+**Step 2: Configure MCP Server with local path**
+
+Create `.cursor/mcp.json` in your target project:
+
+```json
+{
+  "mcpServers": {
+    "aifastdb-devplan": {
+      "command": "node",
+      "args": ["/path/to/aifastdb-devplan/dist/mcp-server/index.js"]
+    }
+  }
+}
+```
+
+Windows example:
+
+```json
+{
+  "mcpServers": {
+    "aifastdb-devplan": {
+      "command": "node",
+      "args": ["D:/Project/git/aifastdb-devplan/dist/mcp-server/index.js"]
+    }
+  }
+}
+```
+
+#### Controlling Data Storage Location
+
+By default, devplan auto-detects your project root and stores data in `.devplan/`. You can override this:
+
+**Option A: Environment variable (global override)**
+
+```bash
+# All devplan data will be stored under this path
+export AIFASTDB_DEVPLAN_PATH=/path/to/shared/devplans
+```
+
+**Option B: `--base-path` for visualization server**
+
+```bash
+# View another project's devplan graph
+aifastdb-devplan-visual --project my-app --base-path /path/to/my-app/.devplan --port 3210
+```
+
+#### `--base-path` Parameter Details
+
+| Parameter | Description | Default |
+|-----------|-------------|---------|
+| `--project` | Project name (must match the name used in `devplan_init`) | **Required** |
+| `--base-path` | Absolute path to the `.devplan` directory | Auto-detect via `.git` / `package.json`, fallback to `~/.aifastdb/dev-plans/` |
+| `--port` | HTTP server port | `3210` |
+
+**Data directory structure** under `--base-path`:
+
+```
+<base-path>/
+└── <project-name>/
+    ├── engine.json        # Engine config
+    ├── graph-data/        # Graph engine data (WAL shards)
+    ├── documents.jsonl    # Document engine data
+    ├── tasks.jsonl
+    └── modules.jsonl
+```
+
+#### Complete Example: Managing "my-app" from Scratch
+
+```bash
+# 1. Install devplan globally
+npm install -g aifastdb-devplan
+
+# 2. Go to your project
+cd /path/to/my-app
+
+# 3. Create MCP config
+mkdir -p .cursor
+echo '{"mcpServers":{"aifastdb-devplan":{"command":"npx","args":["aifastdb-devplan"]}}}' > .cursor/mcp.json
+
+# 4. Open in Cursor and tell AI:
+#    "Initialize devplan for my-app, create Phase 1 with 3 subtasks"
+
+# 5. Visualize the plan graph
+npx aifastdb-devplan-visual --project my-app --base-path .devplan --port 3210
+```
 
 ### Data Storage
 
@@ -304,7 +440,7 @@ npm install -g aifastdb-devplan
 }
 ```
 
-配置完成后，AI 助手即可使用 19 个 `devplan_*` 工具来管理你的开发计划。
+配置完成后，AI 助手即可使用 20 个 `devplan_*` 工具来管理你的开发计划。
 
 #### 方式 B：作为 npm 包编程使用
 
@@ -337,7 +473,7 @@ const progress = plan.getProgress();
 console.log(progress);
 ```
 
-### MCP 工具一览（19 个）
+### MCP 工具一览（20 个）
 
 #### 📋 文档管理
 
@@ -376,6 +512,7 @@ console.log(progress);
 | `devplan_export_graph` | 导出图结构 `{ nodes, edges }` 用于可视化（仅 graph 引擎） |
 | `devplan_migrate_engine` | 在 `document` 和 `graph` 引擎间迁移数据 |
 | `devplan_sync_git` | 同步 Git 历史，检测代码回滚 |
+| `devplan_start_visual` | 启动图谱可视化 HTTP 服务器并自动打开浏览器 |
 
 ### 双存储引擎
 
@@ -408,6 +545,147 @@ aifastdb-devplan-visual --project my-project --port 3210
 - **状态着色**：已完成（绿色）、进行中（蓝色）、待开始（灰色）
 - **交互功能**：点击查看详情面板、按类型过滤、顶部统计栏 + 进度条
 - **暗色主题**：与现代开发工具风格一致
+
+### 在其它项目中启用 DevPlan（实战指南）
+
+以下是在任意项目（例如 `my-app`）中启用 devplan 的完整步骤。
+
+#### 方式一：使用 npm 发布版本（推荐）
+
+**第 1 步：全局安装**
+
+```bash
+npm install -g aifastdb-devplan
+```
+
+**第 2 步：在目标项目中配置 MCP Server**
+
+在项目根目录创建 `.cursor/mcp.json`：
+
+```json
+{
+  "mcpServers": {
+    "aifastdb-devplan": {
+      "command": "npx",
+      "args": ["aifastdb-devplan"]
+    }
+  }
+}
+```
+
+**第 3 步：通过 AI 助手开始使用**
+
+在 Cursor 中打开你的项目目录，对 AI 说：
+
+```
+为 my-app 项目初始化开发计划
+```
+
+AI 会调用 `devplan_init`，数据自动存储在项目根目录下的 `.devplan/my-app/` 中（通过 `.git` 或 `package.json` 自动检测项目根目录）。
+
+#### 方式二：使用本地开发版本
+
+如果你在使用本地克隆的 `aifastdb-devplan`（未发布到 npm 或正在测试修改）：
+
+**第 1 步：本地构建**
+
+```bash
+cd /path/to/aifastdb-devplan
+npm install
+npm run build
+```
+
+**第 2 步：使用本地路径配置 MCP Server**
+
+在目标项目中创建 `.cursor/mcp.json`：
+
+```json
+{
+  "mcpServers": {
+    "aifastdb-devplan": {
+      "command": "node",
+      "args": ["/path/to/aifastdb-devplan/dist/mcp-server/index.js"]
+    }
+  }
+}
+```
+
+Windows 示例：
+
+```json
+{
+  "mcpServers": {
+    "aifastdb-devplan": {
+      "command": "node",
+      "args": ["D:/Project/git/aifastdb-devplan/dist/mcp-server/index.js"]
+    }
+  }
+}
+```
+
+#### 控制数据存储位置
+
+默认情况下，devplan 会自动检测项目根目录并将数据存储在 `.devplan/` 下。你可以通过以下方式覆盖：
+
+**方案 A：环境变量（全局覆盖）**
+
+```bash
+# 所有 devplan 数据将存储在此路径下
+export AIFASTDB_DEVPLAN_PATH=/path/to/shared/devplans
+```
+
+Windows PowerShell：
+
+```powershell
+$env:AIFASTDB_DEVPLAN_PATH = "D:\shared\devplans"
+```
+
+**方案 B：可视化服务器使用 `--base-path`**
+
+```bash
+# 查看另一个项目的 devplan 图谱
+aifastdb-devplan-visual --project my-app --base-path /path/to/my-app/.devplan --port 3210
+```
+
+#### `--base-path` 参数详解
+
+| 参数 | 说明 | 默认值 |
+|------|------|--------|
+| `--project` | 项目名称（必须与 `devplan_init` 时使用的名称一致） | **必填** |
+| `--base-path` | `.devplan` 目录的绝对路径 | 自动检测（通过 `.git` / `package.json`），兜底 `~/.aifastdb/dev-plans/` |
+| `--port` | HTTP 服务器端口 | `3210` |
+
+**`--base-path` 下的数据目录结构**：
+
+```
+<base-path>/
+└── <project-name>/
+    ├── engine.json        # 引擎配置
+    ├── graph-data/        # Graph 引擎数据（WAL 分片）
+    ├── documents.jsonl    # Document 引擎数据
+    ├── tasks.jsonl
+    └── modules.jsonl
+```
+
+#### 完整示例：从零管理 "my-app" 项目
+
+```bash
+# 1. 全局安装 devplan
+npm install -g aifastdb-devplan
+
+# 2. 进入你的项目目录
+cd /path/to/my-app
+
+# 3. 创建 MCP 配置
+mkdir -p .cursor
+echo '{"mcpServers":{"aifastdb-devplan":{"command":"npx","args":["aifastdb-devplan"]}}}' > .cursor/mcp.json
+
+# 4. 在 Cursor 中打开项目，对 AI 说：
+#    "为 my-app 初始化开发计划，创建阶段一并添加 3 个子任务"
+
+# 5. 可视化查看计划图谱
+npx aifastdb-devplan-visual --project my-app --base-path .devplan --port 3210
+```
 
 ### 数据存储
 

@@ -21,6 +21,7 @@
  * - devplan_list_modules: List all feature modules
  * - devplan_get_module: Get module details with associated tasks and docs
  * - devplan_update_module: Update module info
+ * - devplan_start_visual: Start the graph visualization HTTP server
  */
 
 // @ts-ignore - MCP SDK types will be available after npm install
@@ -125,6 +126,11 @@ const TOOLS = [
           type: 'string',
           description: 'Optional: Associate with a feature module\n可选：关联到功能模块',
         },
+        relatedTaskIds: {
+          type: 'array',
+          items: { type: 'string' },
+          description: 'Optional: Associate with main tasks by taskId (e.g., ["phase-1", "phase-2"])\n可选：通过 taskId 关联主任务',
+        },
       },
       required: ['projectName', 'section', 'title', 'content'],
     },
@@ -200,6 +206,11 @@ const TOOLS = [
         moduleId: {
           type: 'string',
           description: 'Optional: Associate with a feature module\n可选：关联到功能模块',
+        },
+        relatedDocSections: {
+          type: 'array',
+          items: { type: 'string' },
+          description: 'Optional: Associate with document sections (format: "section" or "section|subSection", e.g., ["overview", "technical_notes|security"])\n可选：关联文档片段（格式："section" 或 "section|subSection"）',
         },
       },
       required: ['projectName', 'taskId', 'title', 'priority'],
@@ -291,6 +302,11 @@ const TOOLS = [
         moduleId: {
           type: 'string',
           description: 'Optional: Associate with a feature module (main tasks only)\n可选：关联到功能模块（仅主任务）',
+        },
+        relatedDocSections: {
+          type: 'array',
+          items: { type: 'string' },
+          description: 'Optional: Associate with document sections (main tasks only, format: "section" or "section|subSection")\n可选：关联文档片段（仅主任务，格式："section" 或 "section|subSection"）',
         },
       },
       required: ['projectName', 'taskType', 'taskId', 'title'],
@@ -550,6 +566,24 @@ const TOOLS = [
       required: ['projectName', 'targetEngine'],
     },
   },
+  {
+    name: 'devplan_start_visual',
+    description: 'Start the graph visualization HTTP server. Opens an interactive vis-network page in the browser to visualize modules, tasks, and their relationships as a graph. The server runs in the background. Only works with projects using the "graph" engine.\n启动图谱可视化 HTTP 服务器。在浏览器中打开交互式 vis-network 页面，将模块、任务及其关系以图谱形式可视化展示。服务器在后台运行。仅支持使用 "graph" 引擎的项目。',
+    inputSchema: {
+      type: 'object' as const,
+      properties: {
+        projectName: {
+          type: 'string',
+          description: 'Project name\n项目名称',
+        },
+        port: {
+          type: 'number',
+          description: 'HTTP server port (default: 3210)\nHTTP 服务器端口（默认 3210）',
+        },
+      },
+      required: ['projectName'],
+    },
+  },
 ];
 
 // ============================================================================
@@ -588,6 +622,12 @@ interface ToolArgs {
   targetEngine?: string;
   /** devplan_migrate_engine: 是否备份 */
   backup?: boolean;
+  /** devplan_create_main_task / devplan_upsert_task: 关联文档片段 */
+  relatedDocSections?: string[];
+  /** devplan_save_section: 关联主任务 ID 列表 */
+  relatedTaskIds?: string[];
+  /** devplan_start_visual: HTTP 端口 */
+  port?: number;
 }
 
 async function handleToolCall(name: string, args: ToolArgs): Promise<string> {
@@ -638,6 +678,7 @@ async function handleToolCall(name: string, args: ToolArgs): Promise<string> {
         version: args.version,
         subSection: args.subSection,
         moduleId: args.moduleId,
+        relatedTaskIds: args.relatedTaskIds,
       });
 
       return JSON.stringify({
@@ -709,6 +750,7 @@ async function handleToolCall(name: string, args: ToolArgs): Promise<string> {
           description: args.description,
           estimatedHours: args.estimatedHours,
           moduleId: args.moduleId,
+          relatedSections: args.relatedDocSections,
         });
 
         return JSON.stringify({
@@ -783,6 +825,7 @@ async function handleToolCall(name: string, args: ToolArgs): Promise<string> {
               description: args.description,
               estimatedHours: args.estimatedHours,
               moduleId: args.moduleId,
+              relatedSections: args.relatedDocSections,
             },
             { preserveStatus, status: targetStatus }
           );
@@ -1212,6 +1255,74 @@ async function handleToolCall(name: string, args: ToolArgs): Promise<string> {
                 `Duration: ${result.durationMs}ms.` +
                 (result.backupPath ? ` Backup: ${result.backupPath}` : '')
               : `${statusIcon} Migration failed with ${result.errors.length} error(s): ${result.errors.join('; ')}`,
+        });
+      } catch (err) {
+        throw new McpError(ErrorCode.InternalError,
+          err instanceof Error ? err.message : String(err));
+      }
+    }
+
+    case 'devplan_start_visual': {
+      if (!args.projectName) {
+        throw new McpError(ErrorCode.InvalidParams, 'Missing required: projectName');
+      }
+
+      const engine = getProjectEngine(args.projectName);
+      if (engine !== 'graph') {
+        return JSON.stringify({
+          success: false,
+          error: `Graph visualization requires "graph" engine. Project "${args.projectName}" uses "${engine || 'document'}" engine.`,
+          hint: 'Use devplan_migrate_engine to migrate to "graph" engine first.',
+        });
+      }
+
+      const port = args.port || 3210;
+
+      try {
+        const { spawn } = require('child_process');
+        const serverScript = require('path').resolve(__dirname, '../visualize/server.js');
+
+        const child = spawn(process.execPath, [
+          serverScript,
+          '--project', args.projectName,
+          '--port', String(port),
+        ], {
+          detached: true,
+          stdio: 'ignore',
+        });
+
+        child.unref();
+
+        const url = `http://localhost:${port}`;
+
+        // 尝试自动打开浏览器
+        const platform = process.platform;
+        let openCmd: string;
+        let openArgs: string[];
+        if (platform === 'win32') {
+          openCmd = 'cmd';
+          openArgs = ['/c', 'start', '', url];
+        } else if (platform === 'darwin') {
+          openCmd = 'open';
+          openArgs = [url];
+        } else {
+          openCmd = 'xdg-open';
+          openArgs = [url];
+        }
+
+        const browser = spawn(openCmd, openArgs, {
+          detached: true,
+          stdio: 'ignore',
+        });
+        browser.unref();
+
+        return JSON.stringify({
+          success: true,
+          projectName: args.projectName,
+          port,
+          url,
+          pid: child.pid,
+          message: `Visualization server started at ${url} (PID: ${child.pid}). Browser should open automatically. Use Ctrl+Click to drag connected nodes together.`,
         });
       } catch (err) {
         throw new McpError(ErrorCode.InternalError,

@@ -232,6 +232,20 @@ export interface IDevPlanStore {
   syncWithGit(dryRun?: boolean): SyncGitResult;
 
   // ==========================================================================
+  // Document-Task Relationship Queries (仅 SocialGraphV2 实现完整支持)
+  // ==========================================================================
+
+  /**
+   * 获取主任务关联的文档列表
+   */
+  getTaskRelatedDocs?(taskId: string): DevPlanDoc[];
+
+  /**
+   * 获取文档关联的主任务列表
+   */
+  getDocRelatedTasks?(section: DevPlanSection, subSection?: string): MainTask[];
+
+  // ==========================================================================
   // Graph Export (仅 SocialGraphV2 实现支持)
   // ==========================================================================
 

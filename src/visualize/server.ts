@@ -95,7 +95,21 @@ function createStore(project: string, basePath: string): IDevPlanStore {
 // HTTP Server
 // ============================================================================
 
-function startServer(store: IDevPlanStore, projectName: string, port: number): void {
+/**
+ * 为每次 API 请求创建新的 store 实例，以确保读取磁盘上最新的 WAL 数据。
+ *
+ * 背景：MCP 工具在另一个进程中更新任务状态（写入 WAL 文件），
+ * 如果复用启动时创建的 store，内存中的数据不会自动同步磁盘变化，
+ * 导致 /api/graph 和 /api/progress 返回过时数据。
+ *
+ * 由于可视化页面的 API 调用频率很低（仅刷新/加载时），
+ * 每次重新创建 store 的性能开销完全可以接受。
+ */
+function createFreshStore(projectName: string, basePath: string): IDevPlanStore {
+  return createDevPlan(projectName, basePath, 'graph');
+}
+
+function startServer(projectName: string, basePath: string, port: number): void {
   const htmlContent = getVisualizationHTML(projectName);
 
   const server = http.createServer((req, res) => {
@@ -120,6 +134,8 @@ function startServer(store: IDevPlanStore, projectName: string, port: number): v
           break;
 
         case '/api/graph': {
+          // 每次请求重新创建 store，确保读取最新数据
+          const store = createFreshStore(projectName, basePath);
           const includeDocuments = url.searchParams.get('includeDocuments') !== 'false';
           const includeModules = url.searchParams.get('includeModules') !== 'false';
 
@@ -135,9 +151,158 @@ function startServer(store: IDevPlanStore, projectName: string, port: number): v
         }
 
         case '/api/progress': {
+          // 每次请求重新创建 store，确保读取最新数据
+          const store = createFreshStore(projectName, basePath);
           const progress = store.getProgress();
           res.writeHead(200, { 'Content-Type': 'application/json; charset=utf-8' });
           res.end(JSON.stringify(progress));
+          break;
+        }
+
+        case '/api/stats': {
+          // 详细统计数据 — 用于仪表盘页面
+          const store = createFreshStore(projectName, basePath);
+          const progress = store.getProgress();
+          const sections = store.listSections();
+          const modules = store.listModules();
+
+          // 按优先级统计
+          const byPriority: Record<string, { total: number; completed: number }> = {};
+          for (const t of progress.tasks) {
+            if (!byPriority[t.priority]) byPriority[t.priority] = { total: 0, completed: 0 };
+            byPriority[t.priority].total += t.total;
+            byPriority[t.priority].completed += t.completed;
+          }
+
+          // 按状态统计主任务
+          const mainTaskByStatus: Record<string, number> = {};
+          for (const t of progress.tasks) {
+            mainTaskByStatus[t.status] = (mainTaskByStatus[t.status] || 0) + 1;
+          }
+
+          // 为每个主任务附带子任务详情（含完成时间）
+          function getSubTasksForPhase(taskId: string) {
+            return store.listSubTasks(taskId).map((s: any) => ({
+              taskId: s.taskId,
+              title: s.title,
+              status: s.status,
+              completedAt: s.completedAt || null,
+            }));
+          }
+
+          // 获取主任务的完成时间
+          function getMainTaskCompletedAt(taskId: string): number | null {
+            const mt = store.getMainTask(taskId);
+            return mt ? (mt as any).completedAt || null : null;
+          }
+
+          // 获取主任务关联的文档
+          function getRelatedDocs(taskId: string) {
+            if (store.getTaskRelatedDocs) {
+              return store.getTaskRelatedDocs(taskId).map((d: any) => ({
+                id: d.id,
+                section: d.section,
+                subSection: d.subSection || null,
+                title: d.title,
+              }));
+            }
+            return [];
+          }
+
+          // 构建带完成时间的阶段数据
+          function buildPhase(t: any) {
+            return {
+              taskId: t.taskId,
+              title: t.title,
+              total: t.total,
+              completed: t.completed,
+              percent: t.percent,
+              completedAt: getMainTaskCompletedAt(t.taskId),
+              subTasks: getSubTasksForPhase(t.taskId),
+              relatedDocs: getRelatedDocs(t.taskId),
+            };
+          }
+
+          // 最近完成的任务（从 tasks 中提取已完成的阶段）
+          const completedPhases = progress.tasks
+            .filter((t: any) => t.status === 'completed')
+            .map(buildPhase);
+
+          // 进行中的任务
+          const inProgressPhases = progress.tasks
+            .filter((t: any) => t.status === 'in_progress')
+            .map(buildPhase);
+
+          // 待开始的任务
+          const pendingPhases = progress.tasks
+            .filter((t: any) => t.status === 'pending')
+            .map(buildPhase);
+
+          // 模块统计
+          const moduleStats = modules.map((m: any) => ({
+            moduleId: m.moduleId,
+            name: m.name,
+            status: m.status,
+            mainTaskCount: m.mainTaskCount,
+            subTaskCount: m.subTaskCount,
+            completedSubTaskCount: m.completedSubTaskCount,
+          }));
+
+          // 文档按类型分组统计
+          const docBySection: Record<string, number> = {};
+          for (const s of sections) {
+            docBySection[s.section] = (docBySection[s.section] || 0) + 1;
+          }
+
+          const stats = {
+            ...progress,
+            docCount: sections.length,
+            moduleCount: modules.length,
+            byPriority,
+            mainTaskByStatus,
+            completedPhases,
+            inProgressPhases,
+            pendingPhases,
+            moduleStats,
+            docBySection,
+          };
+
+          res.writeHead(200, { 'Content-Type': 'application/json; charset=utf-8' });
+          res.end(JSON.stringify(stats));
+          break;
+        }
+
+        case '/api/doc': {
+          // 获取文档内容 — 按 section + subSection 查询
+          const store = createFreshStore(projectName, basePath);
+          const section = url.searchParams.get('section');
+          const subSection = url.searchParams.get('subSection') || undefined;
+
+          if (!section) {
+            res.writeHead(400, { 'Content-Type': 'application/json; charset=utf-8' });
+            res.end(JSON.stringify({ error: '缺少 section 参数' }));
+            break;
+          }
+
+          const doc = store.getSection(section as any, subSection);
+          if (doc) {
+            // 附加关联主任务信息
+            let relatedTasks: any[] = [];
+            if (store.getDocRelatedTasks) {
+              relatedTasks = store.getDocRelatedTasks(section as any, subSection).map((mt: any) => ({
+                id: mt.id,
+                taskId: mt.taskId,
+                title: mt.title,
+                status: mt.status,
+                priority: mt.priority,
+              }));
+            }
+            res.writeHead(200, { 'Content-Type': 'application/json; charset=utf-8' });
+            res.end(JSON.stringify({ ...doc, relatedTasks }));
+          } else {
+            res.writeHead(404, { 'Content-Type': 'application/json; charset=utf-8' });
+            res.end(JSON.stringify({ error: '文档未找到' }));
+          }
           break;
         }
 
@@ -227,9 +392,11 @@ function main(): void {
   console.log(`正在加载项目 "${project}" 的数据...`);
   console.log(`数据路径: ${path.resolve(basePath)}`);
 
-  const store = createStore(project, basePath);
+  // 验证 store 可以正常创建（启动时检查一次）
+  createStore(project, basePath);
 
-  startServer(store, project, port);
+  // 启动服务器，每次 API 请求时会重新创建 store 以获取最新数据
+  startServer(project, basePath, port);
 }
 
 main();

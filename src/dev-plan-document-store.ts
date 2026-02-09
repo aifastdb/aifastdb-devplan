@@ -118,6 +118,7 @@ export class DevPlanDocumentStore implements IDevPlanStore {
     const now = Date.now();
 
     const finalModuleId = input.moduleId || existing?.moduleId;
+    const finalRelatedTaskIds = input.relatedTaskIds || existing?.relatedTaskIds || [];
 
     const tags = [
       `plan:${this.projectName}`,
@@ -140,6 +141,7 @@ export class DevPlanDocumentStore implements IDevPlanStore {
         version,
         subSection: input.subSection || null,
         relatedSections: input.relatedSections || [],
+        relatedTaskIds: finalRelatedTaskIds,
         moduleId: finalModuleId || null,
         createdAt: existing?.createdAt || now,
         updatedAt: now,
@@ -1450,6 +1452,7 @@ export class DevPlanDocumentStore implements IDevPlanStore {
       version: doc.metadata?.version || '1.0.0',
       subSection,
       relatedSections: doc.metadata?.relatedSections || [],
+      relatedTaskIds: doc.metadata?.relatedTaskIds || [],
       moduleId,
       createdAt: doc.metadata?.createdAt || doc.createdAt,
       updatedAt: doc.metadata?.updatedAt || doc.createdAt,
