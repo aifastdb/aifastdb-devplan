@@ -138,6 +138,11 @@ export function getVisualizationHTML(projectName: string): string {
     .legend { background: #1f2937; border-top: 1px solid #374151; padding: 6px 24px; display: flex; flex-wrap: wrap; align-items: center; justify-content: center; gap: 10px 20px; font-size: 12px; color: #9ca3af; }
     .legend-filters { display: flex; align-items: center; gap: 8px; }
     .legend-divider { width: 1px; height: 18px; background: #374151; }
+    .legend-refresh-btn { display: flex; align-items: center; justify-content: center; background: none; border: 1px solid #374151; border-radius: 4px; padding: 3px 6px; cursor: pointer; color: #9ca3af; transition: color 0.2s, border-color 0.2s, background 0.2s; }
+    .legend-refresh-btn:hover { color: #60a5fa; border-color: #60a5fa; background: rgba(96,165,250,0.08); }
+    .legend-refresh-btn:active { color: #3b82f6; }
+    .legend-refresh-btn.refreshing .legend-refresh-icon { animation: spin-refresh 0.8s linear infinite; }
+    @keyframes spin-refresh { from { transform: rotate(0deg); } to { transform: rotate(360deg); } }
     .legend-sep { width: 100%; height: 0; }
     .legend-item { display: flex; align-items: center; gap: 6px; }
     .legend-icon { width: 12px; height: 12px; }
@@ -361,6 +366,11 @@ export function getVisualizationHTML(projectName: string): string {
 
       <!-- Legend + Filters (merged) -->
       <div class="legend">
+        <!-- 刷新按钮 -->
+        <button class="legend-refresh-btn" id="legendRefreshBtn" onclick="manualRefresh()" title="刷新数据 (F5)">
+          <svg class="legend-refresh-icon" id="legendRefreshIcon" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><path d="M21 2v6h-6"/><path d="M3 12a9 9 0 0 1 15-6.7L21 8"/><path d="M3 22v-6h6"/><path d="M21 12a9 9 0 0 1-15 6.7L3 16"/></svg>
+        </button>
+        <div class="legend-divider"></div>
         <!-- 筛选复选框 -->
         <label class="filter-check"><input type="checkbox" checked data-type="module" onchange="toggleFilter('module')"> 模块</label>
         <label class="filter-check"><input type="checkbox" checked data-type="main-task" onchange="toggleFilter('main-task')"> 主任务</label>
@@ -501,6 +511,44 @@ var hiddenTypes = {};
 var ctrlPressed = false;
 var INCLUDE_NODE_DEGREE = true;
 var ENABLE_BACKEND_DEGREE_FALLBACK = true;
+
+// ========== 呼吸灯动画 (in_progress 主任务) ==========
+var breathAnimId = null;  // requestAnimationFrame ID
+var breathPhase = 0;      // 动画相位 [0, 2π)
+
+/** 启动呼吸灯动画循环 */
+function startBreathAnimation() {
+  if (breathAnimId) return; // 已在运行
+  function tick() {
+    breathPhase += 0.03;  // 控制呼吸速度
+    if (breathPhase > Math.PI * 2) breathPhase -= Math.PI * 2;
+    if (network) network.redraw();
+    breathAnimId = requestAnimationFrame(tick);
+  }
+  breathAnimId = requestAnimationFrame(tick);
+}
+
+/** 停止呼吸灯动画循环 */
+function stopBreathAnimation() {
+  if (breathAnimId) {
+    cancelAnimationFrame(breathAnimId);
+    breathAnimId = null;
+  }
+}
+
+/** 获取所有 in_progress 的主任务节点 ID 列表 */
+function getInProgressMainTaskIds() {
+  var ids = [];
+  if (!nodesDataSet) return ids;
+  var all = nodesDataSet.get();
+  for (var i = 0; i < all.length; i++) {
+    var n = all[i];
+    if (n._type === 'main-task' && n._props && n._props.status === 'in_progress') {
+      ids.push(n.id);
+    }
+  }
+  return ids;
+}
 
 // 监听 Ctrl 按键状态
 document.addEventListener('keydown', function(e) { if (e.key === 'Control') ctrlPressed = true; });
@@ -768,6 +816,58 @@ function renderGraph() {
         groupDrag.startPositions = {};
       }
     });
+
+    // ========== 呼吸灯: afterDrawing 绘制脉冲光环 ==========
+    network.on('afterDrawing', function(ctx) {
+      var ids = getInProgressMainTaskIds();
+      if (ids.length === 0) return;
+
+      // 呼吸因子: 0 → 1 → 0 平滑循环
+      var breath = (Math.sin(breathPhase) + 1) / 2; // [0, 1]
+
+      for (var i = 0; i < ids.length; i++) {
+        var pos = network.getPositions([ids[i]])[ids[i]];
+        if (!pos) continue;
+        var nodeData = nodesDataSet.get(ids[i]);
+        var baseSize = (nodeData && nodeData.size) || 14;
+
+        // 将网络坐标转换为 canvas 坐标
+        var canvasPos = network.canvasToDOM(pos);
+        // 再通过 DOMtoCanvas 获取正确的 canvas 上下文坐标
+        // vis-network 的 afterDrawing ctx 已经在正确的坐标系中，直接用 pos 即可
+
+        // 外圈脉冲光环
+        var maxExpand = baseSize * 1.2;
+        var ringRadius = baseSize + 4 + breath * maxExpand;
+        var ringAlpha = 0.35 * (1 - breath * 0.7);  // 越大越淡
+
+        ctx.beginPath();
+        ctx.arc(pos.x, pos.y, ringRadius, 0, Math.PI * 2);
+        ctx.strokeStyle = 'rgba(59, 130, 246, ' + ringAlpha + ')';
+        ctx.lineWidth = 2 + breath * 1.5;
+        ctx.stroke();
+        ctx.closePath();
+
+        // 内圈柔光
+        var glowRadius = baseSize + 6 + breath * 8;
+        var gradient = ctx.createRadialGradient(pos.x, pos.y, baseSize * 0.5, pos.x, pos.y, glowRadius);
+        gradient.addColorStop(0, 'rgba(59, 130, 246, ' + (0.15 + breath * 0.1) + ')');
+        gradient.addColorStop(1, 'rgba(59, 130, 246, 0)');
+        ctx.beginPath();
+        ctx.arc(pos.x, pos.y, glowRadius, 0, Math.PI * 2);
+        ctx.fillStyle = gradient;
+        ctx.fill();
+        ctx.closePath();
+      }
+    });
+
+    // 检查是否有 in_progress 主任务，有则启动动画
+    stopBreathAnimation();
+    var inProgIds = getInProgressMainTaskIds();
+    if (inProgIds.length > 0) {
+      startBreathAnimation();
+      log('呼吸灯: 检测到 ' + inProgIds.length + ' 个进行中主任务', true);
+    }
 
     // 超时回退
     setTimeout(function() {
@@ -1284,20 +1384,24 @@ function toggleFilter(type) {
   renderGraph();
 }
 
-// ========== Auto Refresh ==========
-var autoRefreshTimer = null;
-var AUTO_REFRESH_INTERVAL = 15000; // 15秒自动刷新
+// ========== Manual Refresh ==========
+var _refreshing = false;
 
-function startAutoRefresh() {
-  if (autoRefreshTimer) clearInterval(autoRefreshTimer);
-  autoRefreshTimer = setInterval(function() {
-    log('自动刷新: 检查数据更新...', true);
-    silentRefresh();
-  }, AUTO_REFRESH_INTERVAL);
+/** 手动刷新：点击刷新按钮或按 F5 时触发（带旋转动画反馈） */
+function manualRefresh() {
+  if (_refreshing) return;
+  _refreshing = true;
+  var btn = document.getElementById('legendRefreshBtn');
+  if (btn) btn.classList.add('refreshing');
+  log('手动刷新: 获取最新数据...', true);
+  silentRefresh(function() {
+    _refreshing = false;
+    if (btn) btn.classList.remove('refreshing');
+  });
 }
 
-/** 静默刷新：只更新数据，不重建图谱（避免布局跳动） */
-function silentRefresh() {
+/** 静默刷新：只更新数据，不重建图谱（避免布局跳动）。onDone 回调在请求完成后触发。 */
+function silentRefresh(onDone) {
   var graphApiUrl = '/api/graph?includeNodeDegree=' + (INCLUDE_NODE_DEGREE ? 'true' : 'false') +
     '&enableBackendDegreeFallback=' + (ENABLE_BACKEND_DEGREE_FALLBACK ? 'true' : 'false');
   Promise.all([
@@ -1345,8 +1449,10 @@ function silentRefresh() {
     } else {
       log('数据无变化 (' + new Date().toLocaleTimeString() + ')', true);
     }
+    if (typeof onDone === 'function') onDone();
   }).catch(function(err) {
-    log('自动刷新失败: ' + err.message, false);
+    log('刷新失败: ' + err.message, false);
+    if (typeof onDone === 'function') onDone();
   });
 }
 
@@ -1384,6 +1490,14 @@ function updateNodeStyles() {
       renderGraph();
     }
 
+    // 增量更新后重新检查呼吸灯
+    var updatedInProg = getInProgressMainTaskIds();
+    if (updatedInProg.length > 0 && !breathAnimId) {
+      startBreathAnimation();
+    } else if (updatedInProg.length === 0 && breathAnimId) {
+      stopBreathAnimation();
+    }
+
     log('节点样式已更新 (' + new Date().toLocaleTimeString() + ')', true);
   } catch (err) {
     log('增量更新失败, 完整重建: ' + err.message, false);
@@ -1395,7 +1509,6 @@ function updateNodeStyles() {
 function startApp() {
   log('vis-network 就绪, 开始加载数据...', true);
   loadData();
-  startAutoRefresh();
 }
 
 // ========== Stats Dashboard ==========

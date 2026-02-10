@@ -119,6 +119,9 @@ function startServer(projectName: string, basePath: string, port: number): void 
     res.setHeader('Access-Control-Allow-Origin', '*');
     res.setHeader('Access-Control-Allow-Methods', 'GET, OPTIONS');
     res.setHeader('Access-Control-Allow-Headers', 'Content-Type');
+    // 禁止浏览器缓存 API 响应，确保 F5 刷新时总是获取最新数据
+    res.setHeader('Cache-Control', 'no-cache, no-store, must-revalidate');
+    res.setHeader('Pragma', 'no-cache');
 
     if (req.method === 'OPTIONS') {
       res.writeHead(204);
