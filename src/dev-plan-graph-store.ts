@@ -1298,7 +1298,28 @@ export class DevPlanGraphStore implements IDevPlanStore {
     }
 
     if (includeNodeDegree) {
-      // 纯后端 degree：统一在导出阶段计算，前端仅消费 node.degree
+      // 优先走 SocialGraphV2 原生 exportGraph(includeNodeDegree) 的 degree 结果
+      const nativeDegreeMap: Record<string, number> = {};
+      try {
+        const nativeGraph = this.graph.exportGraph({
+          includeNodeDegree: true,
+          includeEdgeMeta: false,
+          // 适当放大导出上限，避免默认上限导致节点被截断
+          maxNodes: Math.max(nodes.length * 2, 2000),
+          maxEdges: Math.max(edges.length * 2, 4000),
+        } as any) as any;
+
+        const nativeNodes = Array.isArray(nativeGraph?.nodes) ? nativeGraph.nodes : [];
+        for (const n of nativeNodes) {
+          if (typeof n?.id !== 'string') continue;
+          if (typeof n?.degree === 'number' && Number.isFinite(n.degree)) {
+            nativeDegreeMap[n.id] = n.degree;
+          }
+        }
+      } catch {
+        // 当原生导出异常时，交给后续兜底逻辑处理
+      }
+
       const edgeDegreeMap: Record<string, number> = {};
       if (enableBackendDegreeFallback) {
         for (const node of nodes) edgeDegreeMap[node.id] = 0;
@@ -1309,7 +1330,7 @@ export class DevPlanGraphStore implements IDevPlanStore {
       }
 
       for (const node of nodes) {
-        const nativeDegree = (node.properties as any)?.degree;
+        const nativeDegree = nativeDegreeMap[node.id];
         if (typeof nativeDegree === 'number' && Number.isFinite(nativeDegree)) {
           node.degree = nativeDegree;
           continue;
