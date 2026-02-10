@@ -301,7 +301,11 @@ export function getVisualizationHTML(projectName: string): string {
     .stats-modal-count { font-size: 12px; color: #6b7280; margin-left: 8px; }
     .stats-modal-close { background: none; border: none; color: #6b7280; font-size: 18px; cursor: pointer; padding: 4px 8px; border-radius: 4px; line-height: 1; }
     .stats-modal-close:hover { background: #374151; color: #e5e7eb; }
-    .stats-modal-body { overflow-y: auto; padding: 8px 0; flex: 1; min-height: 0; }
+    .stats-modal-body { overflow-y: auto; padding: 8px 0; flex: 1; min-height: 0; scrollbar-width: thin; scrollbar-color: #374151 transparent; }
+    .stats-modal-body::-webkit-scrollbar { width: 6px; }
+    .stats-modal-body::-webkit-scrollbar-track { background: transparent; }
+    .stats-modal-body::-webkit-scrollbar-thumb { background: #374151; border-radius: 3px; }
+    .stats-modal-body::-webkit-scrollbar-thumb:hover { background: #4b5563; }
     .stats-modal-item { display: flex; align-items: center; gap: 10px; padding: 10px 20px; cursor: pointer; transition: background 0.15s; }
     .stats-modal-item:hover { background: #283344; }
     .stats-modal-item-icon { font-size: 14px; flex-shrink: 0; width: 22px; text-align: center; }
