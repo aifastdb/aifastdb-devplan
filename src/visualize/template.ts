@@ -65,6 +65,8 @@ export function getVisualizationHTML(projectName: string): string {
     .stat .num.blue { color: #3b82f6; }
     .stat .num.purple { color: #8b5cf6; }
     .stat .num.amber { color: #f59e0b; }
+    .stat.clickable { cursor: pointer; border-radius: 6px; padding: 2px 8px; margin: -2px -8px; transition: background 0.15s; }
+    .stat.clickable:hover { background: rgba(99,102,241,0.12); }
     .progress-bar { width: 120px; height: 8px; background: #374151; border-radius: 4px; overflow: hidden; }
     .progress-fill { height: 100%; background: linear-gradient(90deg, #10b981, #3b82f6); border-radius: 4px; transition: width 0.5s; }
 
@@ -288,6 +290,29 @@ export function getVisualizationHTML(projectName: string): string {
     .debug { position: absolute; bottom: 0; left: 12px; background: rgba(31,41,55,0.9); border: 1px solid #374151; border-radius: 8px 8px 0 0; padding: 8px 12px; font-size: 11px; color: #9ca3af; z-index: 30; max-width: 400px; }
     .debug .ok { color: #10b981; }
     .debug .err { color: #f87171; }
+
+    /* Stats Modal — left side panel */
+    .stats-modal-overlay { display: none; position: fixed; inset: 0; z-index: 200; pointer-events: none; }
+    .stats-modal-overlay.active { display: block; }
+    .stats-modal { position: fixed; top: 0; bottom: 0; left: 48px; width: 300px; background: #1f2937; border-right: 1px solid #374151; display: flex; flex-direction: column; box-shadow: 4px 0 24px rgba(0,0,0,0.4); animation: modal-slide-in 0.2s ease; z-index: 201; pointer-events: auto; }
+    @keyframes modal-slide-in { from { opacity: 0; transform: translateX(-16px); } to { opacity: 1; transform: translateX(0); } }
+    .stats-modal-header { display: flex; align-items: center; justify-content: space-between; padding: 16px 20px; border-bottom: 1px solid #374151; }
+    .stats-modal-title { font-size: 15px; font-weight: 700; color: #f3f4f6; }
+    .stats-modal-count { font-size: 12px; color: #6b7280; margin-left: 8px; }
+    .stats-modal-close { background: none; border: none; color: #6b7280; font-size: 18px; cursor: pointer; padding: 4px 8px; border-radius: 4px; line-height: 1; }
+    .stats-modal-close:hover { background: #374151; color: #e5e7eb; }
+    .stats-modal-body { overflow-y: auto; padding: 8px 0; flex: 1; min-height: 0; }
+    .stats-modal-item { display: flex; align-items: center; gap: 10px; padding: 10px 20px; cursor: pointer; transition: background 0.15s; }
+    .stats-modal-item:hover { background: #283344; }
+    .stats-modal-item-icon { font-size: 14px; flex-shrink: 0; width: 22px; text-align: center; }
+    .stats-modal-item-name { flex: 1; font-size: 13px; color: #e5e7eb; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+    .stats-modal-item-badge { font-size: 11px; padding: 2px 8px; border-radius: 9999px; flex-shrink: 0; }
+    .stats-modal-item-badge.completed { background: rgba(16,185,129,0.15); color: #6ee7b7; }
+    .stats-modal-item-badge.in_progress { background: rgba(59,130,246,0.15); color: #93c5fd; }
+    .stats-modal-item-badge.pending { background: rgba(107,114,128,0.15); color: #9ca3af; }
+    .stats-modal-item-badge.cancelled { background: rgba(146,64,14,0.15); color: #fbbf24; }
+    .stats-modal-item-badge.active { background: rgba(16,185,129,0.15); color: #6ee7b7; }
+    .stats-modal-item-sub { font-size: 11px; color: #6b7280; flex-shrink: 0; font-family: monospace; }
   </style>
 </head>
 <body>
@@ -406,6 +431,17 @@ export function getVisualizationHTML(projectName: string): string {
       </div>
     </div>
 
+  </div>
+</div>
+
+<!-- Stats Modal -->
+<div class="stats-modal-overlay" id="statsModalOverlay">
+  <div class="stats-modal">
+    <div class="stats-modal-header">
+      <div><span class="stats-modal-title" id="statsModalTitle">列表</span><span class="stats-modal-count" id="statsModalCount"></span></div>
+      <button class="stats-modal-close" onclick="closeStatsModal()">&times;</button>
+    </div>
+    <div class="stats-modal-body" id="statsModalBody"></div>
   </div>
 </div>
 
@@ -662,9 +698,9 @@ function renderStats(progress, graph) {
     if (graph.nodes[i].type === 'module') moduleCount++;
   }
   bar.innerHTML =
-    '<div class="stat"><span class="num amber">' + moduleCount + '</span> 模块</div>' +
-    '<div class="stat"><span class="num blue">' + progress.mainTaskCount + '</span> 主任务</div>' +
-    '<div class="stat"><span class="num purple">' + progress.subTaskCount + '</span> 子任务</div>' +
+    '<div class="stat clickable" onclick="showStatsModal(\\x27module\\x27)" title="查看所有模块"><span class="num amber">' + moduleCount + '</span> 模块</div>' +
+    '<div class="stat clickable" onclick="showStatsModal(\\x27main-task\\x27)" title="查看所有主任务"><span class="num blue">' + progress.mainTaskCount + '</span> 主任务</div>' +
+    '<div class="stat clickable" onclick="showStatsModal(\\x27sub-task\\x27)" title="查看所有子任务"><span class="num purple">' + progress.subTaskCount + '</span> 子任务</div>' +
     '<div class="stat"><span class="num green">' + progress.completedSubTasks + '/' + progress.subTaskCount + '</span> 已完成</div>' +
     '<div class="stat"><div class="progress-bar"><div class="progress-fill" style="width:' + pct + '%"></div></div><span>' + pct + '%</span></div>';
 }
@@ -1384,6 +1420,79 @@ function toggleFilter(type) {
     delete hiddenTypes[type];
   }
   renderGraph();
+}
+
+// ========== Stats Modal ==========
+function showStatsModal(nodeType) {
+  var titleMap = { 'module': '功能模块', 'main-task': '主任务', 'sub-task': '子任务' };
+  var iconMap = { 'module': '◆', 'main-task': '●', 'sub-task': '·' };
+  var items = [];
+  for (var i = 0; i < allNodes.length; i++) {
+    if (allNodes[i].type === nodeType) items.push(allNodes[i]);
+  }
+  // 排序：进行中 > 待开始 > 已完成 > 已取消
+  var statusOrder = { in_progress: 0, pending: 1, completed: 2, cancelled: 3, active: 1 };
+  items.sort(function(a, b) {
+    var sa = (a.properties || {}).status || 'pending';
+    var sb = (b.properties || {}).status || 'pending';
+    return (statusOrder[sa] !== undefined ? statusOrder[sa] : 5) - (statusOrder[sb] !== undefined ? statusOrder[sb] : 5);
+  });
+
+  document.getElementById('statsModalTitle').textContent = titleMap[nodeType] || nodeType;
+  document.getElementById('statsModalCount').textContent = '(' + items.length + ')';
+
+  var html = '';
+  for (var i = 0; i < items.length; i++) {
+    var n = items[i];
+    var p = n.properties || {};
+    var st = p.status || (nodeType === 'module' ? 'active' : 'pending');
+    var icon = iconMap[nodeType] || '●';
+    html += '<div class="stats-modal-item" onclick="statsModalGoToNode(\\x27' + n.id + '\\x27)">';
+    html += '<span class="stats-modal-item-icon">' + icon + '</span>';
+    html += '<span class="stats-modal-item-name" title="' + escHtml(n.label) + '">' + escHtml(n.label) + '</span>';
+    if (nodeType === 'main-task') {
+      var subCount = 0; var subDone = 0;
+      for (var j = 0; j < allNodes.length; j++) {
+        if (allNodes[j].type === 'sub-task' && (allNodes[j].properties || {}).parentTaskId === p.taskId) {
+          subCount++;
+          if ((allNodes[j].properties || {}).status === 'completed') subDone++;
+        }
+      }
+      if (subCount > 0) {
+        html += '<span class="stats-modal-item-sub">' + subDone + '/' + subCount + '</span>';
+      }
+    }
+    if (nodeType === 'module' && p.mainTaskCount !== undefined) {
+      html += '<span class="stats-modal-item-sub">' + p.mainTaskCount + ' 任务</span>';
+    }
+    html += '<span class="stats-modal-item-badge ' + st + '">' + statusText(st) + '</span>';
+    html += '</div>';
+  }
+  if (items.length === 0) {
+    html = '<div style="text-align:center;padding:40px;color:#6b7280;">暂无数据</div>';
+  }
+  document.getElementById('statsModalBody').innerHTML = html;
+  // 根据侧边栏状态调整弹层位置
+  var modal = document.querySelector('.stats-modal');
+  var sidebar = document.getElementById('sidebar');
+  if (modal && sidebar) {
+    modal.style.left = (sidebar.classList.contains('expanded') ? 200 : 48) + 'px';
+  }
+  document.getElementById('statsModalOverlay').classList.add('active');
+}
+
+function closeStatsModal() {
+  document.getElementById('statsModalOverlay').classList.remove('active');
+}
+
+function statsModalGoToNode(nodeId) {
+  if (network && nodesDataSet && nodesDataSet.get(nodeId)) {
+    network.selectNodes([nodeId]);
+    network.focus(nodeId, { scale: 1.2, animation: { duration: 400, easingFunction: 'easeInOutQuad' } });
+    panelHistory = [];
+    currentPanelNodeId = null;
+    showPanel(nodeId);
+  }
 }
 
 // ========== Manual Refresh ==========
