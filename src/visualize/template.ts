@@ -861,7 +861,7 @@ function showPanel(nodeId) {
         var docProps = doc.properties || {};
         var docLabel = docProps.section || '';
         if (docProps.subSection) docLabel += ' / ' + docProps.subSection;
-        html += '<li class="subtask-item" style="cursor:pointer;" onclick="network.selectNodes([\'' + doc.id + '\']);showPanel(\'' + doc.id + '\')">';
+        html += '<li class="subtask-item" style="cursor:pointer;" onclick="network.selectNodes([\\x27' + doc.id + '\\x27]);showPanel(\\x27' + doc.id + '\\x27)">';
         html += '<span class="subtask-icon" style="color:#f59e0b;">&#x1F4C4;</span>';
         html += '<span class="subtask-name" title="' + escHtml(doc.label) + '">' + escHtml(doc.label) + '</span>';
         html += '<span class="subtask-id">' + escHtml(docLabel) + '</span>';
@@ -895,7 +895,7 @@ function showPanel(nodeId) {
         var tProps = task.properties || {};
         var tStatus = tProps.status || 'pending';
         var tIcon = tStatus === 'completed' ? '✓' : tStatus === 'in_progress' ? '▶' : '○';
-        html += '<li class="subtask-item" style="cursor:pointer;" onclick="network.selectNodes([\'' + task.id + '\']);showPanel(\'' + task.id + '\')">';
+        html += '<li class="subtask-item" style="cursor:pointer;" onclick="network.selectNodes([\\x27' + task.id + '\\x27]);showPanel(\\x27' + task.id + '\\x27)">';
         html += '<span class="subtask-icon ' + tStatus + '">' + tIcon + '</span>';
         html += '<span class="subtask-name" title="' + escHtml(task.label) + '">' + escHtml(task.label) + '</span>';
         html += '<span class="subtask-id">' + escHtml(tProps.taskId || '') + '</span>';
