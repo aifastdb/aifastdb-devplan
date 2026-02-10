@@ -6,7 +6,7 @@
  *
  * 端点：
  * - GET /            — 返回 vis-network 可视化 HTML 页面
- * - GET /api/graph   — 返回 { nodes, edges } JSON 数据
+ * - GET /api/graph   — 返回 { nodes, edges } JSON 数据（默认包含 node.degree）
  * - GET /api/progress — 返回项目进度统计
  *
  * 启动参数：
@@ -138,9 +138,16 @@ function startServer(projectName: string, basePath: string, port: number): void 
           const store = createFreshStore(projectName, basePath);
           const includeDocuments = url.searchParams.get('includeDocuments') !== 'false';
           const includeModules = url.searchParams.get('includeModules') !== 'false';
+          const includeNodeDegree = url.searchParams.get('includeNodeDegree') !== 'false';
+          const enableBackendDegreeFallback = url.searchParams.get('enableBackendDegreeFallback') !== 'false';
 
           if (store.exportGraph) {
-            const graph = store.exportGraph({ includeDocuments, includeModules });
+            const graph = store.exportGraph({
+              includeDocuments,
+              includeModules,
+              includeNodeDegree,
+              enableBackendDegreeFallback,
+            });
             res.writeHead(200, { 'Content-Type': 'application/json; charset=utf-8' });
             res.end(JSON.stringify(graph));
           } else {

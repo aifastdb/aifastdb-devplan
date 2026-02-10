@@ -409,6 +409,8 @@ export interface DevPlanGraphNode {
   label: string;
   /** 节点类型 */
   type: 'project' | 'main-task' | 'sub-task' | 'document' | 'module';
+  /** 节点度数（连接边数量），由后端导出时计算 */
+  degree?: number;
   /** 节点属性 */
   properties?: Record<string, unknown>;
 }

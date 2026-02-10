@@ -258,5 +258,7 @@ export interface IDevPlanStore {
   exportGraph?(options?: {
     includeDocuments?: boolean;
     includeModules?: boolean;
+    includeNodeDegree?: boolean;
+    enableBackendDegreeFallback?: boolean;
   }): DevPlanExportedGraph | null;
 }

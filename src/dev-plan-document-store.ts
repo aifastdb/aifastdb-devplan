@@ -1825,6 +1825,8 @@ export class DevPlanDocumentStore implements IDevPlanStore {
   exportGraph(_options?: {
     includeDocuments?: boolean;
     includeModules?: boolean;
+    includeNodeDegree?: boolean;
+    enableBackendDegreeFallback?: boolean;
   }): DevPlanExportedGraph | null {
     return null;
   }

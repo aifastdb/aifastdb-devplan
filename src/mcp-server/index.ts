@@ -535,6 +535,14 @@ const TOOLS = [
           type: 'boolean',
           description: 'Whether to include module nodes (default: true)\n是否包含模块节点（默认 true）',
         },
+        includeNodeDegree: {
+          type: 'boolean',
+          description: 'Whether to include node.degree from backend export (default: true)\n是否包含后端导出的 node.degree（默认 true）',
+        },
+        enableBackendDegreeFallback: {
+          type: 'boolean',
+          description: 'Whether backend should fallback to edge-count degree when native degree is missing (default: true)\n当原生 degree 缺失时，后端是否回退为基于边数计算（默认 true）',
+        },
       },
       required: ['projectName'],
     },
@@ -618,6 +626,10 @@ interface ToolArgs {
   includeDocuments?: boolean;
   /** devplan_export_graph: 是否包含模块节点 */
   includeModules?: boolean;
+  /** devplan_export_graph: 是否包含后端导出的 node.degree */
+  includeNodeDegree?: boolean;
+  /** devplan_export_graph: 后端是否启用 degree 回退计算 */
+  enableBackendDegreeFallback?: boolean;
   /** devplan_migrate_engine: 目标引擎 */
   targetEngine?: string;
   /** devplan_migrate_engine: 是否备份 */
@@ -1198,6 +1210,8 @@ async function handleToolCall(name: string, args: ToolArgs): Promise<string> {
         const graph = plan.exportGraph({
           includeDocuments: args.includeDocuments,
           includeModules: args.includeModules,
+          includeNodeDegree: args.includeNodeDegree,
+          enableBackendDegreeFallback: args.enableBackendDegreeFallback,
         });
 
         return JSON.stringify({

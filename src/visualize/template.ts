@@ -490,6 +490,8 @@ var nodesDataSet = null;
 var edgesDataSet = null;
 var hiddenTypes = {};
 var ctrlPressed = false;
+var INCLUDE_NODE_DEGREE = true;
+var ENABLE_BACKEND_DEGREE_FALLBACK = true;
 
 // 监听 Ctrl 按键状态
 document.addEventListener('keydown', function(e) { if (e.key === 'Control') ctrlPressed = true; });
@@ -504,28 +506,59 @@ var STATUS_COLORS = {
   cancelled:   { bg: '#92400e', border: '#78350f', font: '#fde68a' }
 };
 
-function nodeStyle(node) {
+// ========== 节点动态大小规则 ==========
+// 根据节点的连接数（度数）动态调整大小，连接越多节点越大
+// min: 最小尺寸, max: 最大尺寸, baseFont: 基础字号, maxFont: 最大字号
+// scale: 缩放系数 (越大增长越快)
+var NODE_SIZE_RULES = {
+  'project':   { min: 35, max: 65, baseFont: 16, maxFont: 22, scale: 3.5 },
+  'module':    { min: 20, max: 45, baseFont: 12, maxFont: 16, scale: 2.8 },
+  'main-task': { min: 14, max: 38, baseFont: 11, maxFont: 15, scale: 2.2 },
+  'sub-task':  { min: 7,  max: 18, baseFont: 8,  maxFont: 11, scale: 1.5 },
+  'document':  { min: 12, max: 30, baseFont: 9,  maxFont: 13, scale: 1.8 }
+};
+
+/** 获取节点度数：纯后端下发，缺失视为 0 */
+function getNodeDegree(node) {
+  if (typeof node.degree === 'number' && !isNaN(node.degree)) return node.degree;
+  return 0;
+}
+
+/** 根据类型和度数计算节点尺寸与字号 */
+function calcNodeSize(type, degree) {
+  var rule = NODE_SIZE_RULES[type] || { min: 10, max: 22, baseFont: 10, maxFont: 13, scale: 1.0 };
+  // 使用 sqrt 曲线：低度数时增长快，高度数时增长变缓
+  var size = rule.min + rule.scale * Math.sqrt(degree);
+  size = Math.max(rule.min, Math.min(size, rule.max));
+  // 字号随尺寸线性插值
+  var sizeRatio = (size - rule.min) / (rule.max - rule.min || 1);
+  var fontSize = Math.round(rule.baseFont + sizeRatio * (rule.maxFont - rule.baseFont));
+  return { size: Math.round(size), fontSize: fontSize };
+}
+
+function nodeStyle(node, degree) {
   var t = node.type;
   var p = node.properties || {};
   var status = p.status || 'pending';
   var sc = STATUS_COLORS[status] || STATUS_COLORS.pending;
+  var ns = calcNodeSize(t, degree || 0);
 
   if (t === 'project') {
-    return { shape: 'star', size: 40, color: { background: '#f59e0b', border: '#d97706', highlight: { background: '#fbbf24', border: '#d97706' } }, font: { size: 18, color: '#fff' }, borderWidth: 3 };
+    return { shape: 'star', size: ns.size, color: { background: '#f59e0b', border: '#d97706', highlight: { background: '#fbbf24', border: '#d97706' } }, font: { size: ns.fontSize, color: '#fff' }, borderWidth: 3 };
   }
   if (t === 'module') {
-    return { shape: 'diamond', size: 25, color: { background: '#059669', border: '#047857', highlight: { background: '#10b981', border: '#047857' } }, font: { size: 13, color: '#d1fae5' }, borderWidth: 2 };
+    return { shape: 'diamond', size: ns.size, color: { background: '#059669', border: '#047857', highlight: { background: '#10b981', border: '#047857' } }, font: { size: ns.fontSize, color: '#d1fae5' }, borderWidth: 2 };
   }
   if (t === 'main-task') {
-    return { shape: 'dot', size: 22, color: { background: sc.bg, border: sc.border, highlight: { background: sc.bg, border: '#fff' } }, font: { size: 12, color: sc.font }, borderWidth: 2 };
+    return { shape: 'dot', size: ns.size, color: { background: sc.bg, border: sc.border, highlight: { background: sc.bg, border: '#fff' } }, font: { size: ns.fontSize, color: sc.font }, borderWidth: 2 };
   }
   if (t === 'sub-task') {
-    return { shape: 'dot', size: 10, color: { background: sc.bg, border: sc.border, highlight: { background: sc.bg, border: '#fff' } }, font: { size: 9, color: sc.font }, borderWidth: 1 };
+    return { shape: 'dot', size: ns.size, color: { background: sc.bg, border: sc.border, highlight: { background: sc.bg, border: '#fff' } }, font: { size: ns.fontSize, color: sc.font }, borderWidth: 1 };
   }
   if (t === 'document') {
-    return { shape: 'box', size: 16, color: { background: '#7c3aed', border: '#6d28d9', highlight: { background: '#8b5cf6', border: '#6d28d9' } }, font: { size: 10, color: '#ddd6fe' }, borderWidth: 1 };
+    return { shape: 'box', size: ns.size, color: { background: '#7c3aed', border: '#6d28d9', highlight: { background: '#8b5cf6', border: '#6d28d9' } }, font: { size: ns.fontSize, color: '#ddd6fe' }, borderWidth: 1 };
   }
-  return { shape: 'dot', size: 12, color: { background: '#6b7280', border: '#4b5563' }, font: { size: 10, color: '#9ca3af' } };
+  return { shape: 'dot', size: ns.size, color: { background: '#6b7280', border: '#4b5563' }, font: { size: ns.fontSize, color: '#9ca3af' } };
 }
 
 function edgeStyle(edge) {
@@ -542,9 +575,11 @@ function edgeStyle(edge) {
 function loadData() {
   document.getElementById('loading').style.display = 'flex';
   log('正在获取图谱数据...', true);
+  var graphApiUrl = '/api/graph?includeNodeDegree=' + (INCLUDE_NODE_DEGREE ? 'true' : 'false') +
+    '&enableBackendDegreeFallback=' + (ENABLE_BACKEND_DEGREE_FALLBACK ? 'true' : 'false');
 
   Promise.all([
-    fetch('/api/graph').then(function(r) { return r.json(); }),
+    fetch(graphApiUrl).then(function(r) { return r.json(); }),
     fetch('/api/progress').then(function(r) { return r.json(); })
   ]).then(function(results) {
     var graphRes = results[0];
@@ -592,8 +627,9 @@ function renderGraph() {
     for (var i = 0; i < allNodes.length; i++) {
       var n = allNodes[i];
       if (hiddenTypes[n.type]) continue;
-      var s = nodeStyle(n);
-      visibleNodes.push({ id: n.id, label: n.label, title: n.label, shape: s.shape, size: s.size, color: s.color, font: s.font, borderWidth: s.borderWidth, _type: n.type, _props: n.properties || {} });
+      var deg = getNodeDegree(n);
+      var s = nodeStyle(n, deg);
+      visibleNodes.push({ id: n.id, label: n.label, title: n.label + ' (连接: ' + deg + ')', shape: s.shape, size: s.size, color: s.color, font: s.font, borderWidth: s.borderWidth, _type: n.type, _props: n.properties || {} });
     }
 
     var visibleIds = {};
@@ -1208,8 +1244,10 @@ function startAutoRefresh() {
 
 /** 静默刷新：只更新数据，不重建图谱（避免布局跳动） */
 function silentRefresh() {
+  var graphApiUrl = '/api/graph?includeNodeDegree=' + (INCLUDE_NODE_DEGREE ? 'true' : 'false') +
+    '&enableBackendDegreeFallback=' + (ENABLE_BACKEND_DEGREE_FALLBACK ? 'true' : 'false');
   Promise.all([
-    fetch('/api/graph').then(function(r) { return r.json(); }),
+    fetch(graphApiUrl).then(function(r) { return r.json(); }),
     fetch('/api/progress').then(function(r) { return r.json(); })
   ]).then(function(results) {
     var graphRes = results[0];
@@ -1267,16 +1305,18 @@ function updateNodeStyles() {
       newNodeMap[allNodes[i].id] = allNodes[i];
     }
 
-    // 更新已有节点的样式
+    // 更新已有节点的样式和大小
     var currentIds = nodesDataSet.getIds();
     for (var i = 0; i < currentIds.length; i++) {
       var id = currentIds[i];
       var newData = newNodeMap[id];
       if (newData && !hiddenTypes[newData.type]) {
-        var s = nodeStyle(newData);
+        var deg = getNodeDegree(newData);
+        var s = nodeStyle(newData, deg);
         nodesDataSet.update({
           id: id,
           label: newData.label,
+          size: s.size,
           color: s.color,
           font: s.font,
           _props: newData.properties || {}

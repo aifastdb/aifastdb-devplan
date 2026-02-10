@@ -1175,9 +1175,13 @@ export class DevPlanGraphStore implements IDevPlanStore {
   exportGraph(options?: {
     includeDocuments?: boolean;
     includeModules?: boolean;
+    includeNodeDegree?: boolean;
+    enableBackendDegreeFallback?: boolean;
   }): DevPlanExportedGraph {
     const includeDocuments = options?.includeDocuments !== false;
     const includeModules = options?.includeModules !== false;
+    const includeNodeDegree = options?.includeNodeDegree !== false;
+    const enableBackendDegreeFallback = options?.enableBackendDegreeFallback !== false;
 
     const nodes: DevPlanGraphNode[] = [];
     const edges: DevPlanGraphEdge[] = [];
@@ -1290,6 +1294,27 @@ export class DevPlanGraphStore implements IDevPlanStore {
             label: RT.MODULE_HAS_TASK,
           });
         }
+      }
+    }
+
+    if (includeNodeDegree) {
+      // 纯后端 degree：统一在导出阶段计算，前端仅消费 node.degree
+      const edgeDegreeMap: Record<string, number> = {};
+      if (enableBackendDegreeFallback) {
+        for (const node of nodes) edgeDegreeMap[node.id] = 0;
+        for (const edge of edges) {
+          if (edgeDegreeMap[edge.from] !== undefined) edgeDegreeMap[edge.from] += 1;
+          if (edgeDegreeMap[edge.to] !== undefined) edgeDegreeMap[edge.to] += 1;
+        }
+      }
+
+      for (const node of nodes) {
+        const nativeDegree = (node.properties as any)?.degree;
+        if (typeof nativeDegree === 'number' && Number.isFinite(nativeDegree)) {
+          node.degree = nativeDegree;
+          continue;
+        }
+        node.degree = enableBackendDegreeFallback ? (edgeDegreeMap[node.id] || 0) : 0;
       }
     }
 
