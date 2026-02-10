@@ -26,6 +26,8 @@ export function getVisualizationHTML(projectName: string): string {
     .sidebar-header { height: 56px; display: flex; align-items: center; justify-content: center; border-bottom: 1px solid #1e293b; cursor: pointer; flex-shrink: 0; overflow: hidden; transition: all 0.2s; padding: 0 8px; }
     .sidebar-header:hover { background: #1e293b; }
     .sidebar-logo { font-size: 18px; font-weight: 900; background: linear-gradient(90deg, #38bdf8, #818cf8, #a78bfa, #f472b6); -webkit-background-clip: text; -webkit-text-fill-color: transparent; background-clip: text; white-space: nowrap; line-height: 1; }
+    .sidebar-menu-icon { display: flex; align-items: center; justify-content: center; color: #9ca3af; transition: color 0.2s; }
+    .sidebar-header:hover .sidebar-menu-icon { color: #e2e8f0; }
     .sidebar-logo-full { display: none; }
     .sidebar-logo-short { display: block; }
     .sidebar.expanded .sidebar-header { justify-content: flex-start; padding: 0 16px; }
@@ -293,7 +295,7 @@ export function getVisualizationHTML(projectName: string): string {
   <!-- Sidebar -->
   <div class="sidebar" id="sidebar">
     <div class="sidebar-header" onclick="toggleSidebar()" title="展开/收起导航">
-      <span class="sidebar-logo sidebar-logo-short">Ai</span>
+      <span class="sidebar-menu-icon sidebar-logo-short"><svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><line x1="3" y1="6" x2="21" y2="6"/><line x1="3" y1="12" x2="21" y2="12"/><line x1="3" y1="18" x2="21" y2="18"/></svg></span>
       <span class="sidebar-logo sidebar-logo-full">AiFastDb-DevPlan</span>
     </div>
     <div class="sidebar-nav">
