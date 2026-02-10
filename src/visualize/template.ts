@@ -96,6 +96,10 @@ export function getVisualizationHTML(projectName: string): string {
     .panel-title { font-weight: 600; font-size: 14px; color: #fff; pointer-events: none; }
     .panel-close { background: rgba(255,255,255,0.2); border: none; color: #fff; width: 28px; height: 28px; border-radius: 6px; cursor: pointer; font-size: 16px; display: flex; align-items: center; justify-content: center; }
     .panel-close:hover { background: rgba(255,255,255,0.3); }
+    .panel-back { background: rgba(255,255,255,0.2); border: none; color: #fff; width: 28px; height: 28px; border-radius: 6px; cursor: pointer; font-size: 16px; display: none; align-items: center; justify-content: center; margin-right: 8px; flex-shrink: 0; transition: background 0.15s, transform 0.15s; }
+    .panel-back:hover { background: rgba(255,255,255,0.3); transform: translateX(-1px); }
+    .panel-back.visible { display: flex; }
+    .panel-header-left { display: flex; align-items: center; min-width: 0; flex: 1; }
     .panel-body { padding: 16px; overflow-y: auto; flex: 1; }
     .panel-row { display: flex; justify-content: space-between; padding: 6px 0; font-size: 13px; border-bottom: 1px solid #374151; }
     .panel-row:last-child { border-bottom: none; }
@@ -341,7 +345,12 @@ export function getVisualizationHTML(projectName: string): string {
         <div class="panel" id="panel">
           <div class="panel-resize-handle" id="panelResizeHandle"></div>
           <div class="panel-header" id="panelHeader">
-            <span class="panel-title" id="panelTitle">节点详情</span>
+            <div class="panel-header-left">
+              <button class="panel-back" id="panelBack" onclick="panelGoBack()" title="返回上一个详情">
+                <svg width="16" height="16" viewBox="0 0 16 16" fill="none"><path d="M10 3L5 8L10 13" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/></svg>
+              </button>
+              <span class="panel-title" id="panelTitle">节点详情</span>
+            </div>
             <button class="panel-close" onclick="closePanel()">✕</button>
           </div>
           <div class="panel-body" id="panelBody"></div>
@@ -699,8 +708,14 @@ function renderGraph() {
     });
 
     network.on('click', function(params) {
-      if (params.nodes.length > 0) showPanel(params.nodes[0]);
-      else closePanel();
+      if (params.nodes.length > 0) {
+        // 直接点击图谱节点 → 清空历史栈，重新开始导航
+        panelHistory = [];
+        currentPanelNodeId = null;
+        showPanel(params.nodes[0]);
+      } else {
+        closePanel();
+      }
     });
 
     // ========== Ctrl+拖拽整体移动关联节点 ==========
@@ -771,6 +786,38 @@ function renderGraph() {
 }
 
 // ========== Detail Panel ==========
+
+/** 面板导航历史栈：存储节点 ID，用于"返回"功能 */
+var panelHistory = [];
+var currentPanelNodeId = null;
+
+/** 从关联链接跳转到新面板（将当前节点压入历史栈） */
+function navigateToPanel(nodeId) {
+  if (currentPanelNodeId) {
+    panelHistory.push(currentPanelNodeId);
+  }
+  network.selectNodes([nodeId]);
+  showPanel(nodeId);
+}
+
+/** 返回上一个面板 */
+function panelGoBack() {
+  if (panelHistory.length === 0) return;
+  var prevNodeId = panelHistory.pop();
+  network.selectNodes([prevNodeId]);
+  showPanel(prevNodeId);
+}
+
+/** 更新返回按钮的可见性 */
+function updateBackButton() {
+  var btn = document.getElementById('panelBack');
+  if (!btn) return;
+  if (panelHistory.length > 0) {
+    btn.classList.add('visible');
+  } else {
+    btn.classList.remove('visible');
+  }
+}
 
 /** 根据主任务节点 ID，从 allNodes/allEdges 中查找其所有子任务节点 */
 function getSubTasksForMainTask(mainTaskNodeId) {
@@ -897,7 +944,7 @@ function showPanel(nodeId) {
         var docProps = doc.properties || {};
         var docLabel = docProps.section || '';
         if (docProps.subSection) docLabel += ' / ' + docProps.subSection;
-        html += '<li class="subtask-item" style="cursor:pointer;" onclick="network.selectNodes([\\x27' + doc.id + '\\x27]);showPanel(\\x27' + doc.id + '\\x27)">';
+        html += '<li class="subtask-item" style="cursor:pointer;" onclick="navigateToPanel(\\x27' + doc.id + '\\x27)">';
         html += '<span class="subtask-icon" style="color:#f59e0b;">&#x1F4C4;</span>';
         html += '<span class="subtask-name" title="' + escHtml(doc.label) + '">' + escHtml(doc.label) + '</span>';
         html += '<span class="subtask-id">' + escHtml(docLabel) + '</span>';
@@ -931,7 +978,7 @@ function showPanel(nodeId) {
         var tProps = task.properties || {};
         var tStatus = tProps.status || 'pending';
         var tIcon = tStatus === 'completed' ? '✓' : tStatus === 'in_progress' ? '▶' : '○';
-        html += '<li class="subtask-item" style="cursor:pointer;" onclick="network.selectNodes([\\x27' + task.id + '\\x27]);showPanel(\\x27' + task.id + '\\x27)">';
+        html += '<li class="subtask-item" style="cursor:pointer;" onclick="navigateToPanel(\\x27' + task.id + '\\x27)">';
         html += '<span class="subtask-icon ' + tStatus + '">' + tIcon + '</span>';
         html += '<span class="subtask-name" title="' + escHtml(task.label) + '">' + escHtml(task.label) + '</span>';
         html += '<span class="subtask-id">' + escHtml(tProps.taskId || '') + '</span>';
@@ -952,6 +999,8 @@ function showPanel(nodeId) {
 
   body.innerHTML = html;
   panel.classList.add('show');
+  currentPanelNodeId = nodeId;
+  updateBackButton();
 
   // 如果是文档节点，异步加载内容
   if (node._type === 'document') {
@@ -959,7 +1008,12 @@ function showPanel(nodeId) {
   }
 }
 
-function closePanel() { document.getElementById('panel').classList.remove('show'); }
+function closePanel() {
+  document.getElementById('panel').classList.remove('show');
+  panelHistory = [];
+  currentPanelNodeId = null;
+  updateBackButton();
+}
 
 // ========== Panel Resize ==========
 var panelDefaultWidth = 340;
