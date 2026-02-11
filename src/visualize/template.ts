@@ -286,6 +286,50 @@ export function getVisualizationHTML(projectName: string): string {
     .module-card-bar-fill { height: 100%; background: linear-gradient(90deg, #059669, #10b981); border-radius: 3px; }
     .module-card-stats { display: flex; justify-content: space-between; font-size: 11px; color: #6b7280; }
 
+    /* ===== Docs Browser Page ===== */
+    .docs-page { display: flex; flex: 1; min-height: 0; overflow: hidden; background: #111827; }
+    .docs-sidebar { width: 280px; background: #1f2937; border-right: 1px solid #374151; display: flex; flex-direction: column; flex-shrink: 0; overflow: hidden; }
+    .docs-sidebar-header { padding: 16px 20px 12px; border-bottom: 1px solid #374151; flex-shrink: 0; }
+    .docs-sidebar-header h3 { font-size: 15px; font-weight: 700; color: #f3f4f6; margin-bottom: 8px; }
+    .docs-search { width: 100%; background: #111827; border: 1px solid #374151; border-radius: 6px; padding: 7px 10px; color: #e5e7eb; font-size: 12px; outline: none; transition: border-color 0.2s; }
+    .docs-search:focus { border-color: #6366f1; }
+    .docs-search::placeholder { color: #6b7280; }
+    .docs-group-list { overflow-y: auto; flex: 1; padding: 8px 0; scrollbar-width: thin; scrollbar-color: #374151 transparent; }
+    .docs-group-list::-webkit-scrollbar { width: 6px; }
+    .docs-group-list::-webkit-scrollbar-track { background: transparent; }
+    .docs-group-list::-webkit-scrollbar-thumb { background: #374151; border-radius: 3px; }
+    .docs-group { margin-bottom: 4px; }
+    .docs-group-title { display: flex; align-items: center; gap: 8px; padding: 8px 20px; font-size: 11px; font-weight: 700; color: #9ca3af; text-transform: uppercase; letter-spacing: 0.05em; cursor: pointer; user-select: none; transition: color 0.15s; }
+    .docs-group-title:hover { color: #d1d5db; }
+    .docs-group-title .docs-group-arrow { font-size: 9px; transition: transform 0.2s; color: #6b7280; }
+    .docs-group.collapsed .docs-group-arrow { transform: rotate(-90deg); }
+    .docs-group.collapsed .docs-group-items { display: none; }
+    .docs-group-count { font-size: 10px; color: #4b5563; font-weight: 500; margin-left: auto; }
+    .docs-item { display: flex; align-items: center; gap: 8px; padding: 7px 20px 7px 28px; cursor: pointer; transition: background 0.15s; font-size: 13px; color: #d1d5db; border-left: 3px solid transparent; }
+    .docs-item:hover { background: rgba(55,65,81,0.4); }
+    .docs-item.active { background: rgba(99,102,241,0.12); border-left-color: #6366f1; color: #a5b4fc; }
+    .docs-item-icon { font-size: 14px; flex-shrink: 0; opacity: 0.7; }
+    .docs-item-text { flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+    .docs-item-sub { font-size: 10px; color: #6b7280; flex-shrink: 0; }
+
+    .docs-content { flex: 1; display: flex; flex-direction: column; min-width: 0; overflow: hidden; }
+    .docs-content-header { padding: 16px 28px 12px; border-bottom: 1px solid #374151; flex-shrink: 0; display: flex; align-items: flex-start; justify-content: space-between; gap: 16px; }
+    .docs-content-title { font-size: 20px; font-weight: 700; color: #f3f4f6; }
+    .docs-content-meta { display: flex; gap: 12px; flex-wrap: wrap; margin-top: 4px; }
+    .docs-content-tag { font-size: 11px; padding: 2px 8px; border-radius: 4px; background: #374151; color: #9ca3af; }
+    .docs-content-tag.section { background: rgba(99,102,241,0.15); color: #a5b4fc; }
+    .docs-content-tag.version { background: rgba(16,185,129,0.15); color: #6ee7b7; }
+    .docs-content-body { flex: 1; overflow-y: auto; padding: 20px 28px 40px; scrollbar-width: thin; scrollbar-color: #374151 transparent; }
+    .docs-content-body::-webkit-scrollbar { width: 6px; }
+    .docs-content-body::-webkit-scrollbar-track { background: transparent; }
+    .docs-content-body::-webkit-scrollbar-thumb { background: #374151; border-radius: 3px; }
+    .docs-content-empty { flex: 1; display: flex; align-items: center; justify-content: center; color: #4b5563; font-size: 14px; flex-direction: column; gap: 8px; }
+    .docs-content-empty .empty-icon { font-size: 48px; opacity: 0.4; }
+    .docs-related { margin-top: 20px; border-top: 1px solid #374151; padding-top: 16px; }
+    .docs-related-title { font-size: 13px; font-weight: 600; color: #9ca3af; margin-bottom: 10px; display: flex; align-items: center; gap: 6px; }
+    .docs-related-item { display: flex; align-items: center; gap: 8px; padding: 5px 0; font-size: 12px; color: #d1d5db; }
+    .docs-related-item .rel-icon { width: 16px; height: 16px; border-radius: 50%; display: flex; align-items: center; justify-content: center; font-size: 9px; flex-shrink: 0; }
+
     /* Debug bar */
     .debug { position: absolute; bottom: 0; left: 12px; background: rgba(31,41,55,0.9); border: 1px solid #374151; border-radius: 8px 8px 0 0; padding: 8px 12px; font-size: 11px; color: #9ca3af; z-index: 30; max-width: 400px; }
     .debug .ok { color: #10b981; }
@@ -294,7 +338,7 @@ export function getVisualizationHTML(projectName: string): string {
     /* Stats Modal — left side panel */
     .stats-modal-overlay { display: none; position: fixed; inset: 0; z-index: 200; pointer-events: none; }
     .stats-modal-overlay.active { display: block; }
-    .stats-modal { position: fixed; top: 0; bottom: 0; left: 48px; width: 300px; background: #1f2937; border-right: 1px solid #374151; display: flex; flex-direction: column; box-shadow: 4px 0 24px rgba(0,0,0,0.4); animation: modal-slide-in 0.2s ease; z-index: 201; pointer-events: auto; }
+    .stats-modal { position: fixed; top: 0; bottom: 0; left: 48px; width: 300px; background: #1f2937; border-right: 1px solid #374151; display: flex; flex-direction: column; box-shadow: 4px 0 24px rgba(0,0,0,0.4); animation: modal-slide-in 0.2s ease; z-index: 201; pointer-events: auto; transition: left 0.25s ease; }
     @keyframes modal-slide-in { from { opacity: 0; transform: translateX(-16px); } to { opacity: 1; transform: translateX(0); } }
     .stats-modal-header { display: flex; align-items: center; justify-content: space-between; padding: 16px 20px; border-bottom: 1px solid #374151; }
     .stats-modal-title { font-size: 15px; font-weight: 700; color: #f3f4f6; }
@@ -339,11 +383,10 @@ export function getVisualizationHTML(projectName: string): string {
         <span class="nav-item-badge">即将推出</span>
         <span class="nav-tooltip">任务看板 (即将推出)</span>
       </div>
-      <div class="nav-item disabled" data-page="docs" onclick="navTo('docs')">
+      <div class="nav-item" data-page="docs" onclick="navTo('docs')">
         <span class="nav-item-icon">📄</span>
         <span class="nav-item-text">文档浏览</span>
-        <span class="nav-item-badge">即将推出</span>
-        <span class="nav-tooltip">文档浏览 (即将推出)</span>
+        <span class="nav-tooltip">文档浏览</span>
       </div>
       <div class="nav-item" data-page="stats" onclick="navTo('stats')">
         <span class="nav-item-icon">📊</span>
@@ -423,6 +466,40 @@ export function getVisualizationHTML(projectName: string): string {
       </div>
     </div>
 
+    <!-- ===== PAGE: Docs Browser ===== -->
+    <div class="page-view" id="pageDocs">
+      <div class="docs-page">
+        <!-- Left: Document List -->
+        <div class="docs-sidebar">
+          <div class="docs-sidebar-header">
+            <h3>📄 文档库</h3>
+            <input type="text" class="docs-search" id="docsSearch" placeholder="搜索文档标题..." oninput="filterDocs()">
+          </div>
+          <div class="docs-group-list" id="docsGroupList">
+            <div style="text-align:center;padding:40px;color:#6b7280;font-size:12px;">加载中...</div>
+          </div>
+        </div>
+        <!-- Right: Document Content -->
+        <div class="docs-content">
+          <div class="docs-content-empty" id="docsEmptyState">
+            <div class="empty-icon">📄</div>
+            <div>选择左侧文档查看内容</div>
+          </div>
+          <div id="docsContentView" style="display:none;flex-direction:column;flex:1;min-height:0;">
+            <div class="docs-content-header">
+              <div>
+                <div class="docs-content-title" id="docsContentTitle">文档标题</div>
+                <div class="docs-content-meta" id="docsContentMeta"></div>
+              </div>
+            </div>
+            <div class="docs-content-body" id="docsContentBody">
+              <div class="doc-content" id="docsContentInner"></div>
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+
     <!-- ===== PAGE: Stats Dashboard ===== -->
     <div class="page-view" id="pageStats">
       <div class="stats-page" id="statsPageContent">
@@ -458,12 +535,23 @@ function toggleSidebar() {
   var isExpanded = sidebar.classList.contains('expanded');
   // 记住偏好
   try { localStorage.setItem('devplan_sidebar_expanded', isExpanded ? '1' : '0'); } catch(e) {}
+  // 同步更新左侧弹层位置
+  updateStatsModalPosition();
   // 通知 vis-network 重新适配尺寸
   setTimeout(function() { if (network) network.redraw(); }, 300);
 }
 
+/** 根据侧边栏状态更新左侧弹层位置 */
+function updateStatsModalPosition() {
+  var modal = document.querySelector('.stats-modal');
+  var sidebar = document.getElementById('sidebar');
+  if (modal && sidebar) {
+    modal.style.left = (sidebar.classList.contains('expanded') ? 200 : 48) + 'px';
+  }
+}
+
 var currentPage = 'graph';
-var pageMap = { graph: 'pageGraph', stats: 'pageStats' };
+var pageMap = { graph: 'pageGraph', stats: 'pageStats', docs: 'pageDocs' };
 
 function navTo(page) {
   // 仅支持已实现的页面
@@ -485,8 +573,12 @@ function navTo(page) {
 
   currentPage = page;
 
+  // 离开图谱页面时关闭左侧弹层
+  if (page !== 'graph') closeStatsModal();
+
   // 按需加载页面数据
   if (page === 'stats') loadStatsPage();
+  if (page === 'docs') loadDocsPage();
   if (page === 'graph' && network) {
     setTimeout(function() { network.redraw(); network.fit(); }, 100);
   }
@@ -499,6 +591,8 @@ function navTo(page) {
     if (saved === '1') {
       var sidebar = document.getElementById('sidebar');
       if (sidebar) { sidebar.classList.add('expanded'); }
+      // 同步弹层初始位置
+      updateStatsModalPosition();
     }
   } catch(e) {}
 })();
@@ -643,10 +737,10 @@ function nodeStyle(node, degree) {
   var ns = calcNodeSize(t, degree || 0);
 
   if (t === 'project') {
-    return { shape: 'star', size: ns.size, color: { background: '#f59e0b', border: '#d97706', highlight: { background: '#fbbf24', border: '#d97706' } }, font: { size: ns.fontSize, color: '#fff' }, borderWidth: 3 };
+    return { shape: 'star', size: ns.size, color: { background: '#f59e0b', border: '#d97706', highlight: { background: '#fbbf24', border: '#fff' } }, font: { size: ns.fontSize, color: '#fff' }, borderWidth: 3 };
   }
   if (t === 'module') {
-    return { shape: 'diamond', size: ns.size, color: { background: '#059669', border: '#047857', highlight: { background: '#10b981', border: '#047857' } }, font: { size: ns.fontSize, color: '#d1fae5' }, borderWidth: 2 };
+    return { shape: 'diamond', size: ns.size, color: { background: '#059669', border: '#047857', highlight: { background: '#10b981', border: '#fff' } }, font: { size: ns.fontSize, color: '#d1fae5' }, borderWidth: 2 };
   }
   if (t === 'main-task') {
     return { shape: 'dot', size: ns.size, color: { background: sc.bg, border: sc.border, highlight: { background: sc.bg, border: '#fff' } }, font: { size: ns.fontSize, color: sc.font }, borderWidth: 2 };
@@ -655,7 +749,7 @@ function nodeStyle(node, degree) {
     return { shape: 'dot', size: ns.size, color: { background: sc.bg, border: sc.border, highlight: { background: sc.bg, border: '#fff' } }, font: { size: ns.fontSize, color: sc.font }, borderWidth: 1 };
   }
   if (t === 'document') {
-    return { shape: 'box', size: ns.size, color: { background: '#7c3aed', border: '#6d28d9', highlight: { background: '#8b5cf6', border: '#6d28d9' } }, font: { size: ns.fontSize, color: '#ddd6fe' }, borderWidth: 1 };
+    return { shape: 'box', size: ns.size, color: { background: '#7c3aed', border: '#6d28d9', highlight: { background: '#8b5cf6', border: '#fff' } }, font: { size: ns.fontSize, color: '#ddd6fe' }, borderWidth: 1 };
   }
   return { shape: 'dot', size: ns.size, color: { background: '#6b7280', border: '#4b5563' }, font: { size: ns.fontSize, color: '#9ca3af' } };
 }
@@ -1477,11 +1571,7 @@ function showStatsModal(nodeType) {
   }
   document.getElementById('statsModalBody').innerHTML = html;
   // 根据侧边栏状态调整弹层位置
-  var modal = document.querySelector('.stats-modal');
-  var sidebar = document.getElementById('sidebar');
-  if (modal && sidebar) {
-    modal.style.left = (sidebar.classList.contains('expanded') ? 200 : 48) + 'px';
-  }
+  updateStatsModalPosition();
   document.getElementById('statsModalOverlay').classList.add('active');
 }
 
@@ -1624,6 +1714,219 @@ function updateNodeStyles() {
 function startApp() {
   log('vis-network 就绪, 开始加载数据...', true);
   loadData();
+}
+
+// ========== Docs Browser ==========
+var docsLoaded = false;
+var docsData = [];       // 全部文档列表
+var currentDocKey = '';  // 当前选中文档的 key (section|subSection)
+
+/** Section 类型的中文名称映射 */
+var SECTION_NAMES = {
+  overview: '概述', core_concepts: '核心概念', api_design: 'API 设计',
+  file_structure: '文件结构', config: '配置', examples: '使用示例',
+  technical_notes: '技术笔记', api_endpoints: 'API 端点',
+  milestones: '里程碑', changelog: '变更记录', custom: '自定义'
+};
+
+/** Section 图标映射 */
+var SECTION_ICONS = {
+  overview: '📋', core_concepts: '🧠', api_design: '🔌',
+  file_structure: '📁', config: '⚙️', examples: '💡',
+  technical_notes: '🔬', api_endpoints: '🌐',
+  milestones: '🏁', changelog: '📝', custom: '📎'
+};
+
+function loadDocsPage() {
+  if (docsLoaded && docsData.length > 0) return;
+  var list = document.getElementById('docsGroupList');
+  if (list) list.innerHTML = '<div style="text-align:center;padding:40px;color:#6b7280;font-size:12px;"><div class="spinner" style="margin:0 auto 12px;width:24px;height:24px;border-width:3px;"></div>加载文档列表...</div>';
+
+  fetch('/api/docs').then(function(r) { return r.json(); }).then(function(data) {
+    docsData = data.docs || [];
+    docsLoaded = true;
+    renderDocsList(docsData);
+  }).catch(function(err) {
+    if (list) list.innerHTML = '<div style="text-align:center;padding:40px;color:#f87171;font-size:12px;">加载失败: ' + err.message + '<br><span style="cursor:pointer;color:#818cf8;text-decoration:underline;" onclick="docsLoaded=false;loadDocsPage();">重试</span></div>';
+  });
+}
+
+/** 将文档列表按 section 分组渲染 */
+function renderDocsList(docs) {
+  var list = document.getElementById('docsGroupList');
+  if (!list) return;
+
+  // 按 section 分组
+  var groups = {};
+  var groupOrder = [];
+  for (var i = 0; i < docs.length; i++) {
+    var d = docs[i];
+    var sec = d.section;
+    if (!groups[sec]) {
+      groups[sec] = [];
+      groupOrder.push(sec);
+    }
+    groups[sec].push(d);
+  }
+
+  if (groupOrder.length === 0) {
+    list.innerHTML = '<div style="text-align:center;padding:40px;color:#6b7280;font-size:12px;">暂无文档</div>';
+    return;
+  }
+
+  var html = '';
+  for (var gi = 0; gi < groupOrder.length; gi++) {
+    var sec = groupOrder[gi];
+    var items = groups[sec];
+    var secName = SECTION_NAMES[sec] || sec;
+    var secIcon = SECTION_ICONS[sec] || '📄';
+
+    html += '<div class="docs-group" data-section="' + sec + '">';
+    html += '<div class="docs-group-title" onclick="toggleDocsGroup(this)">';
+    html += '<span class="docs-group-arrow">▼</span>';
+    html += '<span>' + secIcon + ' ' + secName + '</span>';
+    html += '<span class="docs-group-count">' + items.length + '</span>';
+    html += '</div>';
+    html += '<div class="docs-group-items">';
+
+    for (var ii = 0; ii < items.length; ii++) {
+      var item = items[ii];
+      var docKey = item.section + (item.subSection ? '|' + item.subSection : '');
+      var isActive = docKey === currentDocKey ? ' active' : '';
+      html += '<div class="docs-item' + isActive + '" data-key="' + escHtml(docKey) + '" onclick="selectDoc(\\x27' + docKey.replace(/'/g, "\\\\'") + '\\x27)">';
+      html += '<span class="docs-item-icon">' + secIcon + '</span>';
+      html += '<span class="docs-item-text" title="' + escHtml(item.title) + '">' + escHtml(item.title) + '</span>';
+      if (item.subSection) {
+        html += '<span class="docs-item-sub">' + escHtml(item.subSection) + '</span>';
+      }
+      html += '</div>';
+    }
+
+    html += '</div></div>';
+  }
+
+  list.innerHTML = html;
+}
+
+/** 展开/折叠文档分组 */
+function toggleDocsGroup(el) {
+  var group = el.closest('.docs-group');
+  if (group) group.classList.toggle('collapsed');
+}
+
+/** 搜索过滤文档列表 */
+function filterDocs() {
+  var query = (document.getElementById('docsSearch').value || '').toLowerCase().trim();
+  if (!query) {
+    renderDocsList(docsData);
+    return;
+  }
+  var filtered = [];
+  for (var i = 0; i < docsData.length; i++) {
+    var d = docsData[i];
+    var text = (d.title || '') + ' ' + (d.section || '') + ' ' + (d.subSection || '');
+    if (text.toLowerCase().indexOf(query) >= 0) {
+      filtered.push(d);
+    }
+  }
+  renderDocsList(filtered);
+}
+
+/** 选中并加载文档内容 */
+function selectDoc(docKey) {
+  currentDocKey = docKey;
+
+  // 更新左侧选中状态
+  var items = document.querySelectorAll('.docs-item');
+  for (var i = 0; i < items.length; i++) {
+    items[i].classList.remove('active');
+    if (items[i].getAttribute('data-key') === docKey) {
+      items[i].classList.add('active');
+    }
+  }
+
+  // 解析 key
+  var parts = docKey.split('|');
+  var section = parts[0];
+  var subSection = parts[1] || null;
+
+  // 显示内容区，隐藏空状态
+  document.getElementById('docsEmptyState').style.display = 'none';
+  var contentView = document.getElementById('docsContentView');
+  contentView.style.display = 'flex';
+
+  // 显示加载状态
+  document.getElementById('docsContentTitle').textContent = '加载中...';
+  document.getElementById('docsContentMeta').innerHTML = '';
+  document.getElementById('docsContentInner').innerHTML = '<div style="text-align:center;padding:40px;color:#6b7280;"><div class="spinner" style="margin:0 auto 12px;width:24px;height:24px;border-width:3px;"></div></div>';
+
+  // 请求文档内容
+  var url = '/api/doc?section=' + encodeURIComponent(section);
+  if (subSection) url += '&subSection=' + encodeURIComponent(subSection);
+
+  fetch(url).then(function(r) {
+    if (!r.ok) throw new Error('HTTP ' + r.status);
+    return r.json();
+  }).then(function(doc) {
+    renderDocContent(doc, section, subSection);
+  }).catch(function(err) {
+    document.getElementById('docsContentTitle').textContent = '加载失败';
+    document.getElementById('docsContentInner').innerHTML = '<div style="text-align:center;padding:40px;color:#f87171;">加载失败: ' + escHtml(err.message) + '</div>';
+  });
+}
+
+/** 渲染文档内容到右侧面板 */
+function renderDocContent(doc, section, subSection) {
+  var secName = SECTION_NAMES[section] || section;
+
+  // 标题
+  document.getElementById('docsContentTitle').textContent = doc.title || secName;
+
+  // 元信息标签
+  var metaHtml = '<span class="docs-content-tag section">' + secName + '</span>';
+  if (subSection) {
+    metaHtml += '<span class="docs-content-tag section">' + escHtml(subSection) + '</span>';
+  }
+  if (doc.version) {
+    metaHtml += '<span class="docs-content-tag version">v' + escHtml(doc.version) + '</span>';
+  }
+  if (doc.updatedAt) {
+    metaHtml += '<span class="docs-content-tag">' + fmtTime(doc.updatedAt) + '</span>';
+  }
+  document.getElementById('docsContentMeta').innerHTML = metaHtml;
+
+  // Markdown 内容
+  var contentHtml = '';
+  if (doc.content) {
+    contentHtml = renderMarkdown(doc.content);
+  } else {
+    contentHtml = '<div style="text-align:center;padding:40px;color:#6b7280;">文档内容为空</div>';
+  }
+
+  // 关联任务
+  var relatedTasks = doc.relatedTasks || [];
+  if (relatedTasks.length > 0) {
+    contentHtml += '<div class="docs-related">';
+    contentHtml += '<div class="docs-related-title">🔗 关联任务 (' + relatedTasks.length + ')</div>';
+    for (var i = 0; i < relatedTasks.length; i++) {
+      var t = relatedTasks[i];
+      var tStatus = t.status || 'pending';
+      var tIcon = tStatus === 'completed' ? '✓' : tStatus === 'in_progress' ? '▶' : '○';
+      var iconBg = tStatus === 'completed' ? '#064e3b' : tStatus === 'in_progress' ? '#1e3a5f' : '#374151';
+      var iconColor = tStatus === 'completed' ? '#6ee7b7' : tStatus === 'in_progress' ? '#93c5fd' : '#6b7280';
+      contentHtml += '<div class="docs-related-item">';
+      contentHtml += '<span class="rel-icon" style="background:' + iconBg + ';color:' + iconColor + ';">' + tIcon + '</span>';
+      contentHtml += '<span style="flex:1;">' + escHtml(t.title) + '</span>';
+      contentHtml += '<span style="font-size:10px;color:#6b7280;font-family:monospace;">' + escHtml(t.taskId) + '</span>';
+      if (t.priority) {
+        contentHtml += '<span class="status-badge priority-' + t.priority + '" style="font-size:10px;">' + t.priority + '</span>';
+      }
+      contentHtml += '</div>';
+    }
+    contentHtml += '</div>';
+  }
+
+  document.getElementById('docsContentInner').innerHTML = contentHtml;
 }
 
 // ========== Stats Dashboard ==========

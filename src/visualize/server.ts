@@ -282,6 +282,23 @@ function startServer(projectName: string, basePath: string, port: number): void 
           break;
         }
 
+        case '/api/docs': {
+          // 列出所有文档片段（不含内容，用于文档浏览页面左侧列表）
+          const store = createFreshStore(projectName, basePath);
+          const allSections = store.listSections();
+          const docList = allSections.map((s: any) => ({
+            section: s.section,
+            subSection: s.subSection || null,
+            title: s.title,
+            version: s.version || null,
+            moduleId: s.moduleId || null,
+            updatedAt: s.updatedAt || null,
+          }));
+          res.writeHead(200, { 'Content-Type': 'application/json; charset=utf-8' });
+          res.end(JSON.stringify({ docs: docList }));
+          break;
+        }
+
         case '/api/doc': {
           // 获取文档内容 — 按 section + subSection 查询
           const store = createFreshStore(projectName, basePath);
