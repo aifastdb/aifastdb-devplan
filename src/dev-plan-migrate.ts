@@ -10,7 +10,7 @@
  * 4. 更新 engine.json 为目标引擎
  *
  * 使用方式（MCP 工具）：
- *   devplan_migrate_engine { projectName: "federation-db", targetEngine: "graph" }
+ *   devplan_migrate_engine { projectName: "ai_db", targetEngine: "graph" }
  */
 
 import * as path from 'path';

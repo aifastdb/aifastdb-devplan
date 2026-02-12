@@ -96,7 +96,7 @@ export function getVisualizationHTML(projectName: string): string {
     .panel-header.module { background: linear-gradient(135deg, #059669, #10b981); }
     .panel-header.main-task { background: linear-gradient(135deg, #4f46e5, #6366f1); }
     .panel-header.sub-task { background: linear-gradient(135deg, #7c3aed, #8b5cf6); }
-    .panel-header.document { background: linear-gradient(135deg, #7c3aed, #a78bfa); }
+    .panel-header.document { background: linear-gradient(135deg, #1d4ed8, #3b82f6); }
     .panel-title { font-weight: 600; font-size: 14px; color: #fff; pointer-events: none; }
     .panel-close { background: rgba(255,255,255,0.2); border: none; color: #fff; width: 28px; height: 28px; border-radius: 6px; cursor: pointer; font-size: 16px; display: flex; align-items: center; justify-content: center; }
     .panel-close:hover { background: rgba(255,255,255,0.3); }
@@ -154,7 +154,7 @@ export function getVisualizationHTML(projectName: string): string {
     .legend-icon.diamond { background: #10b981; clip-path: polygon(50% 0%,100% 50%,50% 100%,0% 50%); }
     .legend-icon.circle { background: #6366f1; border-radius: 50%; }
     .legend-icon.dot { background: #8b5cf6; border-radius: 50%; width: 8px; height: 8px; }
-    .legend-icon.square { background: #a78bfa; border-radius: 2px; width: 10px; height: 10px; }
+    .legend-icon.square { background: #3b82f6; border-radius: 2px; width: 10px; height: 10px; }
     .legend-line { width: 24px; height: 2px; }
     .legend-line.solid { background: #6b7280; }
     .legend-line.thin { background: #6b7280; height: 1px; }
@@ -694,7 +694,7 @@ window.addEventListener('blur', function() { ctrlPressed = false; });
 // ========== Node Styles ==========
 var STATUS_COLORS = {
   completed:   { bg: '#059669', border: '#047857', font: '#d1fae5' },
-  in_progress: { bg: '#2563eb', border: '#1d4ed8', font: '#dbeafe' },
+  in_progress: { bg: '#7c3aed', border: '#6d28d9', font: '#ddd6fe' },
   pending:     { bg: '#4b5563', border: '#374151', font: '#d1d5db' },
   cancelled:   { bg: '#92400e', border: '#78350f', font: '#fde68a' }
 };
@@ -749,7 +749,7 @@ function nodeStyle(node, degree) {
     return { shape: 'dot', size: ns.size, color: { background: sc.bg, border: sc.border, highlight: { background: sc.bg, border: '#fff' } }, font: { size: ns.fontSize, color: sc.font }, borderWidth: 1 };
   }
   if (t === 'document') {
-    return { shape: 'box', size: ns.size, color: { background: '#7c3aed', border: '#6d28d9', highlight: { background: '#8b5cf6', border: '#fff' } }, font: { size: ns.fontSize, color: '#ddd6fe' }, borderWidth: 1 };
+    return { shape: 'box', size: ns.size, color: { background: '#2563eb', border: '#1d4ed8', highlight: { background: '#3b82f6', border: '#fff' } }, font: { size: ns.fontSize, color: '#dbeafe' }, borderWidth: 1 };
   }
   return { shape: 'dot', size: ns.size, color: { background: '#6b7280', border: '#4b5563' }, font: { size: ns.fontSize, color: '#9ca3af' } };
 }
@@ -758,7 +758,7 @@ function edgeStyle(edge) {
   var label = edge.label || '';
   if (label === 'has_main_task') return { width: 2, color: { color: '#6b7280', highlight: '#93c5fd' }, dashes: false, arrows: { to: { enabled: true, scaleFactor: 0.6 } } };
   if (label === 'has_sub_task') return { width: 1, color: { color: '#4b5563', highlight: '#818cf8' }, dashes: false, arrows: { to: { enabled: true, scaleFactor: 0.4 } } };
-  if (label === 'has_document') return { width: 1, color: { color: '#4b5563', highlight: '#a78bfa' }, dashes: [5, 5], arrows: { to: { enabled: true, scaleFactor: 0.4 } } };
+  if (label === 'has_document') return { width: 1, color: { color: '#4b5563', highlight: '#60a5fa' }, dashes: [5, 5], arrows: { to: { enabled: true, scaleFactor: 0.4 } } };
   if (label === 'module_has_task') return { width: 1.5, color: { color: '#065f46', highlight: '#34d399' }, dashes: [2, 4], arrows: { to: { enabled: true, scaleFactor: 0.5 } } };
   if (label === 'task_has_doc') return { width: 1.5, color: { color: '#b45309', highlight: '#f59e0b' }, dashes: [4, 3], arrows: { to: { enabled: true, scaleFactor: 0.5 } } };
   return { width: 1, color: { color: '#374151' }, dashes: false };
@@ -972,23 +972,46 @@ function renderGraph() {
         // 再通过 DOMtoCanvas 获取正确的 canvas 上下文坐标
         // vis-network 的 afterDrawing ctx 已经在正确的坐标系中，直接用 pos 即可
 
-        // 外圈脉冲光环
-        var maxExpand = baseSize * 1.2;
-        var ringRadius = baseSize + 4 + breath * maxExpand;
-        var ringAlpha = 0.35 * (1 - breath * 0.7);  // 越大越淡
+        // 外层大范围弥散光晕（营造醒目的辉光感）
+        var outerGlowRadius = baseSize + 20 + breath * baseSize * 2.5;
+        var outerGrad = ctx.createRadialGradient(pos.x, pos.y, baseSize, pos.x, pos.y, outerGlowRadius);
+        outerGrad.addColorStop(0, 'rgba(124, 58, 237, ' + (0.18 + breath * 0.12) + ')');
+        outerGrad.addColorStop(0.5, 'rgba(139, 92, 246, ' + (0.08 + breath * 0.06) + ')');
+        outerGrad.addColorStop(1, 'rgba(139, 92, 246, 0)');
+        ctx.beginPath();
+        ctx.arc(pos.x, pos.y, outerGlowRadius, 0, Math.PI * 2);
+        ctx.fillStyle = outerGrad;
+        ctx.fill();
+        ctx.closePath();
+
+        // 外圈脉冲光环（更粗、扩展范围更大）
+        var maxExpand = baseSize * 2.2;
+        var ringRadius = baseSize + 8 + breath * maxExpand;
+        var ringAlpha = 0.55 * (1 - breath * 0.5);
 
         ctx.beginPath();
         ctx.arc(pos.x, pos.y, ringRadius, 0, Math.PI * 2);
-        ctx.strokeStyle = 'rgba(59, 130, 246, ' + ringAlpha + ')';
-        ctx.lineWidth = 2 + breath * 1.5;
+        ctx.strokeStyle = 'rgba(139, 92, 246, ' + ringAlpha + ')';
+        ctx.lineWidth = 3.5 + breath * 3;
         ctx.stroke();
         ctx.closePath();
 
-        // 内圈柔光
-        var glowRadius = baseSize + 6 + breath * 8;
-        var gradient = ctx.createRadialGradient(pos.x, pos.y, baseSize * 0.5, pos.x, pos.y, glowRadius);
-        gradient.addColorStop(0, 'rgba(59, 130, 246, ' + (0.15 + breath * 0.1) + ')');
-        gradient.addColorStop(1, 'rgba(59, 130, 246, 0)');
+        // 中圈脉冲光环（第二道更紧凑的环）
+        var midRingRadius = baseSize + 4 + breath * baseSize * 1.2;
+        var midRingAlpha = 0.4 * (1 - breath * 0.4);
+        ctx.beginPath();
+        ctx.arc(pos.x, pos.y, midRingRadius, 0, Math.PI * 2);
+        ctx.strokeStyle = 'rgba(167, 139, 250, ' + midRingAlpha + ')';
+        ctx.lineWidth = 2.5 + breath * 2;
+        ctx.stroke();
+        ctx.closePath();
+
+        // 内圈柔光（更大范围的径向渐变）
+        var glowRadius = baseSize + 10 + breath * 16;
+        var gradient = ctx.createRadialGradient(pos.x, pos.y, baseSize * 0.3, pos.x, pos.y, glowRadius);
+        gradient.addColorStop(0, 'rgba(124, 58, 237, ' + (0.25 + breath * 0.15) + ')');
+        gradient.addColorStop(0.6, 'rgba(139, 92, 246, ' + (0.10 + breath * 0.08) + ')');
+        gradient.addColorStop(1, 'rgba(139, 92, 246, 0)');
         ctx.beginPath();
         ctx.arc(pos.x, pos.y, glowRadius, 0, Math.PI * 2);
         ctx.fillStyle = gradient;

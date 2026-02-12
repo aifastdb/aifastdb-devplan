@@ -24,6 +24,9 @@ import type {
   TaskPriority,
   SyncGitResult,
   DevPlanExportedGraph,
+  SearchMode,
+  ScoredDevPlanDoc,
+  RebuildIndexResult,
 } from './types';
 
 // ============================================================================
@@ -261,4 +264,35 @@ export interface IDevPlanStore {
     includeNodeDegree?: boolean;
     enableBackendDegreeFallback?: boolean;
   }): DevPlanExportedGraph | null;
+
+  // ==========================================================================
+  // Semantic Search (仅 DevPlanGraphStore + enableSemanticSearch 支持)
+  // ==========================================================================
+
+  /**
+   * 高级搜索：支持 literal / semantic / hybrid 三种模式
+   *
+   * - literal: 纯字面匹配
+   * - semantic: 纯语义向量搜索
+   * - hybrid: 字面 + 语义 RRF 融合
+   *
+   * 仅 DevPlanGraphStore 启用 enableSemanticSearch 时可用。
+   */
+  searchSectionsAdvanced?(query: string, options?: {
+    mode?: SearchMode;
+    limit?: number;
+    minScore?: number;
+  }): ScoredDevPlanDoc[];
+
+  /**
+   * 重建所有文档的向量索引
+   *
+   * 适用于：首次启用语义搜索、模型切换、索引损坏修复。
+   */
+  rebuildIndex?(): RebuildIndexResult;
+
+  /**
+   * 检查语义搜索是否可用
+   */
+  isSemanticSearchEnabled?(): boolean;
 }

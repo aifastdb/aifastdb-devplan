@@ -54,6 +54,10 @@ interface EngineConfig {
 export interface DevPlanConfig {
   /** 默认项目名称（即 .devplan/ 下的子目录名） */
   defaultProject: string;
+  /** 是否启用语义搜索（graph 引擎可用时生效） */
+  enableSemanticSearch?: boolean;
+  /** Embedding 向量维度（默认 384） */
+  embeddingDimension?: number;
 }
 
 // ============================================================================
@@ -259,11 +263,18 @@ export function createDevPlan(
   // 写入/更新引擎配置
   writeEngineConfig(projectName, base, resolvedEngine);
 
+  // 读取语义搜索配置
+  const devPlanConfig = readDevPlanConfig(base);
+  const enableSemanticSearch = devPlanConfig?.enableSemanticSearch ?? false;
+  const embeddingDimension = devPlanConfig?.embeddingDimension ?? 384;
+
   // 创建对应的存储实例
   if (resolvedEngine === 'graph') {
     return new DevPlanGraphStore(projectName, {
       graphPath: path.join(base, projectName, 'graph-data'),
       shardCount: 4,
+      enableSemanticSearch,
+      embeddingDimension,
     });
   } else {
     return new DevPlanDocumentStore(projectName, {

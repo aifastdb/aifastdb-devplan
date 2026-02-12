@@ -293,6 +293,7 @@ export class DevPlanDocumentStore implements IDevPlanStore {
     }
 
     const now = Date.now();
+    const order = input.order != null ? input.order : this.getNextMainTaskOrder();
     const taskData = {
       taskId: input.taskId,
       title: input.title,
@@ -302,6 +303,7 @@ export class DevPlanDocumentStore implements IDevPlanStore {
       relatedSections: input.relatedSections || [],
       totalSubtasks: 0,
       completedSubtasks: 0,
+      order,
     };
 
     const tags = [
@@ -324,6 +326,7 @@ export class DevPlanDocumentStore implements IDevPlanStore {
         taskId: input.taskId,
         status: 'pending',
         moduleId: input.moduleId || null,
+        order,
         createdAt: now,
         updatedAt: now,
         completedAt: null,
@@ -399,6 +402,7 @@ export class DevPlanDocumentStore implements IDevPlanStore {
     const completedAt = finalStatus === 'completed' ? (existing.completedAt || now) : null;
 
     const finalModuleId = input.moduleId || existing.moduleId;
+    const finalOrder = input.order != null ? input.order : existing.order;
 
     const taskData = {
       taskId: input.taskId,
@@ -409,6 +413,7 @@ export class DevPlanDocumentStore implements IDevPlanStore {
       relatedSections: input.relatedSections || existing.relatedSections || [],
       totalSubtasks: existing.totalSubtasks,
       completedSubtasks: existing.completedSubtasks,
+      order: finalOrder,
     };
 
     const tags = [
@@ -431,6 +436,7 @@ export class DevPlanDocumentStore implements IDevPlanStore {
         taskId: input.taskId,
         status: finalStatus,
         moduleId: finalModuleId || null,
+        order: finalOrder,
         createdAt: existing.createdAt,
         updatedAt: now,
         completedAt,
@@ -506,7 +512,8 @@ export class DevPlanDocumentStore implements IDevPlanStore {
       docs = docs.filter((doc: any) => (doc.tags as string[]).includes(moduleTag));
     }
 
-    return docs.map((doc: any) => this.docToMainTask(doc));
+    const tasks = docs.map((doc: any) => this.docToMainTask(doc));
+    return this.sortByOrder(tasks);
   }
 
   /**
@@ -592,12 +599,14 @@ export class DevPlanDocumentStore implements IDevPlanStore {
     }
 
     const now = Date.now();
+    const order = input.order != null ? input.order : this.getNextSubTaskOrder(input.parentTaskId);
     const taskData = {
       taskId: input.taskId,
       title: input.title,
       estimatedHours: input.estimatedHours || 0,
       relatedFiles: input.relatedFiles || [],
       description: input.description || '',
+      order,
     };
 
     const docInput: DocumentInput = {
@@ -616,6 +625,7 @@ export class DevPlanDocumentStore implements IDevPlanStore {
         taskId: input.taskId,
         parentTaskId: input.parentTaskId,
         status: 'pending',
+        order,
         createdAt: now,
         updatedAt: now,
         completedAt: null,
@@ -670,12 +680,14 @@ export class DevPlanDocumentStore implements IDevPlanStore {
       }
 
       const now = Date.now();
+      const order = input.order != null ? input.order : this.getNextSubTaskOrder(input.parentTaskId);
       const taskData = {
         taskId: input.taskId,
         title: input.title,
         estimatedHours: input.estimatedHours || 0,
         relatedFiles: input.relatedFiles || [],
         description: input.description || '',
+        order,
       };
 
       const docInput: DocumentInput = {
@@ -694,6 +706,7 @@ export class DevPlanDocumentStore implements IDevPlanStore {
           taskId: input.taskId,
           parentTaskId: input.parentTaskId,
           status: targetStatus,
+          order,
           createdAt: now,
           updatedAt: now,
           completedAt: targetStatus === 'completed' ? now : null,
@@ -732,11 +745,13 @@ export class DevPlanDocumentStore implements IDevPlanStore {
     }
 
     // 检查是否有实质性变化（避免无意义的更新，减少历史版本膨胀）
+    const newOrder = input.order != null ? input.order : existing.order;
     if (
       existing.title === input.title &&
       existing.description === (input.description || '') &&
       existing.status === finalStatus &&
-      existing.estimatedHours === (input.estimatedHours || 0)
+      existing.estimatedHours === (input.estimatedHours || 0) &&
+      existing.order === newOrder
     ) {
       // 无变化，直接返回
       return existing;
@@ -755,6 +770,7 @@ export class DevPlanDocumentStore implements IDevPlanStore {
       estimatedHours: input.estimatedHours || existing.estimatedHours || 0,
       relatedFiles: input.relatedFiles || existing.relatedFiles || [],
       description: input.description || existing.description || '',
+      order: newOrder,
     };
 
     const docInput: DocumentInput = {
@@ -773,6 +789,7 @@ export class DevPlanDocumentStore implements IDevPlanStore {
         taskId: input.taskId,
         parentTaskId: input.parentTaskId,
         status: finalStatus,
+        order: newOrder,
         createdAt: existing.createdAt,
         updatedAt: now,
         completedAt,
@@ -840,7 +857,8 @@ export class DevPlanDocumentStore implements IDevPlanStore {
       docs = docs.filter((doc: any) => (doc.tags as string[]).includes(statusTag));
     }
 
-    return docs.map((doc: any) => this.docToSubTask(doc));
+    const tasks = docs.map((doc: any) => this.docToSubTask(doc));
+    return this.sortByOrder(tasks);
   }
 
   /**
@@ -1013,6 +1031,7 @@ export class DevPlanDocumentStore implements IDevPlanStore {
         title: mt.title,
         priority: mt.priority,
         status: mt.status,
+        order: mt.order,
         total: subs.length,
         completed: subCompleted,
         percent: subs.length > 0 ? Math.round((subCompleted / subs.length) * 100) : 0,
@@ -1465,6 +1484,7 @@ export class DevPlanDocumentStore implements IDevPlanStore {
     const status = (statusTag?.replace('status:', '') || 'pending') as TaskStatus;
     const moduleTag = (doc.tags as string[]).find((t: string) => t.startsWith('module:'));
     const moduleId = moduleTag?.replace('module:', '') || undefined;
+    const order = data.order != null ? data.order : (doc.metadata?.order != null ? doc.metadata.order : undefined);
 
     return {
       id: doc.id,
@@ -1479,6 +1499,7 @@ export class DevPlanDocumentStore implements IDevPlanStore {
       totalSubtasks: data.totalSubtasks || 0,
       completedSubtasks: data.completedSubtasks || 0,
       status,
+      order,
       createdAt: doc.metadata?.createdAt || doc.createdAt,
       updatedAt: doc.metadata?.updatedAt || doc.createdAt,
       completedAt: doc.metadata?.completedAt || null,
@@ -1570,6 +1591,7 @@ export class DevPlanDocumentStore implements IDevPlanStore {
     const status = (statusTag?.replace('status:', '') || 'pending') as TaskStatus;
     const parentTag = (doc.tags as string[]).find((t: string) => t.startsWith('parent:'));
     const parentTaskId = parentTag?.replace('parent:', '') || '';
+    const order = data.order != null ? data.order : (doc.metadata?.order != null ? doc.metadata.order : undefined);
 
     return {
       id: doc.id,
@@ -1581,6 +1603,7 @@ export class DevPlanDocumentStore implements IDevPlanStore {
       relatedFiles: data.relatedFiles || [],
       description: data.description,
       status,
+      order,
       createdAt: doc.metadata?.createdAt || doc.createdAt,
       updatedAt: doc.metadata?.updatedAt || doc.createdAt,
       completedAt: doc.metadata?.completedAt || null,
@@ -1592,6 +1615,46 @@ export class DevPlanDocumentStore implements IDevPlanStore {
   /**
    * 刷新主任务的子任务计数
    */
+  /**
+   * 获取下一个主任务的 order 值（当前最大 order + 1）
+   */
+  private getNextMainTaskOrder(): number {
+    const tasks = this.listMainTasks();
+    let maxOrder = 0;
+    for (const t of tasks) {
+      if (typeof t.order === 'number' && t.order > maxOrder) {
+        maxOrder = t.order;
+      }
+    }
+    return maxOrder + 1;
+  }
+
+  /**
+   * 获取下一个子任务的 order 值（当前父任务下最大 order + 1）
+   */
+  private getNextSubTaskOrder(parentTaskId: string): number {
+    const tasks = this.listSubTasks(parentTaskId);
+    let maxOrder = 0;
+    for (const t of tasks) {
+      if (typeof t.order === 'number' && t.order > maxOrder) {
+        maxOrder = t.order;
+      }
+    }
+    return maxOrder + 1;
+  }
+
+  /**
+   * 按 order 字段排序（order 为空的排到最后，order 相同则按 createdAt 排）
+   */
+  private sortByOrder<T extends { order?: number; createdAt: number }>(items: T[]): T[] {
+    return items.sort((a, b) => {
+      const oa = a.order != null ? a.order : Number.MAX_SAFE_INTEGER;
+      const ob = b.order != null ? b.order : Number.MAX_SAFE_INTEGER;
+      if (oa !== ob) return oa - ob;
+      return a.createdAt - b.createdAt;
+    });
+  }
+
   private refreshMainTaskCounts(mainTaskId: string): MainTask | null {
     const mainTask = this.getMainTask(mainTaskId);
     if (!mainTask) return null;

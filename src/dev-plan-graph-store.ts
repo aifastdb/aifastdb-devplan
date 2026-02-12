@@ -19,8 +19,12 @@ import {
   SocialGraphV2,
   type Entity,
   type Relation,
+  type VectorSearchConfig,
+  type VectorSearchHit,
+  VibeSynapse,
 } from 'aifastdb';
 
+import * as path from 'path';
 import type { IDevPlanStore } from './dev-plan-interface';
 import type {
   DevPlanSection,
@@ -45,6 +49,9 @@ import type {
   DevPlanExportedGraph,
   DevPlanGraphNode,
   DevPlanGraphEdge,
+  SearchMode,
+  ScoredDevPlanDoc,
+  RebuildIndexResult,
 } from './types';
 
 // ============================================================================
@@ -104,20 +111,99 @@ export class DevPlanGraphStore implements IDevPlanStore {
   private projectName: string;
   /** 缓存的项目根实体 ID */
   private projectEntityId: string | null = null;
+  /** VibeSynapse 实例（用于 Embedding 生成），仅启用语义搜索时可用 */
+  private synapse: VibeSynapse | null = null;
+  /** 语义搜索是否成功初始化 */
+  private semanticSearchReady: boolean = false;
 
   constructor(projectName: string, config: DevPlanGraphStoreConfig) {
     this.projectName = projectName;
-    this.graph = new SocialGraphV2({
+
+    // 构建 SocialGraphV2 配置
+    const graphConfig: any = {
       path: config.graphPath,
       shardCount: config.shardCount || 4,
       walEnabled: true,
       mode: 'balanced',
       shardNames: ['entities', 'relations', 'index', 'meta'],
-    });
-    // 恢复 WAL 数据
+    };
+
+    // 如果启用语义搜索，配置 SocialGraphV2 的向量搜索
+    const dimension = config.embeddingDimension || 384;
+    if (config.enableSemanticSearch) {
+      graphConfig.vectorSearch = {
+        dimension,
+        m: 16,
+        efConstruction: 200,
+        efSearch: 50,
+        maxElements: 100_000,
+        shardCount: 1,
+      } satisfies VectorSearchConfig;
+    }
+
+    this.graph = new SocialGraphV2(graphConfig);
+
+    // 恢复 WAL 数据（包括向量 WAL）
     this.graph.recover();
+
+    // 初始化 VibeSynapse（用于 Embedding 生成）
+    if (config.enableSemanticSearch) {
+      this.initSynapse(config.graphPath, dimension);
+    }
+
     // 确保项目根实体存在
     this.ensureProjectEntity();
+  }
+
+  /**
+   * 初始化 VibeSynapse Embedding 引擎
+   *
+   * 使用 Candle MiniLM (384维) 作为默认模型，支持零配置离线使用。
+   * 初始化失败时降级为纯字面搜索（graceful degradation）。
+   */
+  private initSynapse(graphPath: string, dimension: number): void {
+    try {
+      const synapsePath = path.resolve(graphPath, '..', 'synapse-data');
+      this.synapse = new VibeSynapse({
+        storage: synapsePath,
+        dimension,
+        perception: {
+          engineType: 'candle',
+          modelId: 'sentence-transformers/all-MiniLM-L6-v2',
+          autoDownload: true,
+        },
+      });
+
+      // 验证 perception engine 是否真正可用
+      if (!this.synapse.hasPerception) {
+        console.warn(
+          '[DevPlan] VibeSynapse created but perception engine not available. ' +
+          'Candle MiniLM may not be installed. Falling back to literal search.'
+        );
+        this.synapse = null;
+        this.semanticSearchReady = false;
+        return;
+      }
+
+      // 测试 embed 是否可用（dry run）
+      try {
+        this.synapse.embed('test');
+        this.semanticSearchReady = true;
+        console.log('[DevPlan] Semantic search initialized (Candle MiniLM)');
+      } catch {
+        console.warn('[DevPlan] VibeSynapse embed() dry-run failed. Falling back to literal search.');
+        this.synapse = null;
+        this.semanticSearchReady = false;
+      }
+    } catch (e) {
+      console.warn(
+        `[DevPlan] Failed to initialize VibeSynapse for semantic search: ${
+          e instanceof Error ? e.message : String(e)
+        }. Falling back to literal search.`
+      );
+      this.synapse = null;
+      this.semanticSearchReady = false;
+    }
   }
 
   // ==========================================================================
@@ -230,6 +316,7 @@ export class DevPlanGraphStore implements IDevPlanStore {
       totalSubtasks: p.totalSubtasks || 0,
       completedSubtasks: p.completedSubtasks || 0,
       status: p.status || 'pending',
+      order: p.order != null ? p.order : undefined,
       createdAt: p.createdAt || e.created_at,
       updatedAt: p.updatedAt || e.updated_at,
       completedAt: p.completedAt || null,
@@ -248,6 +335,7 @@ export class DevPlanGraphStore implements IDevPlanStore {
       relatedFiles: p.relatedFiles || [],
       description: p.description || undefined,
       status: p.status || 'pending',
+      order: p.order != null ? p.order : undefined,
       createdAt: p.createdAt || e.created_at,
       updatedAt: p.updatedAt || e.updated_at,
       completedAt: p.completedAt || null,
@@ -336,6 +424,9 @@ export class DevPlanGraphStore implements IDevPlanStore {
         }
       }
 
+      // 语义搜索：自动为更新的文档生成 Embedding 并索引
+      this.autoIndexDocument(existing.id, input.title, input.content);
+
       this.graph.flush();
       return existing.id;
     }
@@ -375,6 +466,9 @@ export class DevPlanGraphStore implements IDevPlanStore {
         }
       }
     }
+
+    // 语义搜索：自动为新文档生成 Embedding 并索引
+    this.autoIndexDocument(entity.id, input.title, input.content);
 
     this.graph.flush();
     return entity.id;
@@ -417,19 +511,131 @@ export class DevPlanGraphStore implements IDevPlanStore {
   }
 
   searchSections(query: string, limit: number = 10): DevPlanDoc[] {
-    const queryLower = query.toLowerCase();
-    return this.listSections()
-      .filter(
-        (doc) =>
-          doc.content.toLowerCase().includes(queryLower) ||
-          doc.title.toLowerCase().includes(queryLower)
-      )
-      .slice(0, limit);
+    // 默认使用 hybrid 模式（语义+字面），无语义搜索时回退字面
+    const mode: SearchMode = this.semanticSearchReady ? 'hybrid' : 'literal';
+    return this.searchSectionsAdvanced(query, { mode, limit }).map(({ score, ...doc }) => doc);
+  }
+
+  /**
+   * 高级搜索：支持 literal / semantic / hybrid 三种模式
+   *
+   * - literal: 纯字面匹配（标题+内容包含查询词）
+   * - semantic: 纯语义搜索（embed(query) → searchEntitiesByVector）
+   * - hybrid: 字面+语义 RRF 融合排序
+   *
+   * 当 VibeSynapse 不可用时，semantic/hybrid 模式自动降级为 literal。
+   */
+  searchSectionsAdvanced(query: string, options?: {
+    mode?: SearchMode;
+    limit?: number;
+    minScore?: number;
+  }): ScoredDevPlanDoc[] {
+    const mode = options?.mode || 'hybrid';
+    const limit = options?.limit || 10;
+    const minScore = options?.minScore || 0;
+
+    // ---- Literal Search ----
+    const literalResults = this.literalSearch(query);
+
+    // ---- If no semantic search or literal-only mode ----
+    if (mode === 'literal' || !this.semanticSearchReady || !this.synapse) {
+      return literalResults.slice(0, limit).map((doc) => ({ ...doc, score: undefined }));
+    }
+
+    // ---- Semantic Search ----
+    let semanticHits: VectorSearchHit[] = [];
+    try {
+      const embedding = this.synapse.embed(query);
+      semanticHits = this.graph.searchEntitiesByVector(embedding, limit * 2, ET.DOC);
+    } catch (e) {
+      console.warn(`[DevPlan] Semantic search failed: ${e instanceof Error ? e.message : String(e)}`);
+      // 降级为字面搜索
+      return literalResults.slice(0, limit).map((doc) => ({ ...doc, score: undefined }));
+    }
+
+    if (mode === 'semantic') {
+      // 纯语义模式：直接返回语义搜索结果
+      const docs: ScoredDevPlanDoc[] = [];
+      for (const hit of semanticHits) {
+        if (minScore > 0 && hit.score < minScore) continue;
+        const entity = this.graph.getEntity(hit.entityId);
+        if (entity && (entity.properties as any)?.projectName === this.projectName) {
+          docs.push({ ...this.entityToDevPlanDoc(entity), score: hit.score });
+        }
+        if (docs.length >= limit) break;
+      }
+      return docs;
+    }
+
+    // ---- Hybrid Mode: RRF Fusion ----
+    return this.rrfFusion(semanticHits, literalResults, limit, minScore);
+  }
+
+  /**
+   * 重建所有文档的向量索引
+   *
+   * 适用于：首次启用语义搜索、模型切换、索引损坏修复。
+   */
+  rebuildIndex(): RebuildIndexResult {
+    const startTime = Date.now();
+    const docs = this.listSections();
+    let indexed = 0;
+    let failed = 0;
+    const failedDocIds: string[] = [];
+
+    if (!this.semanticSearchReady || !this.synapse) {
+      return {
+        total: docs.length,
+        indexed: 0,
+        failed: docs.length,
+        durationMs: Date.now() - startTime,
+        failedDocIds: docs.map((d) => d.id),
+      };
+    }
+
+    for (const doc of docs) {
+      try {
+        const text = `${doc.title}\n${doc.content}`;
+        const embedding = this.synapse.embed(text);
+        this.graph.indexEntity(doc.id, embedding);
+        indexed++;
+      } catch (e) {
+        failed++;
+        failedDocIds.push(doc.id);
+      }
+    }
+
+    this.graph.flush();
+
+    return {
+      total: docs.length,
+      indexed,
+      failed,
+      durationMs: Date.now() - startTime,
+      failedDocIds: failedDocIds.length > 0 ? failedDocIds : undefined,
+    };
+  }
+
+  /**
+   * 检查语义搜索是否可用
+   */
+  isSemanticSearchEnabled(): boolean {
+    return this.semanticSearchReady;
   }
 
   deleteSection(section: DevPlanSection, subSection?: string): boolean {
     const existing = this.getSection(section, subSection);
     if (!existing) return false;
+
+    // 语义搜索：删除文档对应的向量索引
+    if (this.semanticSearchReady) {
+      try {
+        this.graph.removeEntityVector(existing.id);
+      } catch {
+        // 向量可能不存在，忽略错误
+      }
+    }
+
     this.graph.deleteEntity(existing.id);
     this.graph.flush();
     return true;
@@ -446,6 +652,8 @@ export class DevPlanGraphStore implements IDevPlanStore {
     }
 
     const now = Date.now();
+    // 如果未指定 order，自动分配为当前最大 order + 1
+    const order = input.order != null ? input.order : this.getNextMainTaskOrder();
     const entity = this.graph.addEntity(input.title, ET.MAIN_TASK, {
       projectName: this.projectName,
       taskId: input.taskId,
@@ -458,6 +666,7 @@ export class DevPlanGraphStore implements IDevPlanStore {
       totalSubtasks: 0,
       completedSubtasks: 0,
       status: 'pending',
+      order,
       createdAt: now,
       updatedAt: now,
       completedAt: null,
@@ -519,6 +728,7 @@ export class DevPlanGraphStore implements IDevPlanStore {
     const now = Date.now();
     const completedAt = finalStatus === 'completed' ? (existing.completedAt || now) : null;
     const finalModuleId = input.moduleId || existing.moduleId;
+    const finalOrder = input.order != null ? input.order : existing.order;
 
     this.graph.updateEntity(existing.id, {
       name: input.title,
@@ -530,6 +740,7 @@ export class DevPlanGraphStore implements IDevPlanStore {
         relatedSections: input.relatedSections || existing.relatedSections || [],
         moduleId: finalModuleId || null,
         status: finalStatus,
+        order: finalOrder,
         updatedAt: now,
         completedAt,
       },
@@ -586,7 +797,8 @@ export class DevPlanGraphStore implements IDevPlanStore {
       entities = entities.filter((e) => (e.properties as any).moduleId === filter.moduleId);
     }
 
-    return entities.map((e) => this.entityToMainTask(e));
+    const tasks = entities.map((e) => this.entityToMainTask(e));
+    return this.sortByOrder(tasks);
   }
 
   updateMainTaskStatus(taskId: string, status: TaskStatus): MainTask | null {
@@ -625,6 +837,8 @@ export class DevPlanGraphStore implements IDevPlanStore {
     }
 
     const now = Date.now();
+    // 如果未指定 order，自动分配为当前父任务下最大 order + 1
+    const order = input.order != null ? input.order : this.getNextSubTaskOrder(input.parentTaskId);
     const entity = this.graph.addEntity(input.title, ET.SUB_TASK, {
       projectName: this.projectName,
       taskId: input.taskId,
@@ -634,6 +848,7 @@ export class DevPlanGraphStore implements IDevPlanStore {
       relatedFiles: input.relatedFiles || [],
       description: input.description || '',
       status: 'pending',
+      order,
       createdAt: now,
       updatedAt: now,
       completedAt: null,
@@ -664,6 +879,7 @@ export class DevPlanGraphStore implements IDevPlanStore {
       }
 
       const now = Date.now();
+      const order = input.order != null ? input.order : this.getNextSubTaskOrder(input.parentTaskId);
       const entity = this.graph.addEntity(input.title, ET.SUB_TASK, {
         projectName: this.projectName,
         taskId: input.taskId,
@@ -673,6 +889,7 @@ export class DevPlanGraphStore implements IDevPlanStore {
         relatedFiles: input.relatedFiles || [],
         description: input.description || '',
         status: targetStatus,
+        order,
         createdAt: now,
         updatedAt: now,
         completedAt: targetStatus === 'completed' ? now : null,
@@ -697,11 +914,13 @@ export class DevPlanGraphStore implements IDevPlanStore {
     }
 
     // 检查是否有实质变化
+    const newOrder = input.order != null ? input.order : existing.order;
     if (
       existing.title === input.title &&
       existing.description === (input.description || '') &&
       existing.status === finalStatus &&
-      existing.estimatedHours === (input.estimatedHours || 0)
+      existing.estimatedHours === (input.estimatedHours || 0) &&
+      existing.order === newOrder
     ) {
       return existing;
     }
@@ -717,6 +936,7 @@ export class DevPlanGraphStore implements IDevPlanStore {
         relatedFiles: input.relatedFiles || existing.relatedFiles || [],
         description: input.description || existing.description || '',
         status: finalStatus,
+        order: newOrder,
         updatedAt: now,
         completedAt,
       },
@@ -745,7 +965,8 @@ export class DevPlanGraphStore implements IDevPlanStore {
       entities = entities.filter((e) => (e.properties as any).status === filter.status);
     }
 
-    return entities.map((e) => this.entityToSubTask(e));
+    const tasks = entities.map((e) => this.entityToSubTask(e));
+    return this.sortByOrder(tasks);
   }
 
   updateSubTaskStatus(taskId: string, status: TaskStatus, options?: {
@@ -854,6 +1075,7 @@ export class DevPlanGraphStore implements IDevPlanStore {
         title: mt.title,
         priority: mt.priority,
         status: mt.status,
+        order: mt.order,
         total: subs.length,
         completed: subCompleted,
         percent: subs.length > 0 ? Math.round((subCompleted / subs.length) * 100) : 0,
@@ -1346,6 +1568,50 @@ export class DevPlanGraphStore implements IDevPlanStore {
   // Private Helpers
   // ==========================================================================
 
+  /**
+   * 获取下一个主任务的 order 值（当前最大 order + 1）
+   */
+  private getNextMainTaskOrder(): number {
+    const entities = this.findEntitiesByType(ET.MAIN_TASK);
+    let maxOrder = 0;
+    for (const e of entities) {
+      const o = (e.properties as any).order;
+      if (typeof o === 'number' && o > maxOrder) {
+        maxOrder = o;
+      }
+    }
+    return maxOrder + 1;
+  }
+
+  /**
+   * 获取下一个子任务的 order 值（当前父任务下最大 order + 1）
+   */
+  private getNextSubTaskOrder(parentTaskId: string): number {
+    const entities = this.findEntitiesByType(ET.SUB_TASK).filter(
+      (e) => (e.properties as any).parentTaskId === parentTaskId
+    );
+    let maxOrder = 0;
+    for (const e of entities) {
+      const o = (e.properties as any).order;
+      if (typeof o === 'number' && o > maxOrder) {
+        maxOrder = o;
+      }
+    }
+    return maxOrder + 1;
+  }
+
+  /**
+   * 按 order 字段排序（order 为空的排到最后，order 相同则按 createdAt 排）
+   */
+  private sortByOrder<T extends { order?: number; createdAt: number }>(items: T[]): T[] {
+    return items.sort((a, b) => {
+      const oa = a.order != null ? a.order : Number.MAX_SAFE_INTEGER;
+      const ob = b.order != null ? b.order : Number.MAX_SAFE_INTEGER;
+      if (oa !== ob) return oa - ob;
+      return a.createdAt - b.createdAt;
+    });
+  }
+
   private refreshMainTaskCounts(mainTaskId: string): MainTask | null {
     const mainTask = this.getMainTask(mainTaskId);
     if (!mainTask) return null;
@@ -1453,5 +1719,102 @@ export class DevPlanGraphStore implements IDevPlanStore {
     const filled = Math.round((percent / 100) * total);
     const empty = total - filled;
     return `[${'█'.repeat(filled)}${'░'.repeat(empty)}]`;
+  }
+
+  // ==========================================================================
+  // Semantic Search Helpers
+  // ==========================================================================
+
+  /**
+   * 自动为文档生成 Embedding 并索引到 SocialGraphV2 向量搜索层
+   *
+   * 将 title + content 拼接后生成 Embedding，以 entity.id 为 key 存入 HNSW 索引。
+   * 失败时仅输出警告，不影响文档保存。
+   */
+  private autoIndexDocument(entityId: string, title: string, content: string): void {
+    if (!this.semanticSearchReady || !this.synapse) return;
+
+    try {
+      const text = `${title}\n${content}`;
+      const embedding = this.synapse.embed(text);
+      this.graph.indexEntity(entityId, embedding);
+    } catch (e) {
+      console.warn(
+        `[DevPlan] Failed to index document ${entityId}: ${
+          e instanceof Error ? e.message : String(e)
+        }`
+      );
+    }
+  }
+
+  /**
+   * 字面搜索（标题/内容包含查询词）
+   */
+  private literalSearch(query: string): DevPlanDoc[] {
+    const queryLower = query.toLowerCase();
+    return this.listSections().filter(
+      (doc) =>
+        doc.content.toLowerCase().includes(queryLower) ||
+        doc.title.toLowerCase().includes(queryLower)
+    );
+  }
+
+  /**
+   * RRF (Reciprocal Rank Fusion) 融合排序
+   *
+   * 将语义搜索和字面搜索的结果通过 RRF 公式融合：
+   *   score(d) = Σ 1/(k + rank_i(d))
+   * 其中 k=60 是标准 RRF 常数。
+   */
+  private rrfFusion(
+    semanticHits: VectorSearchHit[],
+    literalResults: DevPlanDoc[],
+    limit: number,
+    minScore: number,
+  ): ScoredDevPlanDoc[] {
+    const RRF_K = 60;
+    const rrfScores = new Map<string, number>();
+    const docMap = new Map<string, DevPlanDoc>();
+
+    // 语义搜索结果贡献
+    for (let i = 0; i < semanticHits.length; i++) {
+      const hit = semanticHits[i];
+      const rrf = 1 / (RRF_K + i + 1);
+      rrfScores.set(hit.entityId, (rrfScores.get(hit.entityId) || 0) + rrf);
+    }
+
+    // 字面搜索结果贡献
+    for (let i = 0; i < literalResults.length; i++) {
+      const doc = literalResults[i];
+      const rrf = 1 / (RRF_K + i + 1);
+      rrfScores.set(doc.id, (rrfScores.get(doc.id) || 0) + rrf);
+      docMap.set(doc.id, doc);
+    }
+
+    // 按 RRF 评分排序
+    const sorted = Array.from(rrfScores.entries())
+      .sort((a, b) => b[1] - a[1]);
+
+    // 组装结果
+    const results: ScoredDevPlanDoc[] = [];
+    for (const [id, score] of sorted) {
+      if (minScore > 0 && score < minScore) continue;
+      if (results.length >= limit) break;
+
+      // 优先从 docMap 获取（字面搜索已解析过的），否则从图中获取
+      let doc = docMap.get(id);
+      if (!doc) {
+        const entity = this.graph.getEntity(id);
+        if (entity && (entity.properties as any)?.projectName === this.projectName) {
+          doc = this.entityToDevPlanDoc(entity);
+        }
+      }
+
+      if (doc) {
+        results.push({ ...doc, score });
+      }
+    }
+
+    return results;
   }
 }

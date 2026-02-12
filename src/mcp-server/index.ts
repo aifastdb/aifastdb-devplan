@@ -54,6 +54,7 @@ import {
   type DevPlanSection,
   type TaskStatus,
   type TaskPriority,
+  type SearchMode,
 } from '../types';
 
 // ============================================================================
@@ -216,6 +217,10 @@ const TOOLS = [
           items: { type: 'string' },
           description: 'Optional: Associate with document sections (format: "section" or "section|subSection", e.g., ["overview", "technical_notes|security"])\n可选：关联文档片段（格式："section" 或 "section|subSection"）',
         },
+        order: {
+          type: 'number',
+          description: 'Optional sort order (smaller number = higher priority). Auto-assigned if omitted.\n可选排序序号（数值越小越靠前）。不填则自动追加到末尾。',
+        },
       },
       required: ['projectName', 'taskId', 'title', 'priority'],
     },
@@ -249,6 +254,10 @@ const TOOLS = [
         description: {
           type: 'string',
           description: 'Optional task description\n可选任务描述',
+        },
+        order: {
+          type: 'number',
+          description: 'Optional sort order (smaller number = higher priority). Auto-assigned if omitted.\n可选排序序号（数值越小越靠前）。不填则自动追加到末尾。',
         },
       },
       required: ['projectName', 'taskId', 'parentTaskId', 'title'],
@@ -311,6 +320,10 @@ const TOOLS = [
           type: 'array',
           items: { type: 'string' },
           description: 'Optional: Associate with document sections (main tasks only, format: "section" or "section|subSection")\n可选：关联文档片段（仅主任务，格式："section" 或 "section|subSection"）',
+        },
+        order: {
+          type: 'number',
+          description: 'Optional sort order (smaller number = higher priority). Auto-assigned if omitted.\n可选排序序号（数值越小越靠前）。不填则自动追加到末尾。',
         },
       },
       required: ['projectName', 'taskType', 'taskId', 'title'],
@@ -614,6 +627,51 @@ const TOOLS = [
       required: ['projectName', 'taskId'],
     },
   },
+  {
+    name: 'devplan_search_sections',
+    description: 'Search document sections with support for literal, semantic, or hybrid (RRF fusion) search modes. Requires "graph" engine with enableSemanticSearch in .devplan/config.json for semantic/hybrid modes. Falls back to literal search when semantic search is unavailable.\n搜索文档片段，支持字面匹配、语义搜索或混合搜索（RRF 融合）模式。语义/混合模式需要 graph 引擎且在 .devplan/config.json 中启用 enableSemanticSearch。语义搜索不可用时自动回退为字面搜索。',
+    inputSchema: {
+      type: 'object' as const,
+      properties: {
+        projectName: {
+          type: 'string',
+          description: `Project name (default: "${DEFAULT_PROJECT_NAME}")\n项目名称（默认："${DEFAULT_PROJECT_NAME}"）`,
+        },
+        query: {
+          type: 'string',
+          description: 'Search query text\n搜索查询文本',
+        },
+        mode: {
+          type: 'string',
+          enum: ['literal', 'semantic', 'hybrid'],
+          description: 'Search mode: "literal" for text matching, "semantic" for vector similarity, "hybrid" for RRF fusion of both (default: "hybrid")\n搜索模式："literal" 字面匹配、"semantic" 语义搜索、"hybrid" 混合融合（默认 "hybrid"）',
+        },
+        limit: {
+          type: 'number',
+          description: 'Maximum number of results to return (default: 10)\n最大返回结果数（默认 10）',
+        },
+        minScore: {
+          type: 'number',
+          description: 'Minimum relevance score threshold (0~1, default: 0)\n最低相关性评分阈值（0~1，默认 0）',
+        },
+      },
+      required: ['projectName', 'query'],
+    },
+  },
+  {
+    name: 'devplan_rebuild_index',
+    description: 'Rebuild the vector embedding index for all document sections. Reads all documents, generates embeddings via VibeSynapse (Candle MiniLM), and indexes them into SocialGraphV2. Use when: first enabling semantic search, switching embedding models, or repairing a corrupted index. Shows progress and duration.\n重建所有文档片段的向量 Embedding 索引。读取全部文档，通过 VibeSynapse（Candle MiniLM）生成 Embedding，索引到 SocialGraphV2。适用于：首次启用语义搜索、切换 Embedding 模型、修复损坏的索引。显示进度和耗时。',
+    inputSchema: {
+      type: 'object' as const,
+      properties: {
+        projectName: {
+          type: 'string',
+          description: `Project name (default: "${DEFAULT_PROJECT_NAME}")\n项目名称（默认："${DEFAULT_PROJECT_NAME}"）`,
+        },
+      },
+      required: ['projectName'],
+    },
+  },
 ];
 
 // ============================================================================
@@ -662,6 +720,16 @@ interface ToolArgs {
   relatedTaskIds?: string[];
   /** devplan_start_visual: HTTP 端口 */
   port?: number;
+  /** devplan_search_sections: 搜索查询文本 */
+  query?: string;
+  /** devplan_search_sections: 搜索模式 */
+  mode?: string;
+  /** devplan_search_sections: 最大结果数 */
+  limit?: number;
+  /** devplan_search_sections: 最低评分阈值 */
+  minScore?: number;
+  /** 任务排序序号（越小越靠前） */
+  order?: number;
 }
 
 /**
@@ -711,10 +779,13 @@ async function handleToolCall(name: string, args: ToolArgs): Promise<string> {
       const plan = getDevPlan(args.projectName);
       const engine = getProjectEngine(args.projectName) || 'graph';
 
-      // 自动写入/更新 .devplan/config.json，记录 defaultProject
+      // 自动写入/更新 .devplan/config.json，记录 defaultProject + enableSemanticSearch
       const existingConfig = readDevPlanConfig();
       if (!existingConfig) {
-        writeDevPlanConfig({ defaultProject: args.projectName });
+        writeDevPlanConfig({
+          defaultProject: args.projectName,
+          enableSemanticSearch: true,
+        });
       }
 
       return JSON.stringify({
@@ -815,6 +886,7 @@ async function handleToolCall(name: string, args: ToolArgs): Promise<string> {
           estimatedHours: args.estimatedHours,
           moduleId: args.moduleId,
           relatedSections: args.relatedDocSections,
+          order: args.order,
         });
 
         return JSON.stringify({
@@ -847,6 +919,7 @@ async function handleToolCall(name: string, args: ToolArgs): Promise<string> {
           title: args.title,
           estimatedHours: args.estimatedHours,
           description: args.description,
+          order: args.order,
         });
 
         return JSON.stringify({
@@ -890,6 +963,7 @@ async function handleToolCall(name: string, args: ToolArgs): Promise<string> {
               estimatedHours: args.estimatedHours,
               moduleId: args.moduleId,
               relatedSections: args.relatedDocSections,
+              order: args.order,
             },
             { preserveStatus, status: targetStatus }
           );
@@ -917,6 +991,7 @@ async function handleToolCall(name: string, args: ToolArgs): Promise<string> {
               title: args.title,
               estimatedHours: args.estimatedHours,
               description: args.description,
+              order: args.order,
             },
             { preserveStatus, status: targetStatus }
           );
@@ -1013,6 +1088,7 @@ async function handleToolCall(name: string, args: ToolArgs): Promise<string> {
             status: st.status,
             estimatedHours: st.estimatedHours,
             completedAt: st.completedAt,
+            order: st.order,
           })),
         });
       } else if (args.status && !args.priority && !args.moduleId) {
@@ -1026,6 +1102,7 @@ async function handleToolCall(name: string, args: ToolArgs): Promise<string> {
           completedAt?: number | null;
           parentTaskId: string;
           parentTitle: string;
+          order?: number;
         }> = [];
         for (const mt of mainTasks) {
           const subs = plan.listSubTasks(mt.taskId, {
@@ -1040,6 +1117,7 @@ async function handleToolCall(name: string, args: ToolArgs): Promise<string> {
               completedAt: sub.completedAt,
               parentTaskId: mt.taskId,
               parentTitle: mt.title,
+              order: sub.order,
             });
           }
         }
@@ -1068,6 +1146,7 @@ async function handleToolCall(name: string, args: ToolArgs): Promise<string> {
             completedSubtasks: mt.completedSubtasks,
             estimatedHours: mt.estimatedHours,
             completedAt: mt.completedAt,
+            order: mt.order,
           })),
         });
       }
@@ -1427,6 +1506,7 @@ async function handleToolCall(name: string, args: ToolArgs): Promise<string> {
           description: mainTask.description,
           estimatedHours: mainTask.estimatedHours,
           moduleId: mainTask.moduleId,
+          order: mainTask.order,
           totalSubtasks: subTasks.length,
           completedSubtasks: subTasks.filter(s => s.status === 'completed').length,
         },
@@ -1436,10 +1516,111 @@ async function handleToolCall(name: string, args: ToolArgs): Promise<string> {
           status: s.status,
           description: s.description,
           estimatedHours: s.estimatedHours,
+          order: s.order,
         })),
         relatedDocSections: relatedDocs,
         message: `Phase ${args.taskId} started. ${subTasks.length} sub-tasks total, ${subTasks.filter(s => s.status === 'completed').length} already completed.`,
       }, null, 2);
+    }
+
+    case 'devplan_search_sections': {
+      if (!args.projectName || !args.query) {
+        throw new McpError(ErrorCode.InvalidParams, 'Missing required: projectName, query');
+      }
+
+      const plan = getDevPlan(args.projectName);
+      const searchMode = (args.mode as SearchMode) || 'hybrid';
+      const searchLimit = args.limit || 10;
+      const searchMinScore = args.minScore || 0;
+
+      // 判断是否支持高级搜索
+      const isSemanticEnabled = plan.isSemanticSearchEnabled?.() ?? false;
+
+      if (plan.searchSectionsAdvanced) {
+        const results = plan.searchSectionsAdvanced(args.query, {
+          mode: searchMode,
+          limit: searchLimit,
+          minScore: searchMinScore,
+        });
+
+        return JSON.stringify({
+          projectName: args.projectName,
+          query: args.query,
+          mode: searchMode,
+          semanticSearchEnabled: isSemanticEnabled,
+          actualMode: isSemanticEnabled ? searchMode : 'literal',
+          count: results.length,
+          results: results.map(r => ({
+            id: r.id,
+            section: r.section,
+            subSection: r.subSection || null,
+            title: r.title,
+            score: r.score ?? null,
+            contentPreview: r.content.slice(0, 300) + (r.content.length > 300 ? '...' : ''),
+            updatedAt: r.updatedAt,
+          })),
+        });
+      } else {
+        // 回退到基础搜索（document 引擎）
+        const results = plan.searchSections(args.query, searchLimit);
+        return JSON.stringify({
+          projectName: args.projectName,
+          query: args.query,
+          mode: 'literal',
+          semanticSearchEnabled: false,
+          actualMode: 'literal',
+          count: results.length,
+          results: results.map(r => ({
+            id: r.id,
+            section: r.section,
+            subSection: r.subSection || null,
+            title: r.title,
+            score: null,
+            contentPreview: r.content.slice(0, 300) + (r.content.length > 300 ? '...' : ''),
+            updatedAt: r.updatedAt,
+          })),
+        });
+      }
+    }
+
+    case 'devplan_rebuild_index': {
+      if (!args.projectName) {
+        throw new McpError(ErrorCode.InvalidParams, 'Missing required: projectName');
+      }
+
+      const plan = getDevPlan(args.projectName);
+
+      if (!plan.rebuildIndex) {
+        return JSON.stringify({
+          success: false,
+          error: `Rebuild index is only available for projects using the "graph" engine with enableSemanticSearch enabled. Use .devplan/config.json to enable.`,
+          hint: 'Add { "enableSemanticSearch": true } to .devplan/config.json and restart.',
+        });
+      }
+
+      const isSemanticEnabled = plan.isSemanticSearchEnabled?.() ?? false;
+      if (!isSemanticEnabled) {
+        return JSON.stringify({
+          success: false,
+          error: 'Semantic search is not enabled or VibeSynapse initialization failed.',
+          hint: 'Ensure enableSemanticSearch is true in .devplan/config.json and VibeSynapse (Candle MiniLM) can initialize successfully.',
+        });
+      }
+
+      try {
+        const result = plan.rebuildIndex();
+        const statusIcon = result.failed === 0 ? '[OK]' : '[WARN]';
+
+        return JSON.stringify({
+          success: true,
+          ...result,
+          summary: `${statusIcon} Rebuilt index: ${result.indexed}/${result.total} documents indexed in ${result.durationMs}ms.` +
+            (result.failed > 0 ? ` ${result.failed} failed.` : ''),
+        });
+      } catch (err) {
+        throw new McpError(ErrorCode.InternalError,
+          err instanceof Error ? err.message : String(err));
+      }
     }
 
     default:

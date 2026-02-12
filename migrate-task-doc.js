@@ -1,5 +1,5 @@
 /**
- * 迁移脚本：为 federation-db 项目的历史数据建立 task_has_doc 关系
+ * 迁移脚本：为 ai_db 项目的历史数据建立 task_has_doc 关系
  * 
  * 直接使用编译后的 DevPlanGraphStore，绕过 MCP 服务器。
  * 
@@ -8,8 +8,8 @@
 
 const { DevPlanGraphStore } = require('./dist/dev-plan-graph-store');
 
-const GRAPH_PATH = 'D:\\Project\\git\\ai_db\\.devplan\\federation-db\\graph-data';
-const PROJECT_NAME = 'federation-db';
+const GRAPH_PATH = 'D:\\Project\\git\\ai_db\\.devplan\\ai_db\\graph-data';
+const PROJECT_NAME = 'ai_db';
 
 // ============================================================================
 // 任务 -> 文档 的映射关系

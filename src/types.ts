@@ -124,6 +124,8 @@ export interface MainTaskInput {
   relatedSections?: string[];
   /** 关联的功能模块 ID */
   moduleId?: string;
+  /** 排序序号（数值越小越靠前，不填则自动追加到末尾） */
+  order?: number;
 }
 
 /**
@@ -154,6 +156,8 @@ export interface MainTask {
   completedSubtasks: number;
   /** 任务状态 */
   status: TaskStatus;
+  /** 排序序号（数值越小越靠前） */
+  order?: number;
   /** 创建时间 */
   createdAt: number;
   /** 更新时间 */
@@ -180,6 +184,8 @@ export interface SubTaskInput {
   relatedFiles?: string[];
   /** 任务描述 */
   description?: string;
+  /** 排序序号（数值越小越靠前，不填则自动追加到末尾） */
+  order?: number;
 }
 
 /**
@@ -204,6 +210,8 @@ export interface SubTask {
   description?: string;
   /** 任务状态 */
   status: TaskStatus;
+  /** 排序序号（数值越小越靠前） */
+  order?: number;
   /** 创建时间 */
   createdAt: number;
   /** 更新时间 */
@@ -339,6 +347,8 @@ export interface MainTaskProgress {
   priority: TaskPriority;
   /** 状态 */
   status: TaskStatus;
+  /** 排序序号 */
+  order?: number;
   /** 总子任务数 */
   total: number;
   /** 已完成数 */
@@ -393,6 +403,39 @@ export interface DevPlanGraphStoreConfig {
   graphPath: string;
   /** 分片数（0 = 自动） */
   shardCount?: number;
+  /** 是否启用语义搜索（需要 VibeSynapse Embedding + SocialGraphV2 向量索引） */
+  enableSemanticSearch?: boolean;
+  /** Embedding 向量维度（默认 384，MiniLM-L6-v2） */
+  embeddingDimension?: number;
+}
+
+/**
+ * 语义搜索模式
+ */
+export type SearchMode = 'literal' | 'semantic' | 'hybrid';
+
+/**
+ * 带评分的文档搜索结果
+ */
+export interface ScoredDevPlanDoc extends DevPlanDoc {
+  /** 相关性评分（0~1），literal 模式不提供 */
+  score?: number;
+}
+
+/**
+ * 重建索引结果
+ */
+export interface RebuildIndexResult {
+  /** 文档总数 */
+  total: number;
+  /** 成功索引数 */
+  indexed: number;
+  /** 失败数 */
+  failed: number;
+  /** 耗时（毫秒） */
+  durationMs: number;
+  /** 失败的文档 ID（如果有） */
+  failedDocIds?: string[];
 }
 
 // ============================================================================

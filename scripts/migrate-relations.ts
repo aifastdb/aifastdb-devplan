@@ -1,5 +1,5 @@
 /**
- * 一次性迁移脚本：为 federation-db 项目的历史数据建立 task_has_doc 关系
+ * 一次性迁移脚本：为 ai_db 项目的历史数据建立 task_has_doc 关系
  * 
  * 用法: npx tsx scripts/migrate-relations.ts
  */
@@ -8,7 +8,7 @@ import { createDevPlan } from '../src/dev-plan-factory';
 import type { DevPlanGraphStore } from '../src/dev-plan-graph-store';
 
 const basePath = 'D:\\Project\\git\\ai_db\\.devplan';
-const projectName = 'federation-db';
+const projectName = 'ai_db';
 
 // 任务 → 文档片段的映射关系
 const taskDocMap: Record<string, string[]> = {

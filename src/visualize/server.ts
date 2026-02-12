@@ -63,7 +63,7 @@ function parseArgs(): CliArgs {
     console.error('  --base-path <path>   DevPlan 数据存储路径');
     console.error('');
     console.error('示例:');
-    console.error('  aifastdb-devplan-visual --project federation-db --base-path D:/Project/git/ai_db/.devplan');
+    console.error('  aifastdb-devplan-visual --project ai_db --base-path D:/Project/git/ai_db/.devplan');
     process.exit(1);
   }
 

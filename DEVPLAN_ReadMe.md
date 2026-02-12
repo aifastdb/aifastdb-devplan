@@ -815,10 +815,10 @@ aifastdb-devplan-visual --project <项目名称> [--port <端口>] [--base-path 
 
 ```bash
 # 通过 npm script
-npm run visualize -- --project federation-db --base-path D:/Project/git/ai_db/.devplan
+npm run visualize -- --project ai_db --base-path D:/Project/git/ai_db/.devplan
 
 # 通过 bin 入口
-aifastdb-devplan-visual --project federation-db --port 3212
+aifastdb-devplan-visual --project ai_db --port 3212
 ```
 
 ### 8.4 npm 包导出
@@ -1123,6 +1123,232 @@ DevPlan 设计了三层互补的信息架构，解决大型项目文档的 AI �
   - 所有子任务完成后，系统自动标记主任务为 completed
 - **Cursor Rules 配置更新**：在 `dev-plan-management.mdc` 中新增"启动/恢复开发阶段"章节，定义触发词和工作流
 - MCP 工具从 20 个增加到 21 个
+
+---
+
+## 12. 路线图：文档层级关系 (parentDocId) 与搜索增强
+
+> 规划日期: 2026-02-12
+> 状态: 方案设计阶段
+
+### 12.1 背景与问题
+
+#### 12.1.1 文档层级问题
+
+当前文档模型是**扁平结构**：所有文档通过 `section` + `subSection` 构成至多两级的分类体系。对于大型项目（如 `ai_db` 已有 62 篇文档），缺乏以下能力：
+
+- **文档树**：无法表达"章节 → 小节 → 段落"的多级文档结构
+- **父子导航**：无法从子文档上溯到父文档（如从"安全模块 API"回到"安全架构总览"）
+- **批量操作**：无法按文档树批量删除/移动某个文档分支
+
+相比之下，**子任务通过 `parentTaskId` 与主任务形成清晰的父子关系**，文档缺少对应机制。
+
+#### 12.1.2 搜索能力问题
+
+当前 `searchSections()` 实现是**纯 JavaScript 暴力扫描**：
+
+```typescript
+// dev-plan-graph-store.ts — 当前实现
+searchSections(query: string, limit: number = 10): DevPlanDoc[] {
+  const queryLower = query.toLowerCase();
+  return this.listSections()
+    .filter(doc =>
+      doc.content.toLowerCase().includes(queryLower) ||
+      doc.title.toLowerCase().includes(queryLower)
+    )
+    .slice(0, limit);
+}
+```
+
+问题：
+- **全量加载**：每次搜索都要加载所有文档到内存
+- **仅字面匹配**：不支持语义搜索（如搜"数据库安全"无法匹配"权限控制"）
+- **无排序**：结果按存储顺序返回，非相关性排序
+- **未利用 aifastdb 原生能力**：SocialGraphV2 有属性过滤和类型索引，但未被利用
+
+### 12.2 任务与子任务的父子关系机制（参考模型）
+
+子任务与主任务的父子关系通过**双重机制**实现：
+
+| 层级 | 机制 | 字段 / 关系 | 作用 |
+|------|------|-------------|------|
+| 属性层 | `SubTask.parentTaskId` | `parentTaskId: "phase-7"` | 快速属性查询 |
+| 图层 | `HAS_SUB_TASK` 关系 | `main-task → sub-task` | 图遍历和可视化 |
+
+文档层级将参照此模式设计。
+
+### 12.3 文档层级方案设计
+
+#### 12.3.1 类型变更
+
+```typescript
+// types.ts — 新增字段
+interface DevPlanDocInput {
+  // ... 现有字段 ...
+  /** 父文档标识（section 或 section|subSection 格式，可选） */
+  parentDoc?: string;
+}
+
+interface DevPlanDoc {
+  // ... 现有字段 ...
+  /** 父文档标识（section 或 section|subSection 格式） */
+  parentDoc?: string;
+  /** 子文档 ID 列表（自动计算，仅 Graph 引擎支持） */
+  childDocs?: string[];
+}
+```
+
+**设计决策：**
+
+- 字段名使用 `parentDoc` 而非 `parentDocId`，因为文档的唯一标识是 `section|subSection` 组合而非数据库 ID
+- `childDocs` 是计算属性（从图关系反向查询），不需要手动维护
+- 向后兼容：`parentDoc` 为可选字段，现有文档无需修改
+
+#### 12.3.2 新增关系类型
+
+```typescript
+// dev-plan-graph-store.ts
+const RT = {
+  // ... 现有关系 ...
+  DOC_HAS_CHILD: 'doc_has_child',  // 新增：文档 → 子文档
+} as const;
+```
+
+关系模型扩展后的完整图：
+
+```
+Module ──1:N──▶ MainTask ──1:N──▶ SubTask
+Module ──1:N──▶ DevPlanDoc
+MainTask ◀──N:M──▶ DevPlanDoc       (task_has_doc)
+DevPlanDoc ──1:N──▶ DevPlanDoc       (doc_has_child) ← 新增
+```
+
+#### 12.3.3 存储层变更
+
+**Graph 引擎 (`DevPlanGraphStore`)：**
+
+| 操作 | 变更 |
+|------|------|
+| `saveSection()` | 新增：若 `input.parentDoc` 存在，解析父文档 Entity → 创建 `DOC_HAS_CHILD` 关系 |
+| `getSection()` | 新增：查询 `DOC_HAS_CHILD` 入向关系获取 `parentDoc`，查询出向关系获取 `childDocs` |
+| `listSections()` | 新增：返回结果中填充 `parentDoc` 字段 |
+| `deleteSection()` | 新增：级联删除所有子文档（可选），或仅断开关系 |
+| `exportGraph()` | 新增：导出 `doc_has_child` 边 |
+
+**Document 引擎 (`DevPlanDocumentStore`)：**
+
+| 操作 | 变更 |
+|------|------|
+| `saveSection()` | 新增：在 `metadata` 中存储 `parentDoc` 字段 |
+| `getSection()` | 新增：从 `metadata.parentDoc` 读取 |
+| `listSections()` | 新增：返回结果中填充 `parentDoc` 字段 |
+
+#### 12.3.4 MCP 工具变更
+
+| 工具 | 变更 |
+|------|------|
+| `devplan_save_section` | 新增可选参数 `parentDoc`（格式："section" 或 "section\|subSection"） |
+| `devplan_get_section` | 返回值新增 `parentDoc` 和 `childDocs` 字段 |
+| `devplan_list_sections` | 返回值新增 `parentDoc` 字段 |
+
+**无需新增 MCP 工具**：文档层级通过现有工具的参数扩展实现，保持 21 个工具不变。
+
+#### 12.3.5 可视化变更
+
+| 组件 | 变更 |
+|------|------|
+| 图谱边 | 新增 `doc_has_child` 边类型（紫色虚线，表示文档包含关系） |
+| 详情面板 | 文档节点显示"父文档"（可点击跳转）和"子文档列表"（可点击跳转） |
+| 底部图例 | 新增"文档-子文档"边类型 |
+
+#### 12.3.6 接口变更 (IDevPlanStore)
+
+```typescript
+// dev-plan-interface.ts — 新增方法（可选）
+interface IDevPlanStore {
+  // ... 现有方法 ...
+
+  /**
+   * 获取文档的子文档列表
+   */
+  getChildDocs?(section: DevPlanSection, subSection?: string): DevPlanDoc[];
+
+  /**
+   * 获取文档树（递归，含所有后代文档）
+   */
+  getDocTree?(section: DevPlanSection, subSection?: string): DevPlanDocTree;
+}
+
+interface DevPlanDocTree {
+  doc: DevPlanDoc;
+  children: DevPlanDocTree[];
+}
+```
+
+### 12.4 搜索增强方案（三阶段）
+
+#### 12.4.1 短期：利用 SocialGraphV2 属性索引
+
+优化 `searchSections()`，利用 SocialGraphV2 已有的 `listEntitiesByType()` + 内存过滤，减少全量文档内容加载：
+
+```typescript
+// 优化方向：先按 title 过滤实体，再按需加载 content
+searchSections(query: string, limit: number = 10): DevPlanDoc[] {
+  const queryLower = query.toLowerCase();
+  const docEntities = this.findEntitiesByType(ET.DOC);
+
+  // Phase 1: 先匹配 title/section/subSection（轻量属性，不加载 content）
+  const titleMatches = docEntities.filter(e => {
+    const p = e.properties as any;
+    return p.title?.toLowerCase().includes(queryLower) ||
+           p.section?.toLowerCase().includes(queryLower) ||
+           p.subSection?.toLowerCase().includes(queryLower);
+  });
+
+  // Phase 2: 如果 title 匹配不足，再做 content 全文匹配
+  if (titleMatches.length < limit) {
+    const contentMatches = docEntities.filter(e => {
+      const p = e.properties as any;
+      return !titleMatches.includes(e) &&
+             p.content?.toLowerCase().includes(queryLower);
+    });
+    titleMatches.push(...contentMatches);
+  }
+
+  return titleMatches.slice(0, limit).map(e => this.entityToDoc(e));
+}
+```
+
+#### 12.4.2 中期：文档 Embedding + 向量索引
+
+为每篇文档的 `content` 计算 Embedding 向量，存入 aifastdb 的向量索引，实现语义搜索：
+
+- 文档写入时（`saveSection`）自动调用 Embedding API
+- 搜索时先做向量近邻搜索，再做结果排序
+- 需要新增 `VectorIndex` 依赖
+- 需要配置 Embedding 提供者（OpenAI / Ollama / Candle 本地）
+
+#### 12.4.3 长期：接入 VibeSynapse 多模态搜索
+
+> **注意**：此能力的详细方案记录在 `ai_db` 项目的 DevPlan 文档库中
+> （section: `technical_notes`, subSection: `devplan-vibesynapse-search`）
+
+将文档搜索升级为 VibeSynapse 多模态感知引擎，支持：
+- 自然语言语义搜索
+- 跨文档关联推荐
+- 上下文感知的搜索结果排序
+
+### 12.5 实施优先级
+
+| 阶段 | 内容 | 优先级 | 预计工时 |
+|------|------|--------|----------|
+| 1 | 文档层级 `parentDoc` 字段 + Graph 引擎实现 | P1 | 4h |
+| 2 | 文档层级 Document 引擎实现 | P2 | 2h |
+| 3 | MCP 工具参数扩展 | P1 | 2h |
+| 4 | 可视化 `doc_has_child` 边 + 面板更新 | P2 | 3h |
+| 5 | 搜索短期优化（属性索引） | P1 | 2h |
+| 6 | 搜索中期（Embedding + 向量索引） | P2 | 8h |
+| 7 | 搜索长期（VibeSynapse 集成） | P2 | 16h |
 
 ---
 
