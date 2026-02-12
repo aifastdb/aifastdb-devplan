@@ -21,6 +21,18 @@ import { DevPlanDocumentStore } from './dev-plan-document-store';
 import { DevPlanGraphStore } from './dev-plan-graph-store';
 
 // ============================================================================
+// Constants
+// ============================================================================
+
+/**
+ * 默认项目名称
+ *
+ * 当工具调用未提供 projectName 时，使用此默认值。
+ * 数据存储在 {basePath}/devplan-db/ 目录下。
+ */
+export const DEFAULT_PROJECT_NAME = 'devplan-db';
+
+// ============================================================================
 // Types
 // ============================================================================
 
@@ -31,6 +43,81 @@ export type DevPlanEngine = 'graph' | 'document';
 interface EngineConfig {
   engine: DevPlanEngine;
   version: string;
+}
+
+/**
+ * .devplan/config.json 的内容格式
+ *
+ * 存放在 .devplan/ 根目录下（与各项目子目录同级），
+ * 用于配置当前工作区的 DevPlan 默认行为。
+ */
+export interface DevPlanConfig {
+  /** 默认项目名称（即 .devplan/ 下的子目录名） */
+  defaultProject: string;
+}
+
+// ============================================================================
+// Workspace Config (.devplan/config.json)
+// ============================================================================
+
+/**
+ * 读取 .devplan/config.json 工作区配置
+ *
+ * @param basePath - .devplan/ 的路径（默认自动解析）
+ * @returns 配置对象，不存在或解析失败时返回 null
+ */
+export function readDevPlanConfig(basePath?: string): DevPlanConfig | null {
+  const fs = require('fs');
+  const base = basePath || getDefaultBasePath();
+  const configPath = path.join(base, 'config.json');
+
+  try {
+    if (!fs.existsSync(configPath)) return null;
+    const content = fs.readFileSync(configPath, 'utf-8');
+    const config = JSON.parse(content) as DevPlanConfig;
+    if (config.defaultProject && typeof config.defaultProject === 'string') {
+      return config;
+    }
+    return null;
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * 写入 .devplan/config.json 工作区配置
+ *
+ * @param config - 配置对象
+ * @param basePath - .devplan/ 的路径（默认自动解析）
+ */
+export function writeDevPlanConfig(config: DevPlanConfig, basePath?: string): void {
+  const fs = require('fs');
+  const base = basePath || getDefaultBasePath();
+
+  // 确保 .devplan/ 目录存在
+  if (!fs.existsSync(base)) {
+    fs.mkdirSync(base, { recursive: true });
+  }
+
+  const configPath = path.join(base, 'config.json');
+  fs.writeFileSync(configPath, JSON.stringify(config, null, 2) + '\n', 'utf-8');
+}
+
+/**
+ * 解析最终使用的 projectName
+ *
+ * 优先级：
+ * 1. 显式传入的 projectName（非空时直接使用）
+ * 2. .devplan/config.json 中的 defaultProject
+ * 3. 常量 DEFAULT_PROJECT_NAME ("devplan-db")
+ */
+export function resolveProjectName(explicitName?: string, basePath?: string): string {
+  if (explicitName) return explicitName;
+
+  const config = readDevPlanConfig(basePath);
+  if (config?.defaultProject) return config.defaultProject;
+
+  return DEFAULT_PROJECT_NAME;
 }
 
 // ============================================================================

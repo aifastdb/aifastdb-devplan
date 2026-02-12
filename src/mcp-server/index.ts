@@ -40,6 +40,10 @@ import {
   createDevPlan,
   listDevPlans,
   getProjectEngine,
+  DEFAULT_PROJECT_NAME,
+  readDevPlanConfig,
+  writeDevPlanConfig,
+  resolveProjectName as factoryResolveProjectName,
   type DevPlanEngine,
 } from '../dev-plan-factory';
 import { migrateEngine } from '../dev-plan-migrate';
@@ -86,7 +90,7 @@ const TOOLS = [
       properties: {
         projectName: {
           type: 'string',
-          description: 'Project name (e.g., "federation-db", "aidb-viewer"). Omit to list existing plans.\n项目名称（如 "federation-db"）。省略则列出已有计划。',
+          description: `Project name. Omit to list existing plans. Default: "${DEFAULT_PROJECT_NAME}"\n项目名称。省略则列出已有计划。默认值："${DEFAULT_PROJECT_NAME}"`,
         },
       },
     },
@@ -99,7 +103,7 @@ const TOOLS = [
       properties: {
         projectName: {
           type: 'string',
-          description: 'Project name\n项目名称',
+          description: `Project name (default: "${DEFAULT_PROJECT_NAME}")\n项目名称（默认："${DEFAULT_PROJECT_NAME}"）`,
         },
         section: {
           type: 'string',
@@ -143,7 +147,7 @@ const TOOLS = [
       properties: {
         projectName: {
           type: 'string',
-          description: 'Project name\n项目名称',
+          description: `Project name (default: "${DEFAULT_PROJECT_NAME}")\n项目名称（默认："${DEFAULT_PROJECT_NAME}"）`,
         },
         section: {
           type: 'string',
@@ -166,7 +170,7 @@ const TOOLS = [
       properties: {
         projectName: {
           type: 'string',
-          description: 'Project name\n项目名称',
+          description: `Project name (default: "${DEFAULT_PROJECT_NAME}")\n项目名称（默认："${DEFAULT_PROJECT_NAME}"）`,
         },
       },
       required: ['projectName'],
@@ -180,7 +184,7 @@ const TOOLS = [
       properties: {
         projectName: {
           type: 'string',
-          description: 'Project name\n项目名称',
+          description: `Project name (default: "${DEFAULT_PROJECT_NAME}")\n项目名称（默认："${DEFAULT_PROJECT_NAME}"）`,
         },
         taskId: {
           type: 'string',
@@ -224,7 +228,7 @@ const TOOLS = [
       properties: {
         projectName: {
           type: 'string',
-          description: 'Project name\n项目名称',
+          description: `Project name (default: "${DEFAULT_PROJECT_NAME}")\n项目名称（默认："${DEFAULT_PROJECT_NAME}"）`,
         },
         taskId: {
           type: 'string',
@@ -258,7 +262,7 @@ const TOOLS = [
       properties: {
         projectName: {
           type: 'string',
-          description: 'Project name\n项目名称',
+          description: `Project name (default: "${DEFAULT_PROJECT_NAME}")\n项目名称（默认："${DEFAULT_PROJECT_NAME}"）`,
         },
         taskType: {
           type: 'string',
@@ -320,7 +324,7 @@ const TOOLS = [
       properties: {
         projectName: {
           type: 'string',
-          description: 'Project name\n项目名称',
+          description: `Project name (default: "${DEFAULT_PROJECT_NAME}")\n项目名称（默认："${DEFAULT_PROJECT_NAME}"）`,
         },
         taskId: {
           type: 'string',
@@ -343,7 +347,7 @@ const TOOLS = [
       properties: {
         projectName: {
           type: 'string',
-          description: 'Project name\n项目名称',
+          description: `Project name (default: "${DEFAULT_PROJECT_NAME}")\n项目名称（默认："${DEFAULT_PROJECT_NAME}"）`,
         },
         parentTaskId: {
           type: 'string',
@@ -375,7 +379,7 @@ const TOOLS = [
       properties: {
         projectName: {
           type: 'string',
-          description: 'Project name\n项目名称',
+          description: `Project name (default: "${DEFAULT_PROJECT_NAME}")\n项目名称（默认："${DEFAULT_PROJECT_NAME}"）`,
         },
       },
       required: ['projectName'],
@@ -389,7 +393,7 @@ const TOOLS = [
       properties: {
         projectName: {
           type: 'string',
-          description: 'Project name\n项目名称',
+          description: `Project name (default: "${DEFAULT_PROJECT_NAME}")\n项目名称（默认："${DEFAULT_PROJECT_NAME}"）`,
         },
         scope: {
           type: 'string',
@@ -408,7 +412,7 @@ const TOOLS = [
       properties: {
         projectName: {
           type: 'string',
-          description: 'Project name\n项目名称',
+          description: `Project name (default: "${DEFAULT_PROJECT_NAME}")\n项目名称（默认："${DEFAULT_PROJECT_NAME}"）`,
         },
         dryRun: {
           type: 'boolean',
@@ -426,7 +430,7 @@ const TOOLS = [
       properties: {
         projectName: {
           type: 'string',
-          description: 'Project name\n项目名称',
+          description: `Project name (default: "${DEFAULT_PROJECT_NAME}")\n项目名称（默认："${DEFAULT_PROJECT_NAME}"）`,
         },
         moduleId: {
           type: 'string',
@@ -457,7 +461,7 @@ const TOOLS = [
       properties: {
         projectName: {
           type: 'string',
-          description: 'Project name\n项目名称',
+          description: `Project name (default: "${DEFAULT_PROJECT_NAME}")\n项目名称（默认："${DEFAULT_PROJECT_NAME}"）`,
         },
         status: {
           type: 'string',
@@ -476,7 +480,7 @@ const TOOLS = [
       properties: {
         projectName: {
           type: 'string',
-          description: 'Project name\n项目名称',
+          description: `Project name (default: "${DEFAULT_PROJECT_NAME}")\n项目名称（默认："${DEFAULT_PROJECT_NAME}"）`,
         },
         moduleId: {
           type: 'string',
@@ -494,7 +498,7 @@ const TOOLS = [
       properties: {
         projectName: {
           type: 'string',
-          description: 'Project name\n项目名称',
+          description: `Project name (default: "${DEFAULT_PROJECT_NAME}")\n项目名称（默认："${DEFAULT_PROJECT_NAME}"）`,
         },
         moduleId: {
           type: 'string',
@@ -525,7 +529,7 @@ const TOOLS = [
       properties: {
         projectName: {
           type: 'string',
-          description: 'Project name\n项目名称',
+          description: `Project name (default: "${DEFAULT_PROJECT_NAME}")\n项目名称（默认："${DEFAULT_PROJECT_NAME}"）`,
         },
         includeDocuments: {
           type: 'boolean',
@@ -555,7 +559,7 @@ const TOOLS = [
       properties: {
         projectName: {
           type: 'string',
-          description: 'Project name\n项目名称',
+          description: `Project name (default: "${DEFAULT_PROJECT_NAME}")\n项目名称（默认："${DEFAULT_PROJECT_NAME}"）`,
         },
         targetEngine: {
           type: 'string',
@@ -582,7 +586,7 @@ const TOOLS = [
       properties: {
         projectName: {
           type: 'string',
-          description: 'Project name\n项目名称',
+          description: `Project name (default: "${DEFAULT_PROJECT_NAME}")\n项目名称（默认："${DEFAULT_PROJECT_NAME}"）`,
         },
         port: {
           type: 'number',
@@ -590,6 +594,24 @@ const TOOLS = [
         },
       },
       required: ['projectName'],
+    },
+  },
+  {
+    name: 'devplan_start_phase',
+    description: 'Start a development phase. Marks the main task as in_progress and returns the main task info along with all sub-tasks (with status). Output format is designed for direct Cursor TodoList creation.\n启动一个开发阶段。将主任务标记为 in_progress，返回主任务信息和全部子任务列表（含状态）。输出格式适合直接创建 Cursor TodoList。',
+    inputSchema: {
+      type: 'object' as const,
+      properties: {
+        projectName: {
+          type: 'string',
+          description: `Project name (default: "${DEFAULT_PROJECT_NAME}")\n项目名称（默认："${DEFAULT_PROJECT_NAME}"）`,
+        },
+        taskId: {
+          type: 'string',
+          description: 'Main task ID (e.g., "phase-23")\n主任务 ID（如 "phase-23"）',
+        },
+      },
+      required: ['projectName', 'taskId'],
     },
   },
 ];
@@ -642,7 +664,27 @@ interface ToolArgs {
   port?: number;
 }
 
+/**
+ * 解析 projectName
+ *
+ * 优先级：
+ * 1. 显式传入的 projectName
+ * 2. .devplan/config.json 中的 defaultProject
+ * 3. 常量 DEFAULT_PROJECT_NAME ("devplan-db")
+ *
+ * devplan_init 例外：未提供时返回 undefined（表示列出已有计划）
+ */
+function resolveProjectName(args: ToolArgs, toolName: string): string | undefined {
+  if (args.projectName) return args.projectName;
+  // devplan_init 不传 projectName 时 = 列出已有计划，不使用默认值
+  if (toolName === 'devplan_init') return undefined;
+  return factoryResolveProjectName(undefined);
+}
+
 async function handleToolCall(name: string, args: ToolArgs): Promise<string> {
+  // 统一解析 projectName 默认值（devplan_init 例外）
+  args.projectName = resolveProjectName(args, name);
+
   switch (name) {
     case 'devplan_init': {
       if (!args.projectName) {
@@ -652,24 +694,34 @@ async function handleToolCall(name: string, args: ToolArgs): Promise<string> {
           name,
           engine: getProjectEngine(name) || 'unknown',
         }));
+        const config = readDevPlanConfig();
         return JSON.stringify({
           existingPlans: planDetails,
+          configDefaultProject: config?.defaultProject || null,
           availableSections: ALL_SECTIONS,
           sectionDescriptions: SECTION_DESCRIPTIONS,
           availableEngines: ['graph', 'document'],
           defaultEngine: 'graph',
           message: plans.length > 0
-            ? `Found ${plans.length} existing plan(s). Provide a projectName to initialize a new one.`
+            ? `Found ${plans.length} existing plan(s).${config ? ` Default project: "${config.defaultProject}".` : ''} Provide a projectName to initialize a new one.`
             : 'No existing plans. Provide a projectName to create one.',
         });
       }
 
       const plan = getDevPlan(args.projectName);
       const engine = getProjectEngine(args.projectName) || 'graph';
+
+      // 自动写入/更新 .devplan/config.json，记录 defaultProject
+      const existingConfig = readDevPlanConfig();
+      if (!existingConfig) {
+        writeDevPlanConfig({ defaultProject: args.projectName });
+      }
+
       return JSON.stringify({
         success: true,
         projectName: args.projectName,
         engine,
+        configDefaultProject: readDevPlanConfig()?.defaultProject || null,
         availableSections: ALL_SECTIONS,
         sectionDescriptions: SECTION_DESCRIPTIONS,
         message: `DevPlan initialized for "${args.projectName}" with engine "${engine}". Use devplan_save_section to add document sections and devplan_create_main_task to add development phases.`,
@@ -1342,6 +1394,52 @@ async function handleToolCall(name: string, args: ToolArgs): Promise<string> {
         throw new McpError(ErrorCode.InternalError,
           err instanceof Error ? err.message : String(err));
       }
+    }
+
+    case 'devplan_start_phase': {
+      if (!args.projectName) throw new McpError(ErrorCode.InvalidParams, 'projectName is required');
+      if (!args.taskId) throw new McpError(ErrorCode.InvalidParams, 'taskId is required');
+
+      const plan = getDevPlan(args.projectName);
+      const mainTask = plan.getMainTask(args.taskId);
+      if (!mainTask) {
+        throw new McpError(ErrorCode.InvalidParams, `Main task "${args.taskId}" not found in project "${args.projectName}"`);
+      }
+
+      // Mark main task as in_progress (if still pending)
+      if (mainTask.status === 'pending') {
+        plan.updateMainTaskStatus(args.taskId, 'in_progress');
+      }
+
+      // Fetch all sub-tasks
+      const subTasks = plan.listSubTasks(args.taskId);
+
+      // Get related document sections (if any)
+      const relatedDocs = mainTask.relatedSections || [];
+
+      // Return structured result optimized for Cursor TodoList creation
+      return JSON.stringify({
+        mainTask: {
+          taskId: mainTask.taskId,
+          title: mainTask.title,
+          priority: mainTask.priority,
+          status: 'in_progress',
+          description: mainTask.description,
+          estimatedHours: mainTask.estimatedHours,
+          moduleId: mainTask.moduleId,
+          totalSubtasks: subTasks.length,
+          completedSubtasks: subTasks.filter(s => s.status === 'completed').length,
+        },
+        subTasks: subTasks.map(s => ({
+          taskId: s.taskId,
+          title: s.title,
+          status: s.status,
+          description: s.description,
+          estimatedHours: s.estimatedHours,
+        })),
+        relatedDocSections: relatedDocs,
+        message: `Phase ${args.taskId} started. ${subTasks.length} sub-tasks total, ${subTasks.filter(s => s.status === 'completed').length} already completed.`,
+      }, null, 2);
     }
 
     default:

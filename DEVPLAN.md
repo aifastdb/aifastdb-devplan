@@ -17,6 +17,7 @@
 核心能力：
 - **文档管理**：将大型开发计划文档拆分为结构化的片段（11 种标准类型），AI 可按需读取
 - **任务追踪**：主任务（开发阶段）→ 子任务（具体工作项）的两级任务体系，自动计数和进度统计
+- **阶段自动执行**：通过"开始 phase-X"指令自动启动开发阶段，AI 自动创建 TodoList 并逐个执行子任务
 - **模块聚合**：通过功能模块（Module）维度组织任务和文档，提供模块中心视图
 - **Git 集成**：任务完成时锚定 Git commit，支持回滚检测和状态同步
 - **可视化**：内置图谱可视化和统计仪表盘，实时展示项目全貌
@@ -53,7 +54,7 @@ aifastdb-devplan/
 │   ├── dev-plan-migrate.ts             # 数据迁移工具（document ↔ graph）
 │   ├── index.ts                        # npm 包导出入口
 │   ├── mcp-server/
-│   │   └── index.ts                    # MCP Server — 20 个 devplan_* 工具
+│   │   └── index.ts                    # MCP Server — 21 个 devplan_* 工具
 │   └── visualize/
 │       ├── template.ts                 # 自包含 HTML 模板（vis-network + 暗色主题）
 │       └── server.ts                   # 轻量 HTTP 服务器（CLI + 自动打开浏览器）
@@ -285,9 +286,9 @@ MainTask ◀──N:M──▶ DevPlanDoc   (通过 task_has_doc 关系双向关
 
 ---
 
-## 4. MCP 工具（20 个）
+## 4. MCP 工具（21 个）
 
-`aifastdb-devplan` 作为 MCP Server 提供 20 个工具，工具名统一以 `devplan_` 为前缀。
+`aifastdb-devplan` 作为 MCP Server 提供 21 个工具，工具名统一以 `devplan_` 为前缀。
 
 ### 4.1 初始化（1 个）
 
@@ -307,7 +308,7 @@ MainTask ◀──N:M──▶ DevPlanDoc   (通过 task_has_doc 关系双向关
 
 `section` 可选值：`overview`, `core_concepts`, `api_design`, `file_structure`, `config`, `examples`, `technical_notes`, `api_endpoints`, `milestones`, `changelog`, `custom`
 
-### 4.3 任务管理（5 个）
+### 4.3 任务管理（6 个）
 
 | 工具名 | 说明 | 必需参数 | 可选参数 |
 |--------|------|---------|---------|
@@ -316,6 +317,7 @@ MainTask ◀──N:M──▶ DevPlanDoc   (通过 task_has_doc 关系双向关
 | `devplan_upsert_task` | 幂等导入（upsert）主任务或子任务，防止重复 | `projectName`, `taskType`, `taskId`, `title` | `priority`, `parentTaskId`, `description`, `estimatedHours`, `status`, `preserveStatus`, `moduleId`, `relatedDocSections` |
 | `devplan_complete_task` | 完成任务（自动更新主任务进度、锚定 Git commit） | `projectName`, `taskId` | `taskType`（默认 `"sub"`） |
 | `devplan_list_tasks` | 列出任务（支持多种查询模式） | `projectName` | `parentTaskId`, `status`, `priority`, `moduleId` |
+| `devplan_start_phase` | 启动/恢复开发阶段（自动标记 in_progress，返回全部子任务） | `projectName`, `taskId` | — |
 
 **`devplan_list_tasks` 的三种查询模式：**
 
@@ -328,6 +330,66 @@ MainTask ◀──N:M──▶ DevPlanDoc   (通过 task_has_doc 关系双向关
 **`devplan_upsert_task` 的状态保护：**
 
 当 `preserveStatus` 为 `true`（默认）时，已有的更高优先级状态会被保留。例如已完成的任务不会被回退为 pending。状态优先级：`completed > in_progress > pending`。
+
+**`devplan_start_phase` — 启动/恢复开发阶段（自动执行开发任务）：**
+
+当用户说出"开始/继续/恢复 phase-X 开发"时，AI 自动调用此工具启动开发阶段。这是一个**幂等操作**：首次调用为启动，再次调用为恢复（已完成子任务保持 completed 状态）。
+
+| 参数 | 类型 | 必需 | 说明 |
+|------|------|------|------|
+| `projectName` | string | 是 | 项目名称 |
+| `taskId` | string | 是 | 主任务 ID（如 `"phase-23"`） |
+
+**返回值结构：**
+
+```typescript
+{
+  mainTask: {
+    taskId: string;          // 主任务 ID
+    title: string;           // 主任务标题
+    priority: string;        // 优先级
+    status: 'in_progress';   // 始终返回 in_progress
+    description?: string;    // 描述
+    estimatedHours?: number; // 预计工时
+    moduleId?: string;       // 关联模块
+    totalSubtasks: number;   // 子任务总数
+    completedSubtasks: number; // 已完成子任务数
+  };
+  subTasks: [{               // 全部子任务列表
+    taskId: string;
+    title: string;
+    status: TaskStatus;      // 保留实际状态（completed/pending/in_progress）
+    description?: string;
+    estimatedHours?: number;
+  }];
+  relatedDocSections: string[];  // 关联的文档片段标识列表
+  message: string;               // 摘要信息
+}
+```
+
+**自动执行工作流（AI 端行为）：**
+
+```
+用户: "开始 phase-23 开发"
+  ↓
+1. AI 调用 devplan_start_phase(projectName, taskId: "phase-23")
+  ↓
+2. 工具自动将主任务状态标记为 in_progress（已是 in_progress/completed 则跳过）
+  ↓
+3. 工具返回主任务信息 + 全部子任务列表（含已完成状态）
+  ↓
+4. AI 将子任务列表转为 Cursor TodoList（使用 TodoWrite）
+   - completed 子任务 → 标记为 completed
+   - pending 子任务 → 标记为 pending
+  ↓
+5. AI 输出阶段进度摘要（已完成 X/Y，剩余 Z 个）
+  ↓
+6. AI 自动定位第一个 pending 子任务，开始执行开发任务
+  ↓
+7. 每完成一个子任务 → devplan_complete_task 回写状态 → 更新 Todo → 继续下一个
+  ↓
+8. 所有子任务完成后，devplan 自动标记主任务为 completed
+```
 
 ### 4.4 进度与导出（2 个）
 
@@ -693,7 +755,7 @@ HTTP Server (Node.js http 模块)
 }
 ```
 
-配置后即可在 AI 对话中使用全部 20 个 `devplan_*` 工具。
+配置后即可在 AI 对话中使用全部 21 个 `devplan_*` 工具。
 
 ### 8.2 作为 npm 包编程使用
 
@@ -875,7 +937,7 @@ aifastdb-devplan (独立项目，依赖 aifastdb npm 包)
 ├── src/dev-plan-migrate.ts                      ← 数据迁移工具（document ↔ graph）
 ├── src/visualize/template.ts                    ← 图谱可视化 HTML 模板（vis-network）
 ├── src/visualize/server.ts                      ← 轻量 HTTP 可视化服务器
-└── src/mcp-server/index.ts                      ← 20 个 devplan_* 工具
+└── src/mcp-server/index.ts                      ← 21 个 devplan_* 工具
 ```
 
 `ai_db` 中保留的 8 个 Legacy 工具（`save_document`, `get_document`, `list_documents`, `search_documents`, `list_tasks`, `generate_task_id`, `save_architecture`, `get_architecture`）与 DevPlan 完全隔离：
@@ -1046,6 +1108,21 @@ DevPlan 设计了三层互补的信息架构，解决大型项目文档的 AI �
   - 性能优化：无 `in_progress` 主任务时自动调用 `stopBreathAnimation()` 停止动画循环
   - 增量更新兼容：静默刷新后自动检测，任务状态变化时动态启停呼吸灯
   - 新增函数：`startBreathAnimation()`、`stopBreathAnimation()`、`getInProgressMainTaskIds()`
+
+### v3.x — 开发阶段自动执行 (2026-02-12)
+
+- **新增 `devplan_start_phase` MCP 工具**：启动/恢复开发阶段的一站式入口
+  - 自动将主任务标记为 `in_progress`（幂等操作：已是 in_progress/completed 则跳过）
+  - 返回主任务信息 + 全部子任务列表（保留实际状态），输出格式适合直接创建 Cursor TodoList
+  - 返回关联的文档片段标识列表，方便 AI 按需读取相关文档
+- **AI 端自动执行开发任务工作流**：
+  - 用户说出"开始/继续/恢复 phase-X 开发"时，AI 自动调用 `devplan_start_phase`
+  - AI 将返回的子任务列表自动转为 Cursor TodoList（TodoWrite），保留已完成状态
+  - AI 输出阶段进度摘要后，自动定位并开始执行第一个 pending 子任务
+  - 每完成一个子任务，自动调用 `devplan_complete_task` 回写状态，然后继续下一个
+  - 所有子任务完成后，系统自动标记主任务为 completed
+- **Cursor Rules 配置更新**：在 `dev-plan-management.mdc` 中新增"启动/恢复开发阶段"章节，定义触发词和工作流
+- MCP 工具从 20 个增加到 21 个
 
 ---
 

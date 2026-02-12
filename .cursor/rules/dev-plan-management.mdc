@@ -77,6 +77,23 @@ devplan_get_module(projectName: "<项目名>", moduleId: "auth")
 └── modules.jsonl      # 功能模块
 ```
 
+## 启动/恢复开发阶段
+
+```
+devplan_start_phase(projectName: "<项目名>", taskId: "phase-X")
+# 自动将主任务标记为 in_progress，返回全部子任务列表（含已完成状态）
+# AI 应将返回的子任务创建为 Cursor TodoList（使用 TodoWrite）
+# 幂等操作：首次调用=启动，再次调用=恢复（已完成子任务保持 completed）
+```
+
+**触发词**："开始/继续/恢复 phase-X 开发" 均应调用此工具。
+
+### 工作流说明
+
+1. **启动/恢复**：`devplan_start_phase` → 将子任务转为 TodoWrite（保留已完成状态）→ 输出进度摘要 → 开始第一个 pending 任务
+2. **开发中**：完成代码后 → `devplan_complete_task` 回写状态 → 更新 Todo → 继续下一个
+3. **阶段完成**：所有子任务完成后，devplan 自动标记主任务为 completed
+
 ## 注意事项
 
 1. **通过 MCP 操作任务**：任务状态管理使用 `devplan_*` 系列 MCP 工具，不要手动编辑 JSONL 文件
