@@ -1,7 +1,8 @@
 # AiFastDb-DevPlan 完整功能文档
 
-> 文档版本: 1.0.0  
+> 文档版本: 1.1.0  
 > 创建日期: 2026-02-09  
+> 最后更新: 2026-02-13  
 > 项目仓库: https://github.com/aifastdb/aifastdb-devplan  
 > npm 包: `aifastdb-devplan` v1.0.3  
 > 关联项目: `aifastdb` (底层存储引擎)
@@ -16,7 +17,9 @@
 
 核心能力：
 - **文档管理**：将大型开发计划文档拆分为结构化的片段（11 种标准类型），AI 可按需读取
+- **文档搜索**：支持字面匹配、语义搜索（VibeSynapse Candle MiniLM）和混合搜索（RRF 融合排序），自动降级
 - **任务追踪**：主任务（开发阶段）→ 子任务（具体工作项）的两级任务体系，自动计数和进度统计
+- **任务排序**：主任务和子任务支持 `order` 排序序号，自动分配、稳定排序
 - **阶段自动执行**：通过"开始 phase-X"指令自动启动开发阶段，AI 自动创建 TodoList 并逐个执行子任务
 - **模块聚合**：通过功能模块（Module）维度组织任务和文档，提供模块中心视图
 - **Git 集成**：任务完成时锚定 Git commit，支持回滚检测和状态同步
@@ -33,7 +36,9 @@ v2.1.0 (2026-02-09)  数据迁移工具 — document ↔ graph 双向迁移
   ↓
 v3.0.0 (2026-02-09)  图谱可视化服务 — vis-network 交互式图谱
   ↓
-v3.x   (2026-02-09)  统计仪表盘、侧边栏导航、UI 增强（当前版本）
+v3.x   (2026-02-09)  统计仪表盘、侧边栏导航、UI 增强
+  ↓
+v4.0.0 (2026-02-13)  任务排序 + 语义搜索 — order 字段、VibeSynapse 集成（当前版本）
 ```
 
 ### 1.3 项目结构
@@ -54,7 +59,7 @@ aifastdb-devplan/
 │   ├── dev-plan-migrate.ts             # 数据迁移工具（document ↔ graph）
 │   ├── index.ts                        # npm 包导出入口
 │   ├── mcp-server/
-│   │   └── index.ts                    # MCP Server — 21 个 devplan_* 工具
+│   │   └── index.ts                    # MCP Server — 23 个 devplan_* 工具
 │   └── visualize/
 │       ├── template.ts                 # 自包含 HTML 模板（vis-network + 暗色主题）
 │       └── server.ts                   # 轻量 HTTP 服务器（CLI + 自动打开浏览器）
@@ -70,7 +75,8 @@ aifastdb-devplan/
 aifastdb-devplan (独立项目)
   ├── aifastdb (^2.2.6)                 # 底层存储引擎
   │   ├── EnhancedDocumentStore         # Document 引擎的底层依赖
-  │   ├── SocialGraphV2                 # Graph 引擎的底层依赖
+  │   ├── SocialGraphV2                 # Graph 引擎的底层依赖（含 HNSW 向量索引）
+  │   ├── VibeSynapse                   # 感知引擎（Candle MiniLM Embedding 生成）
   │   └── ContentType / DocumentInput   # 类型依赖
   └── @modelcontextprotocol/sdk (^1.0.0) # MCP 协议 SDK
 ```
@@ -213,6 +219,7 @@ interface MainTask {
   estimatedHours?: number;       // 预计工时
   moduleId?: string;             // 关联的功能模块 ID
   relatedSections?: string[];    // 关联的文档片段（格式："section" 或 "section|subSection"）
+  order?: number;                // 排序序号（数值越小越靠前，不填则自动分配）
   totalSubtasks: number;         // 子任务总数（自动计算）
   completedSubtasks: number;     // 已完成子任务数（自动计算）
   status: TaskStatus;            // pending | in_progress | completed | cancelled
@@ -236,6 +243,7 @@ interface SubTask {
   estimatedHours?: number;
   description?: string;
   relatedFiles?: string[];       // 涉及的代码文件
+  order?: number;                // 排序序号（数值越小越靠前，不填则自动分配）
   status: TaskStatus;
   completedAt: number | null;
   completedAtCommit?: string;    // 完成时的 Git commit hash（短 SHA）
@@ -286,9 +294,9 @@ MainTask ◀──N:M──▶ DevPlanDoc   (通过 task_has_doc 关系双向关
 
 ---
 
-## 4. MCP 工具（21 个）
+## 4. MCP 工具（23 个）
 
-`aifastdb-devplan` 作为 MCP Server 提供 21 个工具，工具名统一以 `devplan_` 为前缀。
+`aifastdb-devplan` 作为 MCP Server 提供 23 个工具，工具名统一以 `devplan_` 为前缀。
 
 ### 4.1 初始化（1 个）
 
@@ -312,9 +320,9 @@ MainTask ◀──N:M──▶ DevPlanDoc   (通过 task_has_doc 关系双向关
 
 | 工具名 | 说明 | 必需参数 | 可选参数 |
 |--------|------|---------|---------|
-| `devplan_create_main_task` | 创建主任务（开发阶段） | `projectName`, `taskId`, `title`, `priority` | `description`, `estimatedHours`, `moduleId`, `relatedDocSections` |
-| `devplan_add_sub_task` | 在主任务下添加子任务 | `projectName`, `taskId`, `parentTaskId`, `title` | `estimatedHours`, `description` |
-| `devplan_upsert_task` | 幂等导入（upsert）主任务或子任务，防止重复 | `projectName`, `taskType`, `taskId`, `title` | `priority`, `parentTaskId`, `description`, `estimatedHours`, `status`, `preserveStatus`, `moduleId`, `relatedDocSections` |
+| `devplan_create_main_task` | 创建主任务（开发阶段） | `projectName`, `taskId`, `title`, `priority` | `description`, `estimatedHours`, `moduleId`, `relatedDocSections`, `order` |
+| `devplan_add_sub_task` | 在主任务下添加子任务 | `projectName`, `taskId`, `parentTaskId`, `title` | `estimatedHours`, `description`, `order` |
+| `devplan_upsert_task` | 幂等导入（upsert）主任务或子任务，防止重复 | `projectName`, `taskType`, `taskId`, `title` | `priority`, `parentTaskId`, `description`, `estimatedHours`, `status`, `preserveStatus`, `moduleId`, `relatedDocSections`, `order` |
 | `devplan_complete_task` | 完成任务（自动更新主任务进度、锚定 Git commit） | `projectName`, `taskId` | `taskType`（默认 `"sub"`） |
 | `devplan_list_tasks` | 列出任务（支持多种查询模式） | `projectName` | `parentTaskId`, `status`, `priority`, `moduleId` |
 | `devplan_start_phase` | 启动/恢复开发阶段（自动标记 in_progress，返回全部子任务） | `projectName`, `taskId` | — |
@@ -326,6 +334,19 @@ MainTask ◀──N:M──▶ DevPlanDoc   (通过 task_has_doc 关系双向关
 | 传了 `parentTaskId` | 列出指定主任务下的子任务 |
 | 未传 `parentTaskId` 但传了 `status` | 跨所有主任务聚合匹配状态的子任务 |
 | 两者都未传 | 列出主任务列表 |
+
+**`order` 参数 — 任务排序：**
+
+主任务和子任务均支持 `order` 排序序号，控制列表中的显示顺序：
+
+| 规则 | 说明 |
+|------|------|
+| 数值越小越靠前 | `order: 1` 排在 `order: 2` 前面 |
+| 不填则自动分配 | 自动取当前最大 order + 1，追加到末尾 |
+| null 排最后 | 未设置 order 的任务排在所有有 order 的任务之后 |
+| 相同 order 按创建时间 | order 相同时，按 `createdAt` 升序排列 |
+
+排序生效于 `devplan_list_tasks`、`devplan_start_phase` 的返回结果，以及 `devplan_export_markdown` 的输出顺序。
 
 **`devplan_upsert_task` 的状态保护：**
 
@@ -409,7 +430,37 @@ MainTask ◀──N:M──▶ DevPlanDoc   (通过 task_has_doc 关系双向关
 
 模块状态（`status`）可选值：`planning`, `active`, `completed`, `deprecated`
 
-### 4.6 高级功能（5 个）
+### 4.6 文档搜索（2 个）
+
+| 工具名 | 说明 | 必需参数 | 可选参数 |
+|--------|------|---------|---------|
+| `devplan_search_sections` | 搜索文档片段（支持字面/语义/混合三种模式） | `projectName`, `query` | `mode`, `limit`, `minScore` |
+| `devplan_rebuild_index` | 重建所有文档的向量 Embedding 索引 | `projectName` | — |
+
+**`devplan_search_sections` — 三种搜索模式：**
+
+| 模式 | 说明 | 适用场景 |
+|------|------|---------|
+| `literal` | 纯字面匹配（标题/内容包含查询词） | 精确关键词搜索 |
+| `semantic` | 纯语义向量搜索（embed(query) → 向量近邻） | 概念性搜索（如搜"安全"可匹配"权限控制"） |
+| `hybrid`（默认） | 字面 + 语义 RRF 融合排序 | 推荐的日常搜索模式 |
+
+**参数说明：**
+
+| 参数 | 类型 | 默认值 | 说明 |
+|------|------|--------|------|
+| `query` | string | (必需) | 搜索查询文本 |
+| `mode` | `"literal"` \| `"semantic"` \| `"hybrid"` | `"hybrid"` | 搜索模式 |
+| `limit` | number | 10 | 最大返回结果数 |
+| `minScore` | number | 0 | 最低相关性评分阈值（0~1） |
+
+**语义搜索前置条件**：需要 graph 引擎 + `.devplan/config.json` 中启用 `enableSemanticSearch: true`。VibeSynapse（Candle MiniLM-L6-v2，384 维）自动初始化。语义搜索不可用时，`semantic`/`hybrid` 模式自动降级为 `literal`。
+
+**返回值**包含 `score` 字段（0~1 相关性评分），`literal` 模式不提供评分。
+
+**`devplan_rebuild_index`** 重建所有文档的向量 Embedding 索引。适用于：首次启用语义搜索、切换 Embedding 模型、修复损坏的索引。返回 `{ total, indexed, failed, durationMs }` 统计信息。
+
+### 4.7 高级功能（5 个）
 
 | 工具名 | 说明 | 必需参数 | 可选参数 |
 |--------|------|---------|---------|
@@ -428,16 +479,19 @@ MainTask ◀──N:M──▶ DevPlanDoc   (通过 task_has_doc 关系双向关
 - `DevPlanDocumentStore` — 基于 `EnhancedDocumentStore`（JSONL 持久化）
 - `DevPlanGraphStore` — 基于 `SocialGraphV2`（图结构存储 + 可视化）
 
-### 5.1 文档操作（6 个方法）
+### 5.1 文档操作（6 + 3 个方法）
 
 | 方法 | 说明 |
 |------|------|
-| `saveSection(input)` | 保存文档片段（已存在则覆盖） |
+| `saveSection(input)` | 保存文档片段（已存在则覆盖，启用语义搜索时自动索引） |
 | `getSection(section, subSection?)` | 获取文档片段 |
 | `listSections()` | 列出项目的所有文档片段（去重后） |
 | `updateSection(section, content, subSection?)` | 更新文档片段内容 |
-| `searchSections(query, limit?)` | 搜索文档片段 |
-| `deleteSection(section, subSection?)` | 删除文档片段 |
+| `searchSections(query, limit?)` | 搜索文档片段（基础版，启用语义搜索时自动使用 hybrid 模式） |
+| `deleteSection(section, subSection?)` | 删除文档片段（同时清理向量索引） |
+| `searchSectionsAdvanced?(query, options?)` | 高级搜索：支持 literal/semantic/hybrid 三种模式，返回带评分结果（可选方法） |
+| `rebuildIndex?()` | 重建所有文档的向量 Embedding 索引（可选方法） |
+| `isSemanticSearchEnabled?()` | 检查语义搜索是否可用（可选方法） |
 
 ### 5.2 主任务操作（5 个方法）
 
@@ -755,7 +809,7 @@ HTTP Server (Node.js http 模块)
 }
 ```
 
-配置后即可在 AI 对话中使用全部 21 个 `devplan_*` 工具。
+配置后即可在 AI 对话中使用全部 23 个 `devplan_*` 工具。
 
 ### 8.2 作为 npm 包编程使用
 
@@ -844,6 +898,8 @@ export {
   MainTaskProgress, ProjectProgress,
   DevPlanStoreConfig, DevPlanGraphStoreConfig,
   DevPlanGraphNode, DevPlanGraphEdge, DevPlanExportedGraph,
+  // 搜索相关类型
+  SearchMode, ScoredDevPlanDoc, RebuildIndexResult,
   // 常量
   ALL_SECTIONS, SECTION_DESCRIPTIONS,
 };
@@ -932,12 +988,12 @@ ai_db (aifastdb npm 包)                          ← 不受 devplan 影响，�
 
 aifastdb-devplan (独立项目，依赖 aifastdb npm 包)
 ├── src/dev-plan-document-store.ts               ← import { EnhancedDocumentStore } from 'aifastdb'
-├── src/dev-plan-graph-store.ts                  ← import { SocialGraphV2 } from 'aifastdb'
+├── src/dev-plan-graph-store.ts                  ← import { SocialGraphV2, VibeSynapse } from 'aifastdb'
 ├── src/dev-plan-factory.ts                      ← 根据 engine.json 选择上述两个实现之一
 ├── src/dev-plan-migrate.ts                      ← 数据迁移工具（document ↔ graph）
 ├── src/visualize/template.ts                    ← 图谱可视化 HTML 模板（vis-network）
 ├── src/visualize/server.ts                      ← 轻量 HTTP 可视化服务器
-└── src/mcp-server/index.ts                      ← 21 个 devplan_* 工具
+└── src/mcp-server/index.ts                      ← 23 个 devplan_* 工具
 ```
 
 `ai_db` 中保留的 8 个 Legacy 工具（`save_document`, `get_document`, `list_documents`, `search_documents`, `list_tasks`, `generate_task_id`, `save_architecture`, `get_architecture`）与 DevPlan 完全隔离：
@@ -947,7 +1003,7 @@ aifastdb-devplan (独立项目，依赖 aifastdb npm 包)
 
 ### 10.2 SocialGraphV2 API 使用
 
-`DevPlanGraphStore` 调用的 SocialGraphV2 API 方法（共 13 个）：
+`DevPlanGraphStore` 调用的 SocialGraphV2 API 方法（共 16 个）：
 
 | 方法 | 用途 |
 |------|------|
@@ -961,9 +1017,12 @@ aifastdb-devplan (独立项目，依赖 aifastdb npm 包)
 | `listRelations` | 列出某实体的关系 |
 | `getRelationBetween` | 获取两实体间的关系 |
 | `exportGraph` | 导出完整图结构 |
+| `indexEntity` | 将 Embedding 向量索引到 HNSW（语义搜索） |
+| `searchEntitiesByVector` | 向量近邻搜索（语义搜索） |
+| `removeEntityVector` | 删除文档对应的向量索引（文档删除时） |
 | `flush` | 刷盘 |
-| `recover` | 恢复（WAL 重放） |
-| 构造函数 | 初始化分片存储 |
+| `recover` | 恢复（WAL 重放，含向量 WAL） |
+| 构造函数 | 初始化分片存储（含 HNSW 向量索引配置） |
 
 ### 10.3 三层信息架构
 
@@ -1124,12 +1183,37 @@ DevPlan 设计了三层互补的信息架构，解决大型项目文档的 AI �
 - **Cursor Rules 配置更新**：在 `dev-plan-management.mdc` 中新增"启动/恢复开发阶段"章节，定义触发词和工作流
 - MCP 工具从 20 个增加到 21 个
 
+### v4.0.0 — 任务排序 + 语义搜索 (2026-02-13)
+
+- **任务排序（`order` 字段）**：
+  - `MainTaskInput`、`MainTask`、`SubTaskInput`、`SubTask` 类型均新增 `order?: number` 字段
+  - MCP 工具 `devplan_create_main_task`、`devplan_add_sub_task`、`devplan_upsert_task` 新增 `order` 可选参数
+  - 不指定 `order` 时自动分配（当前最大 order + 1），追加到列表末尾
+  - `listMainTasks()` 和 `listSubTasks()` 返回结果按 `order` 升序排列（order 为空排最后，相同 order 按 `createdAt` 排序）
+  - 排序逻辑在 Graph 引擎和 Document 引擎中均已实现（`sortByOrder()` + `getNextMainTaskOrder()` / `getNextSubTaskOrder()`）
+
+- **文档语义搜索（VibeSynapse 集成）**：
+  - 新增 MCP 工具 `devplan_search_sections`：支持 `literal`（字面匹配）、`semantic`（语义向量搜索）、`hybrid`（RRF 融合排序）三种搜索模式
+  - 新增 MCP 工具 `devplan_rebuild_index`：重建所有文档的向量 Embedding 索引
+  - 新增 `IDevPlanStore` 接口方法：`searchSectionsAdvanced()`、`rebuildIndex()`、`isSemanticSearchEnabled()`
+  - 新增类型：`SearchMode`、`ScoredDevPlanDoc`（带评分的搜索结果）、`RebuildIndexResult`
+  - **VibeSynapse Embedding 引擎**：使用 Candle MiniLM-L6-v2（384 维）离线生成 Embedding，零 API 依赖
+  - **SocialGraphV2 向量索引**：配置 HNSW 索引（`vectorSearch` 配置），支持 `indexEntity()` / `searchEntitiesByVector()` / `removeEntityVector()`
+  - **自动索引**：`saveSection()` 保存文档时自动调用 `autoIndexDocument()` 生成 Embedding 并索引
+  - **RRF 融合算法**：`rrfFusion()` 将语义和字面搜索结果通过 Reciprocal Rank Fusion（k=60）融合排序
+  - **优雅降级**：VibeSynapse 初始化失败时自动降级为纯字面搜索，不影响其他功能
+  - **配置**：通过 `.devplan/config.json` 中的 `enableSemanticSearch: true` 启用
+  - `DevPlanGraphStoreConfig` 新增 `enableSemanticSearch` 和 `embeddingDimension` 配置项
+
+- MCP 工具从 21 个增加到 23 个
+
 ---
 
-## 12. 路线图：文档层级关系 (parentDocId) 与搜索增强
+## 12. 路线图：文档层级关系 (parentDocId) ~~与搜索增强~~
 
-> 规划日期: 2026-02-12
-> 状态: 方案设计阶段
+> 规划日期: 2026-02-12  
+> 更新日期: 2026-02-13  
+> 状态: **搜索增强已完成（v4.0.0）**，文档层级关系（parentDoc）待开发
 
 ### 12.1 背景与问题
 
@@ -1143,12 +1227,14 @@ DevPlan 设计了三层互补的信息架构，解决大型项目文档的 AI �
 
 相比之下，**子任务通过 `parentTaskId` 与主任务形成清晰的父子关系**，文档缺少对应机制。
 
-#### 12.1.2 搜索能力问题
+#### 12.1.2 搜索能力问题 ✅ 已解决（v4.0.0）
 
-当前 `searchSections()` 实现是**纯 JavaScript 暴力扫描**：
+> **此问题已在 v4.0.0 中完全解决**。以下为原始问题记录，保留供参考。
+
+~~当前 `searchSections()` 实现是**纯 JavaScript 暴力扫描**~~：
 
 ```typescript
-// dev-plan-graph-store.ts — 当前实现
+// dev-plan-graph-store.ts — v4.0.0 之前的旧实现（已替换）
 searchSections(query: string, limit: number = 10): DevPlanDoc[] {
   const queryLower = query.toLowerCase();
   return this.listSections()
@@ -1160,11 +1246,11 @@ searchSections(query: string, limit: number = 10): DevPlanDoc[] {
 }
 ```
 
-问题：
-- **全量加载**：每次搜索都要加载所有文档到内存
-- **仅字面匹配**：不支持语义搜索（如搜"数据库安全"无法匹配"权限控制"）
-- **无排序**：结果按存储顺序返回，非相关性排序
-- **未利用 aifastdb 原生能力**：SocialGraphV2 有属性过滤和类型索引，但未被利用
+~~问题~~（已全部解决）：
+- ~~**全量加载**：每次搜索都要加载所有文档到内存~~ → 语义搜索通过 HNSW 向量索引实现，无需全量加载
+- ~~**仅字面匹配**：不支持语义搜索~~ → 支持 `literal` / `semantic` / `hybrid` 三种模式
+- ~~**无排序**：结果按存储顺序返回~~ → RRF 融合排序，返回带 `score` 评分的结果
+- ~~**未利用 aifastdb 原生能力**~~ → 集成 VibeSynapse（Candle MiniLM）+ SocialGraphV2 向量索引
 
 ### 12.2 任务与子任务的父子关系机制（参考模型）
 
@@ -1251,7 +1337,7 @@ DevPlanDoc ──1:N──▶ DevPlanDoc       (doc_has_child) ← 新增
 | `devplan_get_section` | 返回值新增 `parentDoc` 和 `childDocs` 字段 |
 | `devplan_list_sections` | 返回值新增 `parentDoc` 字段 |
 
-**无需新增 MCP 工具**：文档层级通过现有工具的参数扩展实现，保持 21 个工具不变。
+**无需新增 MCP 工具**：文档层级通过现有工具的参数扩展实现，保持 23 个工具不变。
 
 #### 12.3.5 可视化变更
 
@@ -1285,70 +1371,46 @@ interface DevPlanDocTree {
 }
 ```
 
-### 12.4 搜索增强方案（三阶段）
+### 12.4 搜索增强方案（三阶段） ✅ 已全部完成
 
-#### 12.4.1 短期：利用 SocialGraphV2 属性索引
+> **以下三个阶段已在 v4.0.0 中一次性完成**，实际实现合并了短期/中期/长期方案。
 
-优化 `searchSections()`，利用 SocialGraphV2 已有的 `listEntitiesByType()` + 内存过滤，减少全量文档内容加载：
+#### 12.4.1 ✅ 短期：利用 SocialGraphV2 属性索引（已完成）
 
-```typescript
-// 优化方向：先按 title 过滤实体，再按需加载 content
-searchSections(query: string, limit: number = 10): DevPlanDoc[] {
-  const queryLower = query.toLowerCase();
-  const docEntities = this.findEntitiesByType(ET.DOC);
+已实现 `literalSearch()` 方法，作为字面搜索的基础实现，同时作为语义搜索不可用时的降级方案。
 
-  // Phase 1: 先匹配 title/section/subSection（轻量属性，不加载 content）
-  const titleMatches = docEntities.filter(e => {
-    const p = e.properties as any;
-    return p.title?.toLowerCase().includes(queryLower) ||
-           p.section?.toLowerCase().includes(queryLower) ||
-           p.subSection?.toLowerCase().includes(queryLower);
-  });
+#### 12.4.2 ✅ 中期：文档 Embedding + 向量索引（已完成）
 
-  // Phase 2: 如果 title 匹配不足，再做 content 全文匹配
-  if (titleMatches.length < limit) {
-    const contentMatches = docEntities.filter(e => {
-      const p = e.properties as any;
-      return !titleMatches.includes(e) &&
-             p.content?.toLowerCase().includes(queryLower);
-    });
-    titleMatches.push(...contentMatches);
-  }
+已实现完整的语义搜索管线：
 
-  return titleMatches.slice(0, limit).map(e => this.entityToDoc(e));
-}
-```
+- `saveSection()` 保存文档时自动调用 `autoIndexDocument()` 生成 Embedding 并索引到 SocialGraphV2 HNSW
+- `searchSectionsAdvanced()` 支持三种搜索模式：`literal` / `semantic` / `hybrid`
+- `rebuildIndex()` 支持全量重建向量索引
+- Embedding 提供者选择了 **Candle 本地**（MiniLM-L6-v2，384 维），零 API 依赖，离线可用
 
-#### 12.4.2 中期：文档 Embedding + 向量索引
+#### 12.4.3 ✅ 长期：接入 VibeSynapse（已完成）
 
-为每篇文档的 `content` 计算 Embedding 向量，存入 aifastdb 的向量索引，实现语义搜索：
+已集成 VibeSynapse 作为 Embedding 引擎，使用 Candle MiniLM-L6-v2 本地模型：
 
-- 文档写入时（`saveSection`）自动调用 Embedding API
-- 搜索时先做向量近邻搜索，再做结果排序
-- 需要新增 `VectorIndex` 依赖
-- 需要配置 Embedding 提供者（OpenAI / Ollama / Candle 本地）
+- `VibeSynapse` 实例在 `DevPlanGraphStore` 构造时自动初始化
+- 通过 `synapse.embed(text)` 生成 Embedding 向量
+- 通过 `graph.searchEntitiesByVector(embedding, limit, entityType)` 进行向量近邻搜索
+- `rrfFusion()` 使用 RRF（Reciprocal Rank Fusion, k=60）融合语义和字面搜索结果
+- 优雅降级：`hasPerception` 检查 + dry-run 测试，初始化失败时自动降级为字面搜索
 
-#### 12.4.3 长期：接入 VibeSynapse 多模态搜索
-
-> **注意**：此能力的详细方案记录在 `ai_db` 项目的 DevPlan 文档库中
-> （section: `technical_notes`, subSection: `devplan-vibesynapse-search`）
-
-将文档搜索升级为 VibeSynapse 多模态感知引擎，支持：
-- 自然语言语义搜索
-- 跨文档关联推荐
-- 上下文感知的搜索结果排序
+> **注意**：VibeSynapse 多模态搜索的更高级能力（跨文档关联推荐、上下文感知排序）可作为未来增强方向。
 
 ### 12.5 实施优先级
 
-| 阶段 | 内容 | 优先级 | 预计工时 |
-|------|------|--------|----------|
-| 1 | 文档层级 `parentDoc` 字段 + Graph 引擎实现 | P1 | 4h |
-| 2 | 文档层级 Document 引擎实现 | P2 | 2h |
-| 3 | MCP 工具参数扩展 | P1 | 2h |
-| 4 | 可视化 `doc_has_child` 边 + 面板更新 | P2 | 3h |
-| 5 | 搜索短期优化（属性索引） | P1 | 2h |
-| 6 | 搜索中期（Embedding + 向量索引） | P2 | 8h |
-| 7 | 搜索长期（VibeSynapse 集成） | P2 | 16h |
+| 阶段 | 内容 | 优先级 | 预计工时 | 状态 |
+|------|------|--------|----------|------|
+| 1 | 文档层级 `parentDoc` 字段 + Graph 引擎实现 | P1 | 4h | **待开发** |
+| 2 | 文档层级 Document 引擎实现 | P2 | 2h | **待开发** |
+| 3 | MCP 工具参数扩展（`parentDoc`） | P1 | 2h | **待开发** |
+| 4 | 可视化 `doc_has_child` 边 + 面板更新 | P2 | 3h | **待开发** |
+| 5 | ~~搜索短期优化（属性索引）~~ | ~~P1~~ | ~~2h~~ | ✅ v4.0.0 已完成 |
+| 6 | ~~搜索中期（Embedding + 向量索引）~~ | ~~P2~~ | ~~8h~~ | ✅ v4.0.0 已完成 |
+| 7 | ~~搜索长期（VibeSynapse 集成）~~ | ~~P2~~ | ~~16h~~ | ✅ v4.0.0 已完成 |
 
 ---
 
