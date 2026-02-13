@@ -130,7 +130,7 @@ DevPlan 的层级结构映射为 `SocialGraphV2` 的实体-关系模型：
 | 子任务 | `devplan-sub-task` | 对应具体工作项 |
 | 功能模块 | `devplan-module` | 独立功能区域 |
 
-**关系类型（6 种）：**
+**关系类型（7 种）：**
 
 | 关系类型 | 方向 | 说明 |
 |---------|------|------|
@@ -140,6 +140,7 @@ DevPlan 的层级结构映射为 `SocialGraphV2` 的实体-关系模型：
 | `module_has_task` | module → main-task | 模块关联主任务 |
 | `module_has_doc` | module → doc | 模块关联文档 |
 | `task_has_doc` | main-task → doc | 主任务关联文档（双向） |
+| `doc_has_child` | doc → doc | 文档包含子文档（文档层级关系） |
 
 ### 2.4 数据迁移
 
@@ -199,6 +200,8 @@ interface DevPlanDoc {
   subSection?: string;           // 子分类（用于 technical_notes / custom）
   moduleId?: string;             // 关联的功能模块 ID
   relatedTaskIds?: string[];     // 关联的主任务 ID 列表
+  parentDoc?: string;            // 父文档标识（"section" 或 "section|subSection" 格式）
+  childDocs?: string[];          // 子文档标识列表（自动计算，仅 Graph 引擎支持）
   createdAt: number;             // 创建时间（Unix 毫秒）
   updatedAt: number;             // 更新时间（Unix 毫秒）
 }
@@ -310,7 +313,7 @@ MainTask ◀──N:M──▶ DevPlanDoc   (通过 task_has_doc 关系双向关
 
 | 工具名 | 说明 | 必需参数 | 可选参数 |
 |--------|------|---------|---------|
-| `devplan_save_section` | 保存/更新文档片段（同 section+subSection 已存在则覆盖） | `projectName`, `section`, `title`, `content` | `version`, `subSection`, `moduleId`, `relatedTaskIds` |
+| `devplan_save_section` | 保存/更新文档片段（同 section+subSection 已存在则覆盖） | `projectName`, `section`, `title`, `content` | `version`, `subSection`, `moduleId`, `relatedTaskIds`, `parentDoc` |
 | `devplan_get_section` | 读取指定文档片段 | `projectName`, `section` | `subSection` |
 | `devplan_list_sections` | 列出项目的所有文档片段 | `projectName` | — |
 
@@ -479,16 +482,18 @@ MainTask ◀──N:M──▶ DevPlanDoc   (通过 task_has_doc 关系双向关
 - `DevPlanDocumentStore` — 基于 `EnhancedDocumentStore`（JSONL 持久化）
 - `DevPlanGraphStore` — 基于 `SocialGraphV2`（图结构存储 + 可视化）
 
-### 5.1 文档操作（6 + 3 个方法）
+### 5.1 文档操作（6 + 5 个方法）
 
 | 方法 | 说明 |
 |------|------|
-| `saveSection(input)` | 保存文档片段（已存在则覆盖，启用语义搜索时自动索引） |
-| `getSection(section, subSection?)` | 获取文档片段 |
-| `listSections()` | 列出项目的所有文档片段（去重后） |
+| `saveSection(input)` | 保存文档片段（已存在则覆盖，启用语义搜索时自动索引，支持 `parentDoc` 建立文档层级） |
+| `getSection(section, subSection?)` | 获取文档片段（返回含 `parentDoc` 和 `childDocs` 字段） |
+| `listSections()` | 列出项目的所有文档片段（去重后，含 `parentDoc` 字段） |
 | `updateSection(section, content, subSection?)` | 更新文档片段内容 |
 | `searchSections(query, limit?)` | 搜索文档片段（基础版，启用语义搜索时自动使用 hybrid 模式） |
-| `deleteSection(section, subSection?)` | 删除文档片段（同时清理向量索引） |
+| `deleteSection(section, subSection?)` | 删除文档片段（同时清理向量索引和文档层级关系） |
+| `getChildDocs?(section, subSection?)` | 获取文档的直接子文档列表（可选方法） |
+| `getDocTree?(section, subSection?)` | 获取文档树（递归含所有后代，仅 Graph 引擎支持，可选方法） |
 | `searchSectionsAdvanced?(query, options?)` | 高级搜索：支持 literal/semantic/hybrid 三种模式，返回带评分结果（可选方法） |
 | `rebuildIndex?()` | 重建所有文档的向量 Embedding 索引（可选方法） |
 | `isSemanticSearchEnabled?()` | 检查语义搜索是否可用（可选方法） |
@@ -891,7 +896,7 @@ export {
   migrateEngine,
   // 类型
   DevPlanEngine, DevPlanSection, TaskStatus, TaskPriority, ModuleStatus,
-  DevPlanDocInput, DevPlanDoc,
+  DevPlanDocInput, DevPlanDoc, DevPlanDocTree,
   MainTaskInput, MainTask, SubTaskInput, SubTask,
   CompleteSubTaskResult, SyncGitResult, RevertedTask,
   ModuleInput, Module, ModuleDetail,
@@ -1207,25 +1212,53 @@ DevPlan 设计了三层互补的信息架构，解决大型项目文档的 AI �
 
 - MCP 工具从 21 个增加到 23 个
 
+### v4.1.0 — 文档层级关系 (parentDoc) (2026-02-13)
+
+- **文档层级关系（`parentDoc` 字段）**：
+  - `DevPlanDocInput` 新增 `parentDoc?: string` 可选字段（格式："section" 或 "section|subSection"）
+  - `DevPlanDoc` 新增 `parentDoc?: string` 和 `childDocs?: string[]` 字段（`childDocs` 为自动计算属性）
+  - 新增 `DevPlanDocTree` 类型，支持递归文档树结构
+  - MCP 工具 `devplan_save_section` 新增 `parentDoc` 可选参数
+  - `devplan_get_section` 返回值自动包含 `parentDoc` 和 `childDocs`
+  - `devplan_list_sections` 返回值自动包含 `parentDoc`
+
+- **Graph 引擎实现**：
+  - 新增关系类型 `doc_has_child`（parent doc → child doc），关系模型从 6 种扩展到 7 种
+  - `saveSection()` 创建/更新时自动维护 `DOC_HAS_CHILD` 关系
+  - `deleteSection()` 删除文档时自动断开父子关系，子文档的 `parentDoc` 属性清空
+  - `exportGraph()` 导出 `doc_has_child` 边，可视化展示文档层级
+  - 新增 `getChildDocs()` 方法：获取直接子文档列表
+  - 新增 `getDocTree()` 方法：递归获取文档树
+  - 新增 `updateParentDocRelation()` 私有方法：更新文档父子关系
+
+- **Document 引擎实现**：
+  - `saveSection()` 在 `metadata` 中存储 `parentDoc` 字段
+  - `docToDevPlanDoc()` 从 `metadata.parentDoc` 读取
+  - 新增 `getChildDocs()` 方法：通过扫描所有文档的 `parentDoc` 属性实现
+
+- **IDevPlanStore 接口新增可选方法**：`getChildDocs()`、`getDocTree()`
+- **数据迁移**：`migrateEngine()` 自动迁移 `parentDoc` 字段
+- 工具数量保持 23 个不变（通过现有工具的参数扩展实现）
+
 ---
 
 ## 12. 路线图：文档层级关系 (parentDocId) ~~与搜索增强~~
 
 > 规划日期: 2026-02-12  
 > 更新日期: 2026-02-13  
-> 状态: **搜索增强已完成（v4.0.0）**，文档层级关系（parentDoc）待开发
+> 状态: **全部已完成** — 搜索增强（v4.0.0）+ 文档层级关系（v4.1.0）
 
 ### 12.1 背景与问题
 
-#### 12.1.1 文档层级问题
+#### 12.1.1 文档层级问题 ✅ 已解决（v4.1.0）
 
-当前文档模型是**扁平结构**：所有文档通过 `section` + `subSection` 构成至多两级的分类体系。对于大型项目（如 `ai_db` 已有 62 篇文档），缺乏以下能力：
+> **此问题已在 v4.1.0 中解决**。以下为原始问题记录，保留供参考。
 
-- **文档树**：无法表达"章节 → 小节 → 段落"的多级文档结构
-- **父子导航**：无法从子文档上溯到父文档（如从"安全模块 API"回到"安全架构总览"）
-- **批量操作**：无法按文档树批量删除/移动某个文档分支
+~~当前文档模型是**扁平结构**~~：~~所有文档通过 `section` + `subSection` 构成至多两级的分类体系~~。现已通过 `parentDoc` 字段和 `doc_has_child` 关系实现多级文档层级：
 
-相比之下，**子任务通过 `parentTaskId` 与主任务形成清晰的父子关系**，文档缺少对应机制。
+- ~~**文档树**：无法表达"章节 → 小节 → 段落"的多级文档结构~~ → `getDocTree()` 支持递归文档树
+- ~~**父子导航**：无法从子文档上溯到父文档~~ → `parentDoc` 字段 + `childDocs` 自动计算属性
+- ~~**批量操作**：无法按文档树批量删除/移动某个文档分支~~ → `deleteSection()` 自动断开父子关系
 
 #### 12.1.2 搜索能力问题 ✅ 已解决（v4.0.0）
 
@@ -1404,10 +1437,10 @@ interface DevPlanDocTree {
 
 | 阶段 | 内容 | 优先级 | 预计工时 | 状态 |
 |------|------|--------|----------|------|
-| 1 | 文档层级 `parentDoc` 字段 + Graph 引擎实现 | P1 | 4h | **待开发** |
-| 2 | 文档层级 Document 引擎实现 | P2 | 2h | **待开发** |
-| 3 | MCP 工具参数扩展（`parentDoc`） | P1 | 2h | **待开发** |
-| 4 | 可视化 `doc_has_child` 边 + 面板更新 | P2 | 3h | **待开发** |
+| 1 | ~~文档层级 `parentDoc` 字段 + Graph 引擎实现~~ | ~~P1~~ | ~~4h~~ | ✅ v4.1.0 已完成 |
+| 2 | ~~文档层级 Document 引擎实现~~ | ~~P2~~ | ~~2h~~ | ✅ v4.1.0 已完成 |
+| 3 | ~~MCP 工具参数扩展（`parentDoc`）~~ | ~~P1~~ | ~~2h~~ | ✅ v4.1.0 已完成 |
+| 4 | ~~可视化 `doc_has_child` 边 + 面板更新~~ | ~~P2~~ | ~~3h~~ | ✅ v4.1.0 已完成 |
 | 5 | ~~搜索短期优化（属性索引）~~ | ~~P1~~ | ~~2h~~ | ✅ v4.0.0 已完成 |
 | 6 | ~~搜索中期（Embedding + 向量索引）~~ | ~~P2~~ | ~~8h~~ | ✅ v4.0.0 已完成 |
 | 7 | ~~搜索长期（VibeSynapse 集成）~~ | ~~P2~~ | ~~16h~~ | ✅ v4.0.0 已完成 |

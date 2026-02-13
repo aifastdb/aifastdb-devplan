@@ -292,6 +292,8 @@ function startServer(projectName: string, basePath: string, port: number): void 
             title: s.title,
             version: s.version || null,
             moduleId: s.moduleId || null,
+            parentDoc: s.parentDoc || null,
+            childDocs: s.childDocs || [],
             updatedAt: s.updatedAt || null,
           }));
           res.writeHead(200, { 'Content-Type': 'application/json; charset=utf-8' });

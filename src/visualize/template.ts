@@ -160,7 +160,8 @@ export function getVisualizationHTML(projectName: string): string {
     .legend-line.thin { background: #6b7280; height: 1px; }
     .legend-line.dashed { border-top: 2px dashed #6b7280; background: none; height: 0; }
     .legend-line.dotted { border-top: 2px dotted #10b981; background: none; height: 0; }
-    .legend-line.task-doc { border-top: 2px dashed #b45309; background: none; height: 0; }
+    .legend-line.task-doc { border-top: 2px dashed #6b7280; background: none; height: 0; }
+    .legend-line.doc-child { border-top: 2px dashed #6b7280; background: none; height: 0; }
 
     /* Document Content in Panel */
     .doc-section { margin-top: 12px; border-top: 1px solid #374151; padding-top: 10px; }
@@ -311,6 +312,14 @@ export function getVisualizationHTML(projectName: string): string {
     .docs-item-icon { font-size: 14px; flex-shrink: 0; opacity: 0.7; }
     .docs-item-text { flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
     .docs-item-sub { font-size: 10px; color: #6b7280; flex-shrink: 0; }
+    .docs-item-toggle { display: flex; align-items: center; justify-content: center; width: 18px; height: 18px; border-radius: 4px; background: rgba(99,102,241,0.15); border: 1px solid rgba(99,102,241,0.3); color: #818cf8; font-size: 12px; font-weight: 700; cursor: pointer; flex-shrink: 0; transition: all 0.15s; line-height: 1; }
+    .docs-item-toggle:hover { background: rgba(99,102,241,0.3); color: #a5b4fc; }
+    .docs-children { overflow: hidden; transition: max-height 0.25s ease; }
+    .docs-children.collapsed { max-height: 0 !important; }
+    .docs-children .docs-item { padding-left: 44px; font-size: 12px; opacity: 0.85; }
+    .docs-children .docs-children .docs-item { padding-left: 60px; font-size: 11px; opacity: 0.75; }
+    .docs-child-line { position: absolute; left: 35px; top: 0; bottom: 0; width: 1px; background: #374151; }
+    .docs-item-wrapper { position: relative; }
 
     .docs-content { flex: 1; display: flex; flex-direction: column; min-width: 0; overflow: hidden; }
     .docs-content-header { padding: 16px 28px 12px; border-bottom: 1px solid #374151; flex-shrink: 0; display: flex; align-items: flex-start; justify-content: space-between; gap: 16px; }
@@ -463,6 +472,7 @@ export function getVisualizationHTML(projectName: string): string {
         <div class="legend-item"><div class="legend-line dashed"></div> 文档</div>
         <div class="legend-item"><div class="legend-line dotted"></div> 模块关联</div>
         <div class="legend-item"><div class="legend-line task-doc"></div> 任务-文档</div>
+        <div class="legend-item"><div class="legend-line doc-child"></div> 文档层级</div>
       </div>
     </div>
 
@@ -648,6 +658,393 @@ var ctrlPressed = false;
 var INCLUDE_NODE_DEGREE = true;
 var ENABLE_BACKEND_DEGREE_FALLBACK = true;
 
+// ========== 边高亮：选中节点时关联边变色，取消选中时恢复灰色 ==========
+function highlightConnectedEdges(nodeId) {
+  if (!edgesDataSet || !network) return;
+  var connectedEdgeIds = network.getConnectedEdges(nodeId);
+  var connectedSet = {};
+  for (var i = 0; i < connectedEdgeIds.length; i++) connectedSet[connectedEdgeIds[i]] = true;
+  var updates = [];
+  edgesDataSet.forEach(function(edge) {
+    if (connectedSet[edge.id]) {
+      // 关联边 → 使用高亮色
+      updates.push({ id: edge.id, color: { color: edge._highlightColor || '#9ca3af', highlight: edge._highlightColor || '#9ca3af', hover: edge._highlightColor || '#9ca3af' }, width: (edge._origWidth || 1) < 2 ? 2 : (edge._origWidth || edge.width || 1) });
+    } else {
+      // 非关联边 → 变淡
+      updates.push({ id: edge.id, color: { color: 'rgba(75,85,99,0.15)', highlight: edge._highlightColor || '#9ca3af', hover: edge._highlightColor || '#9ca3af' }, width: edge._origWidth || edge.width || 1 });
+    }
+  });
+  edgesDataSet.update(updates);
+}
+
+function resetAllEdgeColors() {
+  if (!edgesDataSet) return;
+  var updates = [];
+  edgesDataSet.forEach(function(edge) {
+    updates.push({ id: edge.id, color: { color: EDGE_GRAY, highlight: edge._highlightColor || '#9ca3af', hover: edge._highlightColor || '#9ca3af' }, width: edge._origWidth || edge.width || 1 });
+  });
+  edgesDataSet.update(updates);
+}
+
+// ========== 文档节点展开/收起 ==========
+/** 记录哪些父文档节点处于收起状态（nodeId → true 表示收起） */
+var collapsedDocNodes = {};
+/** 收起时被重定向的边信息: { edgeId: { origFrom, origTo } } */
+var redirectedEdges = {};
+/** 记录各父文档 +/- 按钮在 canvas 坐标系中的位置，用于点击检测 */
+var docToggleBtnPositions = {};
+/** 收起前保存子文档节点的位置: { nodeId: { x, y } } */
+var savedChildPositions = {};
+
+/** 获取节点 ID 对应的子文档节点 ID 列表（仅直接子文档） */
+function getChildDocNodeIds(parentNodeId) {
+  var childIds = [];
+  for (var i = 0; i < allEdges.length; i++) {
+    if (allEdges[i].from === parentNodeId && allEdges[i].label === 'doc_has_child') {
+      childIds.push(allEdges[i].to);
+    }
+  }
+  return childIds;
+}
+
+/** 递归获取所有后代文档节点 ID（含多层子文档） */
+function getAllDescendantDocNodeIds(parentNodeId) {
+  var result = [];
+  var queue = [parentNodeId];
+  while (queue.length > 0) {
+    var current = queue.shift();
+    var children = getChildDocNodeIds(current);
+    for (var i = 0; i < children.length; i++) {
+      result.push(children[i]);
+      queue.push(children[i]);
+    }
+  }
+  return result;
+}
+
+/** 检查节点是否为父文档（有子文档的文档节点） */
+function isParentDocNode(node) {
+  if (node.type !== 'document') return false;
+  var props = node.properties || {};
+  var childDocs = props.childDocs || [];
+  if (childDocs.length > 0) return true;
+  for (var i = 0; i < allEdges.length; i++) {
+    if (allEdges[i].from === node.id && allEdges[i].label === 'doc_has_child') return true;
+  }
+  return false;
+}
+
+/** 通过 nodeId 在 allNodes 中查找节点数据 */
+function findAllNode(nodeId) {
+  for (var i = 0; i < allNodes.length; i++) {
+    if (allNodes[i].id === nodeId) return allNodes[i];
+  }
+  return null;
+}
+
+/** 检查节点是否应被隐藏（因为其祖先父文档处于收起状态） */
+function isNodeCollapsedByParent(nodeId) {
+  for (var i = 0; i < allEdges.length; i++) {
+    var e = allEdges[i];
+    if (e.to === nodeId && e.label === 'doc_has_child') {
+      if (collapsedDocNodes[e.from]) return true;
+      if (isNodeCollapsedByParent(e.from)) return true;
+    }
+  }
+  return false;
+}
+
+/** 切换父文档节点的展开/收起状态 */
+function toggleDocNodeExpand(nodeId) {
+  collapsedDocNodes[nodeId] = !collapsedDocNodes[nodeId];
+  var childIds = getAllDescendantDocNodeIds(nodeId);
+  var isCollapsed = collapsedDocNodes[nodeId];
+
+  if (isCollapsed) {
+    // ---- 收起 ----
+    var removeNodeIds = {};
+    for (var i = 0; i < childIds.length; i++) removeNodeIds[childIds[i]] = true;
+
+    // 0) 保存子文档节点当前位置
+    var childPositions = network.getPositions(childIds);
+    for (var i = 0; i < childIds.length; i++) {
+      if (childPositions[childIds[i]]) {
+        savedChildPositions[childIds[i]] = { x: childPositions[childIds[i]].x, y: childPositions[childIds[i]].y };
+      }
+    }
+
+    // 1) 将连接到子文档的非 doc_has_child 边重定向到父文档
+    var edgesToRedirect = [];
+    var edgesToRemove = [];
+    edgesDataSet.forEach(function(edge) {
+      var touchesChild = removeNodeIds[edge.from] || removeNodeIds[edge.to];
+      if (!touchesChild) return;
+      if (edge._label === 'doc_has_child') {
+        // doc_has_child 边直接移除
+        edgesToRemove.push(edge.id);
+      } else {
+        // 其他边（如 task_has_doc）重定向到父文档
+        edgesToRedirect.push(edge);
+      }
+    });
+
+    // 移除 doc_has_child 边
+    if (edgesToRemove.length > 0) edgesDataSet.remove(edgesToRemove);
+
+    // 重定向其他边到父文档
+    for (var i = 0; i < edgesToRedirect.length; i++) {
+      var edge = edgesToRedirect[i];
+      var newFrom = removeNodeIds[edge.from] ? nodeId : edge.from;
+      var newTo = removeNodeIds[edge.to] ? nodeId : edge.to;
+      // 检查是否已存在相同的重定向边（避免重复）
+      var duplicate = false;
+      edgesDataSet.forEach(function(existing) {
+        if (existing.from === newFrom && existing.to === newTo && existing._label === edge._label) duplicate = true;
+      });
+      if (newFrom === newTo) { duplicate = true; } // 不自连
+      if (!duplicate) {
+        redirectedEdges[edge.id] = { origFrom: edge.from, origTo: edge.to };
+        edgesDataSet.update({ id: edge.id, from: newFrom, to: newTo });
+      } else {
+        // 重复则移除
+        redirectedEdges[edge.id] = { origFrom: edge.from, origTo: edge.to };
+        edgesDataSet.remove([edge.id]);
+      }
+    }
+
+    // 2) 移除子文档节点
+    nodesDataSet.remove(childIds);
+
+    // 3) 更新父节点标签（加左侧留白和收起数量提示）
+    var parentNode = nodesDataSet.get(nodeId);
+    if (parentNode) {
+      var origLabel = parentNode._origLabel || parentNode.label;
+      var pad = '      ';
+      nodesDataSet.update({ id: nodeId, label: pad + origLabel + '  [' + childIds.length + ']', _origLabel: origLabel });
+    }
+    log('收起文档: 隐藏 ' + childIds.length + ' 个子文档, 重定向 ' + edgesToRedirect.length + ' 条边', true);
+
+  } else {
+    // ---- 展开 ----
+    // 1) 恢复被重定向的边
+    var restoreEdgeIds = [];
+    for (var eid in redirectedEdges) {
+      var info = redirectedEdges[eid];
+      // 检查 origFrom 或 origTo 是否属于此父文档的子孙
+      var isRelated = false;
+      for (var ci = 0; ci < childIds.length; ci++) {
+        if (info.origFrom === childIds[ci] || info.origTo === childIds[ci]) { isRelated = true; break; }
+      }
+      if (!isRelated) continue;
+      restoreEdgeIds.push(eid);
+      // 恢复原始 from/to 或重新添加
+      var existing = edgesDataSet.get(eid);
+      if (existing) {
+        edgesDataSet.update({ id: eid, from: info.origFrom, to: info.origTo });
+      } else {
+        // 边已被移除（因重复），需重新添加
+        // 在 allEdges 中找到此边原始数据
+        for (var ai = 0; ai < allEdges.length; ai++) {
+          var ae = allEdges[ai];
+          if (ae.from === info.origFrom && ae.to === info.origTo) {
+            var es = edgeStyle(ae);
+            edgesDataSet.add({ id: eid, from: ae.from, to: ae.to, width: es.width, _origWidth: es.width, color: es.color, dashes: es.dashes, arrows: es.arrows, _label: ae.label, _highlightColor: es._highlightColor || '#9ca3af' });
+            break;
+          }
+        }
+      }
+    }
+    for (var ri = 0; ri < restoreEdgeIds.length; ri++) {
+      delete redirectedEdges[restoreEdgeIds[ri]];
+    }
+
+    // 2) 重新添加子文档节点（使用保存的位置或思维导图排列）
+    var parentPos = network.getPositions([nodeId])[nodeId];
+    var addNodes = [];
+    var visibleChildIds = [];
+    for (var ni = 0; ni < allNodes.length; ni++) {
+      var n = allNodes[ni];
+      for (var ci = 0; ci < childIds.length; ci++) {
+        if (n.id === childIds[ci] && !isNodeCollapsedByParent(n.id)) {
+          var deg = getNodeDegree(n);
+          var s = nodeStyle(n, deg);
+          var nodeData = { id: n.id, label: n.label, _origLabel: n.label, title: n.label + ' (连接: ' + deg + ')', shape: s.shape, size: s.size, color: s.color, font: s.font, borderWidth: s.borderWidth, _type: n.type, _props: n.properties || {} };
+          // 使用保存的位置
+          if (savedChildPositions[n.id]) {
+            nodeData.x = savedChildPositions[n.id].x;
+            nodeData.y = savedChildPositions[n.id].y;
+          }
+          addNodes.push(nodeData);
+          visibleChildIds.push(n.id);
+          break;
+        }
+      }
+    }
+    if (addNodes.length > 0) {
+      nodesDataSet.add(addNodes);
+      // 如果没有保存位置，按思维导图方式排列
+      var needArrange = false;
+      for (var i = 0; i < visibleChildIds.length; i++) {
+        if (!savedChildPositions[visibleChildIds[i]]) { needArrange = true; break; }
+      }
+      if (needArrange && parentPos) {
+        arrangeDocMindMap(nodeId, visibleChildIds);
+      }
+    }
+
+    // 3) 重新添加 doc_has_child 边
+    var addedNodeIds = {};
+    nodesDataSet.forEach(function(n) { addedNodeIds[n.id] = true; });
+    var addEdges = [];
+    for (var ei = 0; ei < allEdges.length; ei++) {
+      var e = allEdges[ei];
+      if (!addedNodeIds[e.from] || !addedNodeIds[e.to]) continue;
+      if (e.label !== 'doc_has_child') continue;
+      var exists = false;
+      edgesDataSet.forEach(function(existing) {
+        if (existing.from === e.from && existing.to === e.to && existing._label === e.label) exists = true;
+      });
+      if (!exists) {
+        var es = edgeStyle(e);
+        addEdges.push({ id: 'e_expand_' + ei, from: e.from, to: e.to, width: es.width, _origWidth: es.width, color: es.color, dashes: es.dashes, arrows: es.arrows, _label: e.label, _highlightColor: es._highlightColor || '#9ca3af' });
+      }
+    }
+    if (addEdges.length > 0) edgesDataSet.add(addEdges);
+
+    // 4) 恢复父节点标签（保留左侧留白）
+    var parentNode = nodesDataSet.get(nodeId);
+    if (parentNode && parentNode._origLabel) {
+      var pad = '      ';
+      nodesDataSet.update({ id: nodeId, label: pad + parentNode._origLabel });
+    }
+    log('展开文档: 显示 ' + addNodes.length + ' 个子文档', true);
+  }
+}
+
+/** 在 afterDrawing 中绘制父文档节点的 +/- 按钮 */
+function drawDocToggleButtons(ctx) {
+  docToggleBtnPositions = {};
+  nodesDataSet.forEach(function(node) {
+    if (node._type !== 'document') return;
+    var allNode = findAllNode(node.id);
+    if (!allNode || !isParentDocNode(allNode)) return;
+    var pos = network.getPositions([node.id])[node.id];
+    if (!pos) return;
+    var isCollapsed = !!collapsedDocNodes[node.id];
+    var btnRadius = 9;
+
+    // 使用 getBoundingBox 获取节点精确边界，按钮放在节点内左侧留白区域中心
+    var bbox = network.getBoundingBox(node.id);
+    var btnX, btnY;
+    if (bbox) {
+      btnX = bbox.left + btnRadius + 1;     // 按钮完全在节点内，左侧留白区域居中
+      btnY = (bbox.top + bbox.bottom) / 2;  // 垂直居中
+    } else {
+      btnX = pos.x;
+      btnY = pos.y;
+    }
+
+    // 记录位置（canvas 坐标）
+    docToggleBtnPositions[node.id] = { x: btnX, y: btnY, r: btnRadius };
+
+    // 绘制圆形按钮背景（蓝色系配色）
+    ctx.beginPath();
+    ctx.arc(btnX, btnY, btnRadius, 0, Math.PI * 2);
+    ctx.fillStyle = isCollapsed ? '#3b82f6' : '#1e40af';  // 收起:亮蓝 展开:深蓝
+    ctx.fill();
+    ctx.strokeStyle = '#ffffff'; // 白色描边
+    ctx.lineWidth = 1.5;
+    ctx.stroke();
+    ctx.closePath();
+
+    // 绘制 + 或 - 符号
+    ctx.fillStyle = '#ffffff';
+    ctx.font = 'bold 13px sans-serif';
+    ctx.textAlign = 'center';
+    ctx.textBaseline = 'middle';
+    ctx.fillText(isCollapsed ? '+' : '−', btnX, btnY + 0.5);
+  });
+}
+
+/** 检查 canvas 坐标是否点击了某个 +/- 按钮，返回 nodeId 或 null */
+function hitTestDocToggleBtn(canvasX, canvasY) {
+  for (var nodeId in docToggleBtnPositions) {
+    var btn = docToggleBtnPositions[nodeId];
+    var dx = canvasX - btn.x;
+    var dy = canvasY - btn.y;
+    if (dx * dx + dy * dy <= (btn.r + 4) * (btn.r + 4)) {
+      return nodeId;
+    }
+  }
+  return null;
+}
+
+/**
+ * 将父文档及其子文档按思维导图方式排列：
+ * 父文档在左，子文档在右侧垂直等距、左边缘对齐
+ */
+function arrangeDocMindMap(parentNodeId, childNodeIds) {
+  if (!network || childNodeIds.length === 0) return;
+  var parentPos = network.getPositions([parentNodeId])[parentNodeId];
+  if (!parentPos) return;
+
+  var parentBbox = network.getBoundingBox(parentNodeId);
+  var parentRight = parentBbox ? parentBbox.right : (parentPos.x + 80);
+  var leftEdgeX = parentRight + 40; // 子节点左边缘的目标 X
+  var vGap = 45;
+  var count = childNodeIds.length;
+  var totalHeight = (count - 1) * vGap;
+  var startY = parentPos.y - totalHeight / 2;
+
+  // 先读取每个子节点当前的宽度（移动前 bbox 有效）
+  var halfLefts = [];
+  for (var i = 0; i < count; i++) {
+    var cid = childNodeIds[i];
+    var bbox = network.getBoundingBox(cid);
+    var cpos = network.getPositions([cid])[cid];
+    if (bbox && cpos) {
+      halfLefts.push(cpos.x - bbox.left); // 节点中心到左边缘的距离（即半宽）
+    } else {
+      halfLefts.push(100); // 默认估算
+    }
+  }
+
+  // 一次性移动所有子节点：左边缘对齐到 leftEdgeX
+  for (var i = 0; i < count; i++) {
+    var cx = leftEdgeX + halfLefts[i];
+    var cy = startY + i * vGap;
+    network.moveNode(childNodeIds[i], cx, cy);
+    savedChildPositions[childNodeIds[i]] = { x: cx, y: cy };
+  }
+}
+
+/** 初始化时将所有父文档-子文档按思维导图方式排列 */
+function arrangeAllDocMindMaps() {
+  // 找到所有父文档节点
+  var parentDocIds = [];
+  for (var i = 0; i < allNodes.length; i++) {
+    var n = allNodes[i];
+    if (isParentDocNode(n)) {
+      // 检查该节点在当前可见节点集中
+      var visible = nodesDataSet.get(n.id);
+      if (visible) parentDocIds.push(n.id);
+    }
+  }
+  for (var pi = 0; pi < parentDocIds.length; pi++) {
+    var pid = parentDocIds[pi];
+    var childIds = getChildDocNodeIds(pid);
+    // 只排列当前可见的子节点
+    var visibleChildIds = [];
+    for (var ci = 0; ci < childIds.length; ci++) {
+      if (nodesDataSet.get(childIds[ci])) visibleChildIds.push(childIds[ci]);
+    }
+    if (visibleChildIds.length > 0) {
+      arrangeDocMindMap(pid, visibleChildIds);
+    }
+  }
+  log('思维导图排列: ' + parentDocIds.length + ' 个父文档已排列', true);
+}
+
 // ========== 呼吸灯动画 (in_progress 主任务) ==========
 var breathAnimId = null;  // requestAnimationFrame ID
 var breathPhase = 0;      // 动画相位 [0, 2π)
@@ -754,14 +1151,18 @@ function nodeStyle(node, degree) {
   return { shape: 'dot', size: ns.size, color: { background: '#6b7280', border: '#4b5563' }, font: { size: ns.fontSize, color: '#9ca3af' } };
 }
 
+// 默认灰色 + 选中时高亮色（per-type）
+var EDGE_GRAY = '#4b5563';
+
 function edgeStyle(edge) {
   var label = edge.label || '';
-  if (label === 'has_main_task') return { width: 2, color: { color: '#6b7280', highlight: '#93c5fd' }, dashes: false, arrows: { to: { enabled: true, scaleFactor: 0.6 } } };
-  if (label === 'has_sub_task') return { width: 1, color: { color: '#4b5563', highlight: '#818cf8' }, dashes: false, arrows: { to: { enabled: true, scaleFactor: 0.4 } } };
-  if (label === 'has_document') return { width: 1, color: { color: '#4b5563', highlight: '#60a5fa' }, dashes: [5, 5], arrows: { to: { enabled: true, scaleFactor: 0.4 } } };
-  if (label === 'module_has_task') return { width: 1.5, color: { color: '#065f46', highlight: '#34d399' }, dashes: [2, 4], arrows: { to: { enabled: true, scaleFactor: 0.5 } } };
-  if (label === 'task_has_doc') return { width: 1.5, color: { color: '#b45309', highlight: '#f59e0b' }, dashes: [4, 3], arrows: { to: { enabled: true, scaleFactor: 0.5 } } };
-  return { width: 1, color: { color: '#374151' }, dashes: false };
+  if (label === 'has_main_task') return { width: 2, color: { color: EDGE_GRAY, highlight: '#93c5fd', hover: '#93c5fd' }, dashes: false, arrows: { to: { enabled: true, scaleFactor: 0.6 } }, _highlightColor: '#93c5fd' };
+  if (label === 'has_sub_task') return { width: 1, color: { color: EDGE_GRAY, highlight: '#818cf8', hover: '#818cf8' }, dashes: false, arrows: { to: { enabled: true, scaleFactor: 0.4 } }, _highlightColor: '#818cf8' };
+  if (label === 'has_document') return { width: 1, color: { color: EDGE_GRAY, highlight: '#60a5fa', hover: '#60a5fa' }, dashes: [5, 5], arrows: { to: { enabled: true, scaleFactor: 0.4 } }, _highlightColor: '#60a5fa' };
+  if (label === 'module_has_task') return { width: 1.5, color: { color: EDGE_GRAY, highlight: '#34d399', hover: '#34d399' }, dashes: [2, 4], arrows: { to: { enabled: true, scaleFactor: 0.5 } }, _highlightColor: '#34d399' };
+  if (label === 'task_has_doc') return { width: 1.5, color: { color: EDGE_GRAY, highlight: '#f59e0b', hover: '#f59e0b' }, dashes: [4, 3], arrows: { to: { enabled: true, scaleFactor: 0.5 } }, _highlightColor: '#f59e0b' };
+  if (label === 'doc_has_child') return { width: 1.5, color: { color: EDGE_GRAY, highlight: '#c084fc', hover: '#c084fc' }, dashes: [6, 3], arrows: { to: { enabled: true, scaleFactor: 0.5 } }, _highlightColor: '#c084fc' };
+  return { width: 1, color: { color: EDGE_GRAY, highlight: '#9ca3af', hover: '#9ca3af' }, dashes: false, _highlightColor: '#9ca3af' };
 }
 
 // ========== Data Loading ==========
@@ -817,12 +1218,26 @@ function renderGraph() {
     }
 
     var visibleNodes = [];
+    var DOC_BTN_PAD = '      ';  // 父文档标签左侧留白，为 +/- 按钮腾出空间
     for (var i = 0; i < allNodes.length; i++) {
       var n = allNodes[i];
       if (hiddenTypes[n.type]) continue;
+      // 跳过被收起的子文档节点
+      if (isNodeCollapsedByParent(n.id)) continue;
       var deg = getNodeDegree(n);
       var s = nodeStyle(n, deg);
-      visibleNodes.push({ id: n.id, label: n.label, title: n.label + ' (连接: ' + deg + ')', shape: s.shape, size: s.size, color: s.color, font: s.font, borderWidth: s.borderWidth, _type: n.type, _props: n.properties || {} });
+      var label = n.label;
+      var isParentDoc = isParentDocNode(n);
+      if (isParentDoc) {
+        // 父文档标签左侧加空格，为按钮腾位
+        if (collapsedDocNodes[n.id]) {
+          var childCount = getAllDescendantDocNodeIds(n.id).length;
+          label = DOC_BTN_PAD + label + '  [' + childCount + ']';
+        } else {
+          label = DOC_BTN_PAD + label;
+        }
+      }
+      visibleNodes.push({ id: n.id, label: label, _origLabel: n.label, title: n.label + ' (连接: ' + deg + ')', shape: s.shape, size: s.size, color: s.color, font: s.font, borderWidth: s.borderWidth, _type: n.type, _props: n.properties || {}, _isParentDoc: isParentDoc });
     }
 
     var visibleIds = {};
@@ -833,7 +1248,7 @@ function renderGraph() {
       var e = allEdges[i];
       if (!visibleIds[e.from] || !visibleIds[e.to]) continue;
       var es = edgeStyle(e);
-      visibleEdges.push({ id: 'e' + i, from: e.from, to: e.to, width: es.width, color: es.color, dashes: es.dashes, arrows: es.arrows, _label: e.label });
+      visibleEdges.push({ id: 'e' + i, from: e.from, to: e.to, width: es.width, _origWidth: es.width, color: es.color, dashes: es.dashes, arrows: es.arrows, _label: e.label, _highlightColor: es._highlightColor || '#9ca3af' });
     }
 
     log('可见节点: ' + visibleNodes.length + ', 可见边: ' + visibleEdges.length, true);
@@ -888,16 +1303,28 @@ function renderGraph() {
       network.setOptions({ physics: { enabled: false } });
       document.getElementById('loading').style.display = 'none';
       log('图谱渲染完成! ' + visibleNodes.length + ' 节点, ' + visibleEdges.length + ' 边', true);
+      // 稳定后将父文档-子文档按思维导图方式整齐排列
+      arrangeAllDocMindMaps();
       network.fit({ animation: { duration: 800, easingFunction: 'easeInOutQuad' } });
     });
 
     network.on('click', function(params) {
+      // 先检查是否点击了 +/- 按钮
+      if (params.pointer && params.pointer.canvas) {
+        var hitNodeId = hitTestDocToggleBtn(params.pointer.canvas.x, params.pointer.canvas.y);
+        if (hitNodeId) {
+          toggleDocNodeExpand(hitNodeId);
+          return; // 消费此次点击，不触发节点选择
+        }
+      }
       if (params.nodes.length > 0) {
         // 直接点击图谱节点 → 清空历史栈，重新开始导航
         panelHistory = [];
         currentPanelNodeId = null;
+        highlightConnectedEdges(params.nodes[0]);
         showPanel(params.nodes[0]);
       } else {
+        resetAllEdgeColors();
         closePanel();
       }
     });
@@ -953,8 +1380,11 @@ function renderGraph() {
       }
     });
 
-    // ========== 呼吸灯: afterDrawing 绘制脉冲光环 ==========
+    // ========== afterDrawing: 呼吸灯 + 文档展开/收起按钮 ==========
     network.on('afterDrawing', function(ctx) {
+      // 绘制父文档的 +/- 按钮
+      drawDocToggleButtons(ctx);
+
       var ids = getInProgressMainTaskIds();
       if (ids.length === 0) return;
 
@@ -1056,6 +1486,7 @@ function navigateToPanel(nodeId) {
     panelHistory.push(currentPanelNodeId);
   }
   network.selectNodes([nodeId]);
+  highlightConnectedEdges(nodeId);
   showPanel(nodeId);
 }
 
@@ -1064,6 +1495,7 @@ function panelGoBack() {
   if (panelHistory.length === 0) return;
   var prevNodeId = panelHistory.pop();
   network.selectNodes([prevNodeId]);
+  highlightConnectedEdges(prevNodeId);
   showPanel(prevNodeId);
 }
 
@@ -1272,6 +1704,7 @@ function closePanel() {
   panelHistory = [];
   currentPanelNodeId = null;
   updateBackButton();
+  resetAllEdgeColors();
 }
 
 // ========== Panel Resize ==========
@@ -1605,6 +2038,7 @@ function closeStatsModal() {
 function statsModalGoToNode(nodeId) {
   if (network && nodesDataSet && nodesDataSet.get(nodeId)) {
     network.selectNodes([nodeId]);
+    highlightConnectedEdges(nodeId);
     network.focus(nodeId, { scale: 1.2, animation: { duration: 400, easingFunction: 'easeInOutQuad' } });
     panelHistory = [];
     currentPanelNodeId = null;
@@ -1744,6 +2178,16 @@ var docsLoaded = false;
 var docsData = [];       // 全部文档列表
 var currentDocKey = '';  // 当前选中文档的 key (section|subSection)
 
+/** 根据 docKey 从 docsData 中查找文档标题 */
+function findDocTitle(docKey) {
+  for (var i = 0; i < docsData.length; i++) {
+    var d = docsData[i];
+    var key = d.section + (d.subSection ? '|' + d.subSection : '');
+    if (key === docKey) return d.title;
+  }
+  return null;
+}
+
 /** Section 类型的中文名称映射 */
 var SECTION_NAMES = {
   overview: '概述', core_concepts: '核心概念', api_design: 'API 设计',
@@ -1774,16 +2218,38 @@ function loadDocsPage() {
   });
 }
 
-/** 将文档列表按 section 分组渲染 */
+/** 获取文档的 key（唯一标识） */
+function docItemKey(item) {
+  return item.section + (item.subSection ? '|' + item.subSection : '');
+}
+
+/** 记录哪些父文档处于折叠状态（key → true 表示折叠） */
+var docsCollapsedState = {};
+
+/** 将文档列表按 section 分组渲染，支持 parentDoc 层级 */
 function renderDocsList(docs) {
   var list = document.getElementById('docsGroupList');
   if (!list) return;
 
-  // 按 section 分组
+  // 建立 parentDoc → children 映射，区分顶级和子文档
+  var childrenMap = {};  // parentDocKey → [child items]
+  var childKeySet = {};  // 属于子文档的 key 集合
+  for (var i = 0; i < docs.length; i++) {
+    var d = docs[i];
+    if (d.parentDoc) {
+      if (!childrenMap[d.parentDoc]) childrenMap[d.parentDoc] = [];
+      childrenMap[d.parentDoc].push(d);
+      childKeySet[docItemKey(d)] = true;
+    }
+  }
+
+  // 按 section 分组（只放顶级文档）
   var groups = {};
   var groupOrder = [];
   for (var i = 0; i < docs.length; i++) {
     var d = docs[i];
+    var key = docItemKey(d);
+    if (childKeySet[key]) continue; // 跳过子文档（由父文档渲染）
     var sec = d.section;
     if (!groups[sec]) {
       groups[sec] = [];
@@ -1804,31 +2270,85 @@ function renderDocsList(docs) {
     var secName = SECTION_NAMES[sec] || sec;
     var secIcon = SECTION_ICONS[sec] || '📄';
 
+    // 计算此分组下文档总数（含子文档）
+    var totalCount = 0;
+    for (var ci = 0; ci < docs.length; ci++) {
+      if (docs[ci].section === sec) totalCount++;
+    }
+
     html += '<div class="docs-group" data-section="' + sec + '">';
     html += '<div class="docs-group-title" onclick="toggleDocsGroup(this)">';
     html += '<span class="docs-group-arrow">▼</span>';
     html += '<span>' + secIcon + ' ' + secName + '</span>';
-    html += '<span class="docs-group-count">' + items.length + '</span>';
+    html += '<span class="docs-group-count">' + totalCount + '</span>';
     html += '</div>';
     html += '<div class="docs-group-items">';
 
     for (var ii = 0; ii < items.length; ii++) {
-      var item = items[ii];
-      var docKey = item.section + (item.subSection ? '|' + item.subSection : '');
-      var isActive = docKey === currentDocKey ? ' active' : '';
-      html += '<div class="docs-item' + isActive + '" data-key="' + escHtml(docKey) + '" onclick="selectDoc(\\x27' + docKey.replace(/'/g, "\\\\'") + '\\x27)">';
-      html += '<span class="docs-item-icon">' + secIcon + '</span>';
-      html += '<span class="docs-item-text" title="' + escHtml(item.title) + '">' + escHtml(item.title) + '</span>';
-      if (item.subSection) {
-        html += '<span class="docs-item-sub">' + escHtml(item.subSection) + '</span>';
-      }
-      html += '</div>';
+      html += renderDocItemWithChildren(items[ii], childrenMap, secIcon);
     }
 
     html += '</div></div>';
   }
 
   list.innerHTML = html;
+}
+
+/** 递归渲染文档项及其子文档 */
+function renderDocItemWithChildren(item, childrenMap, secIcon) {
+  var docKey = docItemKey(item);
+  var isActive = docKey === currentDocKey ? ' active' : '';
+  var children = childrenMap[docKey] || [];
+  var hasChildren = children.length > 0;
+  var isCollapsed = docsCollapsedState[docKey] === true;
+
+  var html = '<div class="docs-item-wrapper">';
+
+  // 文档项本身
+  html += '<div class="docs-item' + isActive + '" data-key="' + escHtml(docKey) + '" onclick="selectDoc(\\x27' + docKey.replace(/'/g, "\\\\'") + '\\x27)">';
+
+  if (hasChildren) {
+    var toggleIcon = isCollapsed ? '+' : '−';
+    html += '<span class="docs-item-toggle" onclick="event.stopPropagation();toggleDocChildren(\\x27' + docKey.replace(/'/g, "\\\\'") + '\\x27)" title="' + (isCollapsed ? '展开子文档' : '收起子文档') + '">' + toggleIcon + '</span>';
+  }
+
+  html += '<span class="docs-item-icon">' + secIcon + '</span>';
+  html += '<span class="docs-item-text" title="' + escHtml(item.title) + '">' + escHtml(item.title) + '</span>';
+  if (hasChildren) {
+    html += '<span class="docs-item-sub" style="color:#818cf8;">' + children.length + ' 子文档</span>';
+  } else if (item.subSection) {
+    html += '<span class="docs-item-sub">' + escHtml(item.subSection) + '</span>';
+  }
+  html += '</div>';
+
+  // 子文档列表
+  if (hasChildren) {
+    html += '<div class="docs-children' + (isCollapsed ? ' collapsed' : '') + '" data-parent="' + escHtml(docKey) + '">';
+    for (var ci = 0; ci < children.length; ci++) {
+      html += renderDocItemWithChildren(children[ci], childrenMap, secIcon);
+    }
+    html += '</div>';
+  }
+
+  html += '</div>';
+  return html;
+}
+
+/** 展开/折叠子文档 */
+function toggleDocChildren(docKey) {
+  docsCollapsedState[docKey] = !docsCollapsedState[docKey];
+  var container = document.querySelector('.docs-children[data-parent="' + docKey + '"]');
+  if (!container) return;
+  container.classList.toggle('collapsed');
+  // 更新切换按钮图标
+  var wrapper = container.previousElementSibling;
+  if (wrapper) {
+    var toggle = wrapper.querySelector('.docs-item-toggle');
+    if (toggle) {
+      toggle.textContent = docsCollapsedState[docKey] ? '+' : '−';
+      toggle.title = docsCollapsedState[docKey] ? '展开子文档' : '收起子文档';
+    }
+  }
 }
 
 /** 展开/折叠文档分组 */
@@ -1924,6 +2444,35 @@ function renderDocContent(doc, section, subSection) {
     contentHtml = renderMarkdown(doc.content);
   } else {
     contentHtml = '<div style="text-align:center;padding:40px;color:#6b7280;">文档内容为空</div>';
+  }
+
+  // 父文档链接
+  if (doc.parentDoc) {
+    var parentTitle = findDocTitle(doc.parentDoc);
+    contentHtml += '<div class="docs-related" style="margin-top: 12px;">';
+    contentHtml += '<div class="docs-related-title">⬆️ 父文档</div>';
+    contentHtml += '<div class="docs-related-item" style="cursor:pointer;" onclick="selectDoc(\\x27' + doc.parentDoc.replace(/'/g, "\\\\'") + '\\x27)">';
+    contentHtml += '<span class="rel-icon" style="background:#1e3a5f;color:#93c5fd;">📄</span>';
+    contentHtml += '<span style="flex:1;color:#818cf8;">' + escHtml(parentTitle || doc.parentDoc) + '</span>';
+    contentHtml += '<span style="font-size:10px;color:#6b7280;font-family:monospace;">' + escHtml(doc.parentDoc) + '</span>';
+    contentHtml += '</div></div>';
+  }
+
+  // 子文档列表
+  var childDocs = doc.childDocs || [];
+  if (childDocs.length > 0) {
+    contentHtml += '<div class="docs-related" style="margin-top: 12px;">';
+    contentHtml += '<div class="docs-related-title">⬇️ 子文档 (' + childDocs.length + ')</div>';
+    for (var ci = 0; ci < childDocs.length; ci++) {
+      var childKey = childDocs[ci];
+      var childTitle = findDocTitle(childKey);
+      contentHtml += '<div class="docs-related-item" style="cursor:pointer;" onclick="selectDoc(\\x27' + childKey.replace(/'/g, "\\\\'") + '\\x27)">';
+      contentHtml += '<span class="rel-icon" style="background:#1e1b4b;color:#c084fc;">📄</span>';
+      contentHtml += '<span style="flex:1;color:#c084fc;">' + escHtml(childTitle || childKey) + '</span>';
+      contentHtml += '<span style="font-size:10px;color:#6b7280;font-family:monospace;">' + escHtml(childKey) + '</span>';
+      contentHtml += '</div>';
+    }
+    contentHtml += '</div>';
   }
 
   // 关联任务

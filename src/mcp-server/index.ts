@@ -136,6 +136,10 @@ const TOOLS = [
           items: { type: 'string' },
           description: 'Optional: Associate with main tasks by taskId (e.g., ["phase-1", "phase-2"])\n可选：通过 taskId 关联主任务',
         },
+        parentDoc: {
+          type: 'string',
+          description: 'Optional: Parent document identifier (format: "section" or "section|subSection", e.g., "overview", "technical_notes|security"). Establishes document hierarchy.\n可选：父文档标识（格式："section" 或 "section|subSection"）。建立文档层级关系。',
+        },
       },
       required: ['projectName', 'section', 'title', 'content'],
     },
@@ -730,6 +734,8 @@ interface ToolArgs {
   minScore?: number;
   /** 任务排序序号（越小越靠前） */
   order?: number;
+  /** devplan_save_section: 父文档标识 */
+  parentDoc?: string;
 }
 
 /**
@@ -814,6 +820,7 @@ async function handleToolCall(name: string, args: ToolArgs): Promise<string> {
         subSection: args.subSection,
         moduleId: args.moduleId,
         relatedTaskIds: args.relatedTaskIds,
+        parentDoc: args.parentDoc,
       });
 
       return JSON.stringify({
@@ -864,6 +871,7 @@ async function handleToolCall(name: string, args: ToolArgs): Promise<string> {
           subSection: s.subSection || null,
           title: s.title,
           version: s.version,
+          parentDoc: s.parentDoc || null,
           contentPreview: s.content.slice(0, 200) + (s.content.length > 200 ? '...' : ''),
           updatedAt: s.updatedAt,
         })),

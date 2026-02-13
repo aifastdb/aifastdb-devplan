@@ -30,6 +30,7 @@ import type {
   DevPlanSection,
   DevPlanDocInput,
   DevPlanDoc,
+  DevPlanDocTree,
   MainTaskInput,
   MainTask,
   SubTaskInput,
@@ -75,6 +76,7 @@ const RT = {
   MODULE_HAS_TASK: 'module_has_task',
   MODULE_HAS_DOC: 'module_has_doc',
   TASK_HAS_DOC: 'task_has_doc',
+  DOC_HAS_CHILD: 'doc_has_child',
 } as const;
 
 // ============================================================================
@@ -285,6 +287,21 @@ export class DevPlanGraphStore implements IDevPlanStore {
 
   private entityToDevPlanDoc(e: Entity): DevPlanDoc {
     const p = e.properties as any;
+
+    // 获取 parentDoc：从属性读取
+    const parentDoc = p.parentDoc || undefined;
+
+    // 获取 childDocs：通过 DOC_HAS_CHILD 出向关系查询
+    const childDocRels = this.getOutRelations(e.id, RT.DOC_HAS_CHILD);
+    const childDocs = childDocRels.length > 0
+      ? childDocRels.map((rel) => {
+          const childEntity = this.graph.getEntity(rel.target);
+          if (!childEntity) return undefined;
+          const cp = childEntity.properties as any;
+          return sectionKey(cp.section, cp.subSection || undefined);
+        }).filter((k): k is string => k !== undefined)
+      : undefined;
+
     return {
       id: e.id,
       projectName: this.projectName,
@@ -296,6 +313,8 @@ export class DevPlanGraphStore implements IDevPlanStore {
       relatedSections: p.relatedSections || [],
       moduleId: p.moduleId || undefined,
       relatedTaskIds: p.relatedTaskIds || [],
+      parentDoc,
+      childDocs,
       createdAt: p.createdAt || e.created_at,
       updatedAt: p.updatedAt || e.updated_at,
     };
@@ -387,6 +406,9 @@ export class DevPlanGraphStore implements IDevPlanStore {
     const version = input.version || '1.0.0';
     const finalModuleId = input.moduleId || existing?.moduleId;
 
+    // 确定最终的 parentDoc 值（显式传入 > 已有值）
+    const finalParentDoc = input.parentDoc !== undefined ? input.parentDoc : existing?.parentDoc;
+
     if (existing) {
       // 更新已有文档
       const finalRelatedTaskIds = input.relatedTaskIds || existing.relatedTaskIds || [];
@@ -399,6 +421,7 @@ export class DevPlanGraphStore implements IDevPlanStore {
           relatedSections: input.relatedSections || [],
           relatedTaskIds: finalRelatedTaskIds,
           moduleId: finalModuleId || null,
+          parentDoc: finalParentDoc || null,
           updatedAt: now,
         },
       });
@@ -407,6 +430,9 @@ export class DevPlanGraphStore implements IDevPlanStore {
       if (finalModuleId && finalModuleId !== existing.moduleId) {
         this.updateModuleDocRelation(existing.id, existing.moduleId, finalModuleId);
       }
+
+      // 更新 parentDoc 关系（DOC_HAS_CHILD）
+      this.updateParentDocRelation(existing.id, existing.parentDoc, finalParentDoc);
 
       // 更新 task -> doc 关系
       if (finalRelatedTaskIds.length) {
@@ -442,12 +468,23 @@ export class DevPlanGraphStore implements IDevPlanStore {
       relatedSections: input.relatedSections || [],
       relatedTaskIds: input.relatedTaskIds || [],
       moduleId: finalModuleId || null,
+      parentDoc: finalParentDoc || null,
       createdAt: now,
       updatedAt: now,
     });
 
-    // 创建 project -> doc 关系
-    this.graph.putRelation(this.getProjectId(), entity.id, RT.HAS_DOCUMENT);
+    // 子文档不直接连接项目节点，仅通过 doc_has_child 连接父文档
+    if (finalParentDoc) {
+      // 有 parentDoc → 创建 DOC_HAS_CHILD 关系（parent -> child），不创建 project -> doc
+      const [parentSection, parentSubSection] = finalParentDoc.split('|');
+      const parentEntity = this.findDocEntityBySection(parentSection, parentSubSection || undefined);
+      if (parentEntity) {
+        this.graph.putRelation(parentEntity.id, entity.id, RT.DOC_HAS_CHILD);
+      }
+    } else {
+      // 无 parentDoc → 创建 project -> doc 关系（顶级文档）
+      this.graph.putRelation(this.getProjectId(), entity.id, RT.HAS_DOCUMENT);
+    }
 
     // 如果有模块关联，创建 module -> doc 关系
     if (finalModuleId) {
@@ -626,6 +663,25 @@ export class DevPlanGraphStore implements IDevPlanStore {
   deleteSection(section: DevPlanSection, subSection?: string): boolean {
     const existing = this.getSection(section, subSection);
     if (!existing) return false;
+
+    // 断开 DOC_HAS_CHILD 入向关系（从父文档指向本文档的）
+    const parentRels = this.getInRelations(existing.id, RT.DOC_HAS_CHILD);
+    for (const rel of parentRels) {
+      this.graph.deleteRelation(rel.id);
+    }
+
+    // 断开 DOC_HAS_CHILD 出向关系（本文档指向子文档的），子文档的 parentDoc 属性清空
+    const childRels = this.getOutRelations(existing.id, RT.DOC_HAS_CHILD);
+    for (const rel of childRels) {
+      this.graph.deleteRelation(rel.id);
+      // 清除子文档的 parentDoc 属性
+      const childEntity = this.graph.getEntity(rel.target);
+      if (childEntity) {
+        this.graph.updateEntity(childEntity.id, {
+          properties: { parentDoc: null },
+        });
+      }
+    }
 
     // 语义搜索：删除文档对应的向量索引
     if (this.semanticSearchReady) {
@@ -1325,6 +1381,49 @@ export class DevPlanGraphStore implements IDevPlanStore {
   }
 
   // ==========================================================================
+  // Document Hierarchy (文档层级关系)
+  // ==========================================================================
+
+  /**
+   * 获取文档的直接子文档列表（通过 DOC_HAS_CHILD 出向关系）
+   */
+  getChildDocs(section: DevPlanSection, subSection?: string): DevPlanDoc[] {
+    const docEntity = this.findDocEntityBySection(section, subSection);
+    if (!docEntity) return [];
+
+    const rels = this.getOutRelations(docEntity.id, RT.DOC_HAS_CHILD);
+    const children: DevPlanDoc[] = [];
+    for (const rel of rels) {
+      const childEntity = this.graph.getEntity(rel.target);
+      if (childEntity) {
+        children.push(this.entityToDevPlanDoc(childEntity));
+      }
+    }
+    return children;
+  }
+
+  /**
+   * 获取文档树（递归，含所有后代文档）
+   */
+  getDocTree(section: DevPlanSection, subSection?: string): DevPlanDocTree | null {
+    const doc = this.getSection(section, subSection);
+    if (!doc) return null;
+
+    return this.buildDocTree(doc);
+  }
+
+  /**
+   * 递归构建文档树
+   */
+  private buildDocTree(doc: DevPlanDoc): DevPlanDocTree {
+    const children = this.getChildDocs(doc.section, doc.subSection);
+    return {
+      doc,
+      children: children.map((child) => this.buildDocTree(child)),
+    };
+  }
+
+  // ==========================================================================
   // Utility
   // ==========================================================================
 
@@ -1482,13 +1581,34 @@ export class DevPlanGraphStore implements IDevPlanStore {
             section: doc.section,
             subSection: doc.subSection,
             version: doc.version,
+            parentDoc: doc.parentDoc || null,
+            childDocs: doc.childDocs || [],
           },
         });
-        edges.push({
-          from: this.getProjectId(),
-          to: doc.id,
-          label: RT.HAS_DOCUMENT,
-        });
+
+        // 子文档不连接项目节点，仅通过 doc_has_child 连接父文档
+        if (!doc.parentDoc) {
+          edges.push({
+            from: this.getProjectId(),
+            to: doc.id,
+            label: RT.HAS_DOCUMENT,
+          });
+        }
+
+        // doc_has_child 关系（文档 → 子文档）
+        if (doc.childDocs?.length) {
+          const docEntity = this.findDocEntityBySection(doc.section, doc.subSection);
+          if (docEntity) {
+            const childRels = this.getOutRelations(docEntity.id, RT.DOC_HAS_CHILD);
+            for (const rel of childRels) {
+              edges.push({
+                from: doc.id,
+                to: rel.target,
+                label: RT.DOC_HAS_CHILD,
+              });
+            }
+          }
+        }
       }
     }
 
@@ -1685,6 +1805,46 @@ export class DevPlanGraphStore implements IDevPlanStore {
       if (newMod) {
         this.graph.putRelation(newMod.id, taskEntityId, RT.MODULE_HAS_TASK);
       }
+    }
+  }
+
+  /**
+   * 更新文档的父文档关系（DOC_HAS_CHILD）
+   *
+   * 移除旧的父文档关系，建立新的父文档关系。
+   */
+  private updateParentDocRelation(docEntityId: string, oldParentDoc?: string, newParentDoc?: string): void {
+    const projectId = this.getProjectId();
+
+    // 移除旧的父文档关系（入向 DOC_HAS_CHILD）
+    if (oldParentDoc) {
+      const [oldSection, oldSub] = oldParentDoc.split('|');
+      const oldParentEntity = this.findDocEntityBySection(oldSection, oldSub || undefined);
+      if (oldParentEntity) {
+        const rel = this.graph.getRelationBetween(oldParentEntity.id, docEntityId);
+        if (rel) this.graph.deleteRelation(rel.id);
+      }
+    }
+
+    // 建立新的父文档关系
+    if (newParentDoc) {
+      const [newSection, newSub] = newParentDoc.split('|');
+      const newParentEntity = this.findDocEntityBySection(newSection, newSub || undefined);
+      if (newParentEntity) {
+        this.graph.putRelation(newParentEntity.id, docEntityId, RT.DOC_HAS_CHILD);
+      }
+      // 从顶级变为子文档 → 移除 project -> doc 的 has_document 关系
+      if (!oldParentDoc) {
+        const hasDocRels = this.getInRelations(docEntityId, RT.HAS_DOCUMENT);
+        for (const rel of hasDocRels) {
+          if (rel.source === projectId) {
+            this.graph.deleteRelation(rel.id);
+          }
+        }
+      }
+    } else if (oldParentDoc && !newParentDoc) {
+      // 从子文档变为顶级 → 添加 project -> doc 关系
+      this.graph.putRelation(projectId, docEntityId, RT.HAS_DOCUMENT);
     }
   }
 

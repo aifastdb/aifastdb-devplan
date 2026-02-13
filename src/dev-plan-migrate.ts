@@ -236,6 +236,7 @@ export function migrateEngine(
         subSection: doc.subSection,
         relatedSections: doc.relatedSections,
         moduleId: doc.moduleId,
+        parentDoc: doc.parentDoc,
       });
     } catch (e) {
       errors.push(`Failed to migrate document "${doc.section}${doc.subSection ? '/' + doc.subSection : ''}": ${e instanceof Error ? e.message : String(e)}`);

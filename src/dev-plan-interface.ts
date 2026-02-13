@@ -10,6 +10,7 @@ import type {
   DevPlanSection,
   DevPlanDocInput,
   DevPlanDoc,
+  DevPlanDocTree,
   MainTaskInput,
   MainTask,
   SubTaskInput,
@@ -264,6 +265,25 @@ export interface IDevPlanStore {
     includeNodeDegree?: boolean;
     enableBackendDegreeFallback?: boolean;
   }): DevPlanExportedGraph | null;
+
+  // ==========================================================================
+  // Document Hierarchy (文档层级关系)
+  // ==========================================================================
+
+  /**
+   * 获取文档的子文档列表
+   *
+   * 返回指定文档的直接子文档（通过 parentDoc 字段关联）。
+   */
+  getChildDocs?(section: DevPlanSection, subSection?: string): DevPlanDoc[];
+
+  /**
+   * 获取文档树（递归，含所有后代文档）
+   *
+   * 返回以指定文档为根的完整文档树结构。
+   * 仅 DevPlanGraphStore 支持完整的递归查询。
+   */
+  getDocTree?(section: DevPlanSection, subSection?: string): DevPlanDocTree | null;
 
   // ==========================================================================
   // Semantic Search (仅 DevPlanGraphStore + enableSemanticSearch 支持)

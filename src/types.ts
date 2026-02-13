@@ -68,6 +68,8 @@ export interface DevPlanDocInput {
   moduleId?: string;
   /** 关联的主任务 ID 列表 */
   relatedTaskIds?: string[];
+  /** 父文档标识（section 或 section|subSection 格式，可选） */
+  parentDoc?: string;
 }
 
 /**
@@ -94,6 +96,10 @@ export interface DevPlanDoc {
   moduleId?: string;
   /** 关联的主任务 ID 列表 */
   relatedTaskIds?: string[];
+  /** 父文档标识（section 或 section|subSection 格式） */
+  parentDoc?: string;
+  /** 子文档标识列表（自动计算，仅 Graph 引擎支持） */
+  childDocs?: string[];
   /** 创建时间 */
   createdAt: number;
   /** 更新时间 */
@@ -436,6 +442,20 @@ export interface RebuildIndexResult {
   durationMs: number;
   /** 失败的文档 ID（如果有） */
   failedDocIds?: string[];
+}
+
+// ============================================================================
+// Document Tree Types
+// ============================================================================
+
+/**
+ * 文档树节点 — 递归结构，包含文档及其所有子文档
+ */
+export interface DevPlanDocTree {
+  /** 当前文档 */
+  doc: DevPlanDoc;
+  /** 子文档树 */
+  children: DevPlanDocTree[];
 }
 
 // ============================================================================

@@ -119,6 +119,7 @@ export class DevPlanDocumentStore implements IDevPlanStore {
 
     const finalModuleId = input.moduleId || existing?.moduleId;
     const finalRelatedTaskIds = input.relatedTaskIds || existing?.relatedTaskIds || [];
+    const finalParentDoc = input.parentDoc !== undefined ? input.parentDoc : existing?.parentDoc;
 
     const tags = [
       `plan:${this.projectName}`,
@@ -143,6 +144,7 @@ export class DevPlanDocumentStore implements IDevPlanStore {
         relatedSections: input.relatedSections || [],
         relatedTaskIds: finalRelatedTaskIds,
         moduleId: finalModuleId || null,
+        parentDoc: finalParentDoc || null,
         createdAt: existing?.createdAt || now,
         updatedAt: now,
       },
@@ -1461,6 +1463,7 @@ export class DevPlanDocumentStore implements IDevPlanStore {
     const subSection = subTag?.replace('sub:', '');
     const moduleTag = (doc.tags as string[]).find((t: string) => t.startsWith('module:'));
     const moduleId = moduleTag?.replace('module:', '') || undefined;
+    const parentDoc = doc.metadata?.parentDoc || undefined;
 
     return {
       id: doc.id,
@@ -1473,6 +1476,7 @@ export class DevPlanDocumentStore implements IDevPlanStore {
       relatedSections: doc.metadata?.relatedSections || [],
       relatedTaskIds: doc.metadata?.relatedTaskIds || [],
       moduleId,
+      parentDoc,
       createdAt: doc.metadata?.createdAt || doc.createdAt,
       updatedAt: doc.metadata?.updatedAt || doc.createdAt,
     };
@@ -1875,6 +1879,20 @@ export class DevPlanDocumentStore implements IDevPlanStore {
     const filled = Math.round((percent / 100) * total);
     const empty = total - filled;
     return `[${'█'.repeat(filled)}${'░'.repeat(empty)}]`;
+  }
+
+  // ==========================================================================
+  // Document Hierarchy (文档层级关系 — 基于 metadata 扫描)
+  // ==========================================================================
+
+  /**
+   * 获取文档的直接子文档列表
+   *
+   * Document 引擎通过扫描所有文档的 parentDoc 属性实现。
+   */
+  getChildDocs(section: DevPlanSection, subSection?: string): DevPlanDoc[] {
+    const parentKey = subSection ? `${section}|${subSection}` : section;
+    return this.listSections().filter((doc) => doc.parentDoc === parentKey);
   }
 
   // ==========================================================================

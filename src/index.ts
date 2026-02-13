@@ -49,6 +49,7 @@ export {
   type TaskPriority,
   type DevPlanDocInput,
   type DevPlanDoc,
+  type DevPlanDocTree,
   type MainTaskInput,
   type MainTask,
   type SubTaskInput,
