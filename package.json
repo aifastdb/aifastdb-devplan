@@ -1,6 +1,6 @@
 {
   "name": "aifastdb-devplan",
-  "version": "1.2.7",
+  "version": "1.3.9",
   "description": "DevPlan — AI-powered development plan management MCP server, powered by aifastdb",
   "main": "dist/index.js",
   "types": "dist/index.d.ts",
@@ -23,7 +23,7 @@
   },
   "dependencies": {
     "@modelcontextprotocol/sdk": "^1.0.0",
-    "aifastdb": "^2.3.8"
+    "aifastdb": "^2.5.1"
   },
   "devDependencies": {
     "@types/node": "^20.11.0",

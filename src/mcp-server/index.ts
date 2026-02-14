@@ -615,7 +615,7 @@ const TOOLS = [
   },
   {
     name: 'devplan_start_phase',
-    description: 'Start a development phase. Marks the main task as in_progress and returns the main task info along with all sub-tasks (with status). Output format is designed for direct Cursor TodoList creation.\n启动一个开发阶段。将主任务标记为 in_progress，返回主任务信息和全部子任务列表（含状态）。输出格式适合直接创建 Cursor TodoList。',
+    description: 'Start a development phase. Marks the main task as in_progress and returns the main task info along with all sub-tasks (with status). Output format is designed for direct Cursor TodoList creation.\n启动一个开发阶段。将主任务标记为 in_progress，返回主任务信息和全部子任务列表（含状态）。输出格式适合直接创建 Cursor TodoList。\n\n**IMPORTANT — Trigger phrases / 触发词识别**:\nWhen the user says ANY of the following patterns, this tool MUST be called FIRST before doing anything else:\n- "开始 phase-X" / "开始 phase-X 的任务" / "请开始 phase-X 的任务"\n- "开始开发 phase-X" / "开始开发 phase-X 的任务"\n- "继续 phase-X" / "继续开发 phase-X" / "继续开发 phase-X 的任务"\n- "恢复 phase-X" / "恢复 phase-X 开发"\n- "启动 phase-X" / "启动 phase-X 开发"\n- "start phase-X" / "resume phase-X"\n- Any variant containing "phase-" followed by a number combined with 开始/继续/恢复/启动/start/resume\nThis tool is idempotent: first call = start (pending→in_progress), subsequent calls = resume (preserves completed sub-tasks).',
     inputSchema: {
       type: 'object' as const,
       properties: {
@@ -1030,10 +1030,39 @@ async function handleToolCall(name: string, args: ToolArgs): Promise<string> {
       const plan = getDevPlan(args.projectName);
       const taskType = args.taskType || 'sub';
 
+      /**
+       * 查找下一个待处理的主任务（按 order 排序）
+       * 优先返回 in_progress 的，其次是 pending 的
+       */
+      const findNextPendingPhase = () => {
+        const allMainTasks = plan.listMainTasks();
+        // 优先找 in_progress 的主任务
+        const inProgress = allMainTasks.find(t => t.status === 'in_progress');
+        if (inProgress) {
+          return { taskId: inProgress.taskId, title: inProgress.title, status: inProgress.status, priority: inProgress.priority };
+        }
+        // 其次找 pending 的主任务（已按 order 排序）
+        const pending = allMainTasks.find(t => t.status === 'pending');
+        if (pending) {
+          return { taskId: pending.taskId, title: pending.title, status: pending.status, priority: pending.priority };
+        }
+        return null;
+      };
+
+      /**
+       * 统计剩余未完成的主任务数量
+       */
+      const countRemainingPhases = () => {
+        const allMainTasks = plan.listMainTasks();
+        return allMainTasks.filter(t => t.status === 'pending' || t.status === 'in_progress').length;
+      };
+
       try {
         if (taskType === 'main') {
           const mainTask = plan.completeMainTask(args.taskId);
-          return JSON.stringify({
+          const nextPhase = findNextPendingPhase();
+          const remainingCount = countRemainingPhases();
+          const response: Record<string, unknown> = {
             success: true,
             taskType: 'main',
             mainTask: {
@@ -1044,10 +1073,19 @@ async function handleToolCall(name: string, args: ToolArgs): Promise<string> {
               totalSubtasks: mainTask.totalSubtasks,
               completedSubtasks: mainTask.completedSubtasks,
             },
-          });
+          };
+          if (nextPhase) {
+            response.nextPhase = nextPhase;
+            response.remainingPhases = remainingCount;
+            response.hint = `🎉 阶段 "${mainTask.title}" 已完成！还有 ${remainingCount} 个待处理阶段。下一个：${nextPhase.taskId} "${nextPhase.title}"。是否继续？（说"开始 ${nextPhase.taskId}"即可启动）`;
+          } else {
+            response.remainingPhases = 0;
+            response.hint = `🎉🎉🎉 所有阶段全部完成！项目开发计划已圆满结束。`;
+          }
+          return JSON.stringify(response);
         } else {
           const result = plan.completeSubTask(args.taskId);
-          return JSON.stringify({
+          const response: Record<string, unknown> = {
             success: true,
             taskType: 'sub',
             subTask: {
@@ -1066,7 +1104,21 @@ async function handleToolCall(name: string, args: ToolArgs): Promise<string> {
             },
             mainTaskCompleted: result.mainTaskCompleted,
             completedAtCommit: result.completedAtCommit || null,
-          });
+          };
+          // 当主任务也随之完成时，查询下一个待处理阶段
+          if (result.mainTaskCompleted) {
+            const nextPhase = findNextPendingPhase();
+            const remainingCount = countRemainingPhases();
+            if (nextPhase) {
+              response.nextPhase = nextPhase;
+              response.remainingPhases = remainingCount;
+              response.hint = `🎉 阶段 "${result.mainTask.title}" 全部完成！还有 ${remainingCount} 个待处理阶段。下一个：${nextPhase.taskId} "${nextPhase.title}"。是否继续？（说"开始 ${nextPhase.taskId}"即可启动）`;
+            } else {
+              response.remainingPhases = 0;
+              response.hint = `🎉🎉🎉 所有阶段全部完成！项目开发计划已圆满结束。`;
+            }
+          }
+          return JSON.stringify(response);
         }
       } catch (err) {
         throw new McpError(ErrorCode.InvalidParams,

@@ -38,7 +38,9 @@ v3.0.0 (2026-02-09)  图谱可视化服务 — vis-network 交互式图谱
   ↓
 v3.x   (2026-02-09)  统计仪表盘、侧边栏导航、UI 增强
   ↓
-v4.0.0 (2026-02-13)  任务排序 + 语义搜索 — order 字段、VibeSynapse 集成（当前版本）
+v4.0.0 (2026-02-13)  任务排序 + 语义搜索 — order 字段、VibeSynapse 集成
+  ↓
+v4.2.0 (2026-02-13)  文档列表弹层 + 统计栏增强 — 层级展示、/api/docs 端点（当前版本）
 ```
 
 ### 1.3 项目结构
@@ -625,6 +627,7 @@ HTTP Server (Node.js http 模块)
   ├── GET /api/progress → getProgress() → JSON
   ├── GET /api/stats    → 详细统计数据 → JSON
   ├── GET /api/doc      → 文档内容查询 → JSON
+  ├── GET /api/docs     → 文档列表（含层级信息） → JSON
   └── GET /favicon.ico  → 204 No Content
 ```
 
@@ -639,6 +642,7 @@ HTTP Server (Node.js http 模块)
 | `/api/progress` | GET | application/json | 项目进度统计（`ProjectProgress` 结构） |
 | `/api/stats` | GET | application/json | 详细统计数据（含按优先级统计、按状态分组的阶段列表、各阶段子任务详情、模块统计、文档分布） |
 | `/api/doc` | GET | application/json | 文档内容查询，参数 `?section=xxx&subSection=yyy` |
+| `/api/docs` | GET | application/json | 文档列表（不含内容），返回 `{ docs: [...] }`，含 `parentDoc`/`childDocs` 层级信息 |
 | `/favicon.ico` | GET | 204 | 避免浏览器 404 |
 
 **`/api/stats` 返回结构**（在 `/api/progress` 基础上扩展）：
@@ -732,7 +736,8 @@ HTTP Server (Node.js http 模块)
 | **呼吸灯动画** | `in_progress` 状态的主任务节点带有 Canvas 脉冲光环效果：外圈蓝色描边环周期性扩张/收缩并渐隐，内圈径向渐变柔光随节奏明灭；通过 `requestAnimationFrame` + `afterDrawing` 事件驱动，无 in_progress 节点时自动停止以节省性能 |
 | **物理引擎** | forceAtlas2Based 力导向布局，稳定化后自动关闭 |
 | **呼吸灯动画** | 状态为 `in_progress` 的主任务节点带有脉冲呼吸光环效果（外圈蓝色脉冲环 + 内圈径向辉光），通过 Canvas `afterDrawing` 事件 + `requestAnimationFrame` 实现平滑动画，无进行中任务时自动停止以节省性能 |
-| **状态栏** | 顶部透明状态栏显示模块数、主任务数、子任务数、完成率进度条 |
+| **状态栏** | 顶部透明状态栏显示模块数、主任务数、子任务数、**文档数**、完成率进度条；所有统计项均可点击打开对应的列表弹层 |
+| **文档列表弹层** | 点击顶部状态栏「文档」数字，在左侧弹出文档列表面板（与模块/任务弹层复用同一 UI 框架）；文档按层级结构展示（支持 `parentDoc` 父子关系），主文档左侧显示展开/折叠按钮（`+`/`−`），点击可展开显示子文档；点击文档标题直接聚焦到图谱中对应的文档节点并打开右侧详情面板（复用已有的节点详情面板，避免重复弹层） |
 | **图例** | 页面底部显示节点类型和边类型的图例，与筛选控件合并 |
 
 #### 7.3.4 手动刷新
@@ -1107,7 +1112,7 @@ DevPlan 设计了三层互补的信息架构，解决大型项目文档的 AI �
 
 - **统计仪表盘页面**：总进度环、概览卡片、优先级统计、可展开里程碑（含子任务详情）、模块统计、文档分布
 - **侧边栏导航**：可折叠侧边栏（48px/200px）、5 个菜单项、localStorage 持久化、品牌 Logo 渐变文字
-- **新增 API 端点**：`/api/stats`（详细统计数据）、`/api/doc`（文档内容查询）
+- **新增 API 端点**：`/api/stats`（详细统计数据）、`/api/doc`（文档内容查询）、`/api/docs`（文档列表，含层级信息）
 - **每次 API 请求创建新 store 实例**：确保跨进程数据实时同步
 - **完成时间戳显示**：里程碑和图谱详情面板中显示主任务/子任务的完成时间
 - **智能日期格式**：当年内省略年份（`MM-DD HH:mm`），跨年显示完整日期
@@ -1239,6 +1244,28 @@ DevPlan 设计了三层互补的信息架构，解决大型项目文档的 AI �
 - **IDevPlanStore 接口新增可选方法**：`getChildDocs()`、`getDocTree()`
 - **数据迁移**：`migrateEngine()` 自动迁移 `parentDoc` 字段
 - 工具数量保持 23 个不变（通过现有工具的参数扩展实现）
+
+### v4.2.0 — 文档列表弹层与统计栏增强 (2026-02-13)
+
+- **顶部统计栏新增文档数量**：
+  - 状态栏新增可点击的「文档」统计项（绿色数字），与模块/主任务/子任务统一交互风格
+  - 文档数量从图谱节点中实时统计（`type === 'document'`）
+
+- **文档列表弹层（层级展示）**：
+  - 点击顶部「文档」数字打开左侧文档列表弹层，通过 `/api/docs` 获取文档元信息
+  - 文档按 `parentDoc` / `childDocs` 父子关系构建层级树结构
+  - 顶层文档按 `section` 和 `title` 排序，子文档跟随父文档嵌套缩进展示
+  - 有子文档的条目左侧显示展开/折叠按钮（`+`/`−`），可递归展开多级子文档
+  - 折叠状态通过 `docModalCollapsedState` 全局对象持久化（会话内）
+
+- **复用已有详情面板**：
+  - 点击文档列表中的标题，直接调用 `statsModalGoToNode()` 聚焦图谱节点并打开右侧详情面板
+  - 复用已有的节点详情面板显示文档内容、元信息、关联任务等，避免重复弹层
+
+- **新增 API 端点 `/api/docs`**：
+  - 返回所有文档片段的元信息列表（不含 `content` 内容，减少传输量）
+  - 每条记录包含 `section`、`subSection`、`title`、`version`、`moduleId`、`parentDoc`、`childDocs`、`updatedAt`
+  - 用于文档列表弹层的左侧文档树渲染
 
 ---
 

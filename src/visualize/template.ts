@@ -292,9 +292,13 @@ export function getVisualizationHTML(projectName: string): string {
     .docs-sidebar { width: 280px; background: #1f2937; border-right: 1px solid #374151; display: flex; flex-direction: column; flex-shrink: 0; overflow: hidden; }
     .docs-sidebar-header { padding: 16px 20px 12px; border-bottom: 1px solid #374151; flex-shrink: 0; }
     .docs-sidebar-header h3 { font-size: 15px; font-weight: 700; color: #f3f4f6; margin-bottom: 8px; }
-    .docs-search { width: 100%; background: #111827; border: 1px solid #374151; border-radius: 6px; padding: 7px 10px; color: #e5e7eb; font-size: 12px; outline: none; transition: border-color 0.2s; }
+    .docs-search-wrap { position: relative; }
+    .docs-search { width: 100%; background: #111827; border: 1px solid #374151; border-radius: 6px; padding: 7px 30px 7px 10px; color: #e5e7eb; font-size: 12px; outline: none; transition: border-color 0.2s; box-sizing: border-box; }
     .docs-search:focus { border-color: #6366f1; }
     .docs-search::placeholder { color: #6b7280; }
+    .docs-search-clear { position: absolute; right: 6px; top: 50%; transform: translateY(-50%); width: 20px; height: 20px; border: none; background: none; color: #6b7280; font-size: 14px; cursor: pointer; display: none; align-items: center; justify-content: center; border-radius: 4px; padding: 0; line-height: 1; }
+    .docs-search-clear:hover { color: #e5e7eb; background: #374151; }
+    .docs-search-clear.show { display: flex; }
     .docs-group-list { overflow-y: auto; flex: 1; padding: 8px 0; scrollbar-width: thin; scrollbar-color: #374151 transparent; }
     .docs-group-list::-webkit-scrollbar { width: 6px; }
     .docs-group-list::-webkit-scrollbar-track { background: transparent; }
@@ -483,7 +487,10 @@ export function getVisualizationHTML(projectName: string): string {
         <div class="docs-sidebar">
           <div class="docs-sidebar-header">
             <h3>📄 文档库</h3>
-            <input type="text" class="docs-search" id="docsSearch" placeholder="搜索文档标题..." oninput="filterDocs()">
+            <div class="docs-search-wrap">
+              <input type="text" class="docs-search" id="docsSearch" placeholder="搜索文档标题..." oninput="filterDocs();toggleSearchClear()">
+              <button class="docs-search-clear" id="docsSearchClear" onclick="clearDocsSearch()" title="清空搜索">✕</button>
+            </div>
           </div>
           <div class="docs-group-list" id="docsGroupList">
             <div style="text-align:center;padding:40px;color:#6b7280;font-size:12px;">加载中...</div>
@@ -1193,13 +1200,16 @@ function renderStats(progress, graph) {
   var bar = document.getElementById('statsBar');
   var pct = progress.overallPercent || 0;
   var moduleCount = 0;
+  var docCount = 0;
   for (var i = 0; i < graph.nodes.length; i++) {
     if (graph.nodes[i].type === 'module') moduleCount++;
+    if (graph.nodes[i].type === 'document') docCount++;
   }
   bar.innerHTML =
     '<div class="stat clickable" onclick="showStatsModal(\\x27module\\x27)" title="查看所有模块"><span class="num amber">' + moduleCount + '</span> 模块</div>' +
     '<div class="stat clickable" onclick="showStatsModal(\\x27main-task\\x27)" title="查看所有主任务"><span class="num blue">' + progress.mainTaskCount + '</span> 主任务</div>' +
     '<div class="stat clickable" onclick="showStatsModal(\\x27sub-task\\x27)" title="查看所有子任务"><span class="num purple">' + progress.subTaskCount + '</span> 子任务</div>' +
+    '<div class="stat clickable" onclick="showStatsModal(\\x27document\\x27)" title="查看所有文档"><span class="num" style="color:#3b82f6;">📄 ' + docCount + '</span> 文档</div>' +
     '<div class="stat"><span class="num green">' + progress.completedSubTasks + '/' + progress.subTaskCount + '</span> 已完成</div>' +
     '<div class="stat"><div class="progress-bar"><div class="progress-fill" style="width:' + pct + '%"></div></div><span>' + pct + '%</span></div>';
 }
@@ -1977,7 +1987,16 @@ function toggleFilter(type) {
 }
 
 // ========== Stats Modal ==========
+/** 记录文档弹层中各文档的折叠状态（docKey → true 表示已展开） */
+var docModalExpandedState = {};
+
 function showStatsModal(nodeType) {
+  // 文档类型使用专用渲染
+  if (nodeType === 'document') {
+    showDocModal();
+    return;
+  }
+
   var titleMap = { 'module': '功能模块', 'main-task': '主任务', 'sub-task': '子任务' };
   var iconMap = { 'module': '◆', 'main-task': '●', 'sub-task': '·' };
   var items = [];
@@ -2029,6 +2048,161 @@ function showStatsModal(nodeType) {
   // 根据侧边栏状态调整弹层位置
   updateStatsModalPosition();
   document.getElementById('statsModalOverlay').classList.add('active');
+}
+
+/** 获取文档节点的 docKey (section|subSection) */
+function getDocNodeKey(node) {
+  var p = node.properties || {};
+  return p.section + (p.subSection ? '|' + p.subSection : '');
+}
+
+/** 构建文档层级树：{ node, children: [...] } */
+function buildDocTree() {
+  var docNodes = [];
+  for (var i = 0; i < allNodes.length; i++) {
+    if (allNodes[i].type === 'document') docNodes.push(allNodes[i]);
+  }
+
+  // 建立 parentDoc → children 映射
+  var childrenMap = {};  // parentDocKey → [nodes]
+  var childKeySet = {};  // 属于子文档的 nodeId 集合
+  for (var i = 0; i < docNodes.length; i++) {
+    var p = docNodes[i].properties || {};
+    if (p.parentDoc) {
+      if (!childrenMap[p.parentDoc]) childrenMap[p.parentDoc] = [];
+      childrenMap[p.parentDoc].push(docNodes[i]);
+      childKeySet[docNodes[i].id] = true;
+    }
+  }
+
+  // 按 section 分组顶级文档
+  var groups = {};
+  var groupOrder = [];
+  for (var i = 0; i < docNodes.length; i++) {
+    if (childKeySet[docNodes[i].id]) continue;
+    var sec = (docNodes[i].properties || {}).section || 'custom';
+    if (!groups[sec]) { groups[sec] = []; groupOrder.push(sec); }
+    groups[sec].push(docNodes[i]);
+  }
+
+  return { groups: groups, groupOrder: groupOrder, childrenMap: childrenMap };
+}
+
+/** 显示文档弹层（左侧列表） */
+function showDocModal() {
+  var docNodes = [];
+  for (var i = 0; i < allNodes.length; i++) {
+    if (allNodes[i].type === 'document') docNodes.push(allNodes[i]);
+  }
+
+  document.getElementById('statsModalTitle').textContent = '📄 文档列表';
+  document.getElementById('statsModalCount').textContent = '(' + docNodes.length + ')';
+
+  var tree = buildDocTree();
+  var html = renderDocTreeHTML(tree);
+
+  if (docNodes.length === 0) {
+    html = '<div style="text-align:center;padding:40px;color:#6b7280;">暂无文档</div>';
+  }
+
+  document.getElementById('statsModalBody').innerHTML = html;
+  // 根据侧边栏状态调整弹层位置
+  updateStatsModalPosition();
+  document.getElementById('statsModalOverlay').classList.add('active');
+}
+
+/** 渲染文档层级树 HTML */
+function renderDocTreeHTML(tree) {
+  var SECTION_NAMES_MODAL = {
+    overview: '概述', core_concepts: '核心概念', api_design: 'API 设计',
+    file_structure: '文件结构', config: '配置', examples: '使用示例',
+    technical_notes: '技术笔记', api_endpoints: 'API 端点',
+    milestones: '里程碑', changelog: '变更记录', custom: '自定义'
+  };
+  var SECTION_ICONS_MODAL = {
+    overview: '▸', core_concepts: '▸', api_design: '▸',
+    file_structure: '▸', config: '▸', examples: '▸',
+    technical_notes: '▸', api_endpoints: '▸',
+    milestones: '▸', changelog: '▸', custom: '▸'
+  };
+
+  var html = '';
+  for (var gi = 0; gi < tree.groupOrder.length; gi++) {
+    var sec = tree.groupOrder[gi];
+    var items = tree.groups[sec];
+    var secName = SECTION_NAMES_MODAL[sec] || sec;
+    var secIcon = SECTION_ICONS_MODAL[sec] || '▸';
+
+    html += '<div style="margin-bottom:4px;">';
+    html += '<div style="padding:8px 20px;font-size:11px;font-weight:700;color:#9ca3af;text-transform:uppercase;letter-spacing:0.05em;display:flex;align-items:center;gap:6px;">';
+    html += '<span>' + secName + '</span>';
+    html += '<span style="margin-left:auto;font-size:10px;color:#4b5563;">' + items.length + '</span>';
+    html += '</div>';
+
+    for (var ii = 0; ii < items.length; ii++) {
+      html += renderDocTreeItem(items[ii], tree.childrenMap, 0);
+    }
+    html += '</div>';
+  }
+  return html;
+}
+
+/** 递归渲染单个文档节点及其子文档 */
+function renderDocTreeItem(node, childrenMap, depth) {
+  var docKey = getDocNodeKey(node);
+  var p = node.properties || {};
+  var children = childrenMap[docKey] || [];
+  var hasChildren = children.length > 0;
+  var isExpanded = docModalExpandedState[docKey] === true;
+  var paddingLeft = 20 + depth * 20;
+
+  var html = '';
+
+  // 文档项
+  html += '<div class="stats-modal-item" style="padding-left:' + paddingLeft + 'px;gap:6px;" onclick="docModalSelectDoc(\\x27' + escHtml(docKey).replace(/'/g, "\\\\'") + '\\x27,\\x27' + escHtml(node.id).replace(/'/g, "\\\\'") + '\\x27)">';
+
+  // 展开/折叠按钮
+  if (hasChildren) {
+    html += '<span class="doc-modal-toggle" onclick="event.stopPropagation();toggleDocModalExpand(\\x27' + escHtml(docKey).replace(/'/g, "\\\\'") + '\\x27)" style="display:inline-flex;align-items:center;justify-content:center;width:18px;height:18px;border-radius:4px;background:rgba(99,102,241,0.15);border:1px solid rgba(99,102,241,0.3);color:#818cf8;font-size:12px;font-weight:700;cursor:pointer;flex-shrink:0;transition:all 0.15s;line-height:1;">' + (isExpanded ? '−' : '+') + '</span>';
+  } else {
+    html += '<span style="width:18px;flex-shrink:0;"></span>';
+  }
+
+  html += '<span class="stats-modal-item-icon" style="font-size:13px;color:#6b7280;">▸</span>';
+  html += '<span class="stats-modal-item-name" title="' + escHtml(node.label) + '" style="font-size:' + (depth > 0 ? '12' : '13') + 'px;' + (depth > 0 ? 'opacity:0.85;' : '') + '">' + escHtml(node.label) + '</span>';
+
+  if (hasChildren) {
+    html += '<span style="font-size:10px;color:#818cf8;flex-shrink:0;">' + children.length + '</span>';
+  }
+  if (p.subSection) {
+    html += '<span style="font-size:10px;color:#6b7280;flex-shrink:0;font-family:monospace;">' + escHtml(p.subSection) + '</span>';
+  }
+
+  html += '</div>';
+
+  // 子文档列表（仅展开时显示）
+  if (hasChildren && isExpanded) {
+    for (var ci = 0; ci < children.length; ci++) {
+      html += renderDocTreeItem(children[ci], childrenMap, depth + 1);
+    }
+  }
+
+  return html;
+}
+
+/** 展开/折叠文档弹层中的子文档 */
+function toggleDocModalExpand(docKey) {
+  docModalExpandedState[docKey] = !docModalExpandedState[docKey];
+  // 重新渲染文档列表
+  var tree = buildDocTree();
+  var html = renderDocTreeHTML(tree);
+  document.getElementById('statsModalBody').innerHTML = html;
+}
+
+/** 在文档弹层中选中文档 — 复用右侧图谱详情面板显示内容 */
+function docModalSelectDoc(docKey, nodeId) {
+  // 直接复用 statsModalGoToNode，聚焦图谱节点并打开已有的右侧详情面板
+  statsModalGoToNode(nodeId);
 }
 
 function closeStatsModal() {
@@ -2196,12 +2370,12 @@ var SECTION_NAMES = {
   milestones: '里程碑', changelog: '变更记录', custom: '自定义'
 };
 
-/** Section 图标映射 */
+/** Section 图标映射（使用简洁符号替代 emoji） */
 var SECTION_ICONS = {
-  overview: '📋', core_concepts: '🧠', api_design: '🔌',
-  file_structure: '📁', config: '⚙️', examples: '💡',
-  technical_notes: '🔬', api_endpoints: '🌐',
-  milestones: '🏁', changelog: '📝', custom: '📎'
+  overview: '▸', core_concepts: '▸', api_design: '▸',
+  file_structure: '▸', config: '▸', examples: '▸',
+  technical_notes: '▸', api_endpoints: '▸',
+  milestones: '▸', changelog: '▸', custom: '▸'
 };
 
 function loadDocsPage() {
@@ -2268,7 +2442,7 @@ function renderDocsList(docs) {
     var sec = groupOrder[gi];
     var items = groups[sec];
     var secName = SECTION_NAMES[sec] || sec;
-    var secIcon = SECTION_ICONS[sec] || '📄';
+    var secIcon = SECTION_ICONS[sec] || '▸';
 
     // 计算此分组下文档总数（含子文档）
     var totalCount = 0;
@@ -2279,7 +2453,7 @@ function renderDocsList(docs) {
     html += '<div class="docs-group" data-section="' + sec + '">';
     html += '<div class="docs-group-title" onclick="toggleDocsGroup(this)">';
     html += '<span class="docs-group-arrow">▼</span>';
-    html += '<span>' + secIcon + ' ' + secName + '</span>';
+    html += '<span>' + secName + '</span>';
     html += '<span class="docs-group-count">' + totalCount + '</span>';
     html += '</div>';
     html += '<div class="docs-group-items">';
@@ -2312,7 +2486,7 @@ function renderDocItemWithChildren(item, childrenMap, secIcon) {
     html += '<span class="docs-item-toggle" onclick="event.stopPropagation();toggleDocChildren(\\x27' + docKey.replace(/'/g, "\\\\'") + '\\x27)" title="' + (isCollapsed ? '展开子文档' : '收起子文档') + '">' + toggleIcon + '</span>';
   }
 
-  html += '<span class="docs-item-icon">' + secIcon + '</span>';
+  // 不显示 emoji 图标，仅保留标题
   html += '<span class="docs-item-text" title="' + escHtml(item.title) + '">' + escHtml(item.title) + '</span>';
   if (hasChildren) {
     html += '<span class="docs-item-sub" style="color:#818cf8;">' + children.length + ' 子文档</span>';
@@ -2355,6 +2529,23 @@ function toggleDocChildren(docKey) {
 function toggleDocsGroup(el) {
   var group = el.closest('.docs-group');
   if (group) group.classList.toggle('collapsed');
+}
+
+/** 控制搜索框清除按钮的显示/隐藏 */
+function toggleSearchClear() {
+  var input = document.getElementById('docsSearch');
+  var btn = document.getElementById('docsSearchClear');
+  if (input && btn) {
+    if (input.value.length > 0) { btn.classList.add('show'); } else { btn.classList.remove('show'); }
+  }
+}
+
+/** 清空搜索框并重置列表 */
+function clearDocsSearch() {
+  var input = document.getElementById('docsSearch');
+  if (input) { input.value = ''; input.focus(); }
+  toggleSearchClear();
+  filterDocs();
 }
 
 /** 搜索过滤文档列表 */

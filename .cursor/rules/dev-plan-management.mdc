@@ -1,7 +1,7 @@
 ---
-description: DevPlan 开发计划管理工具说明。当用户提到开发计划、任务进度、文档管理时激活。
+description: DevPlan 开发计划管理工具。当用户提到开发计划、任务进度、文档管理、或说"开始/继续/恢复/启动 phase-X"时激活。
 globs: []
-alwaysApply: false
+alwaysApply: true
 ---
 
 # DevPlan — 开发计划管理
@@ -11,6 +11,24 @@ alwaysApply: false
 ```
 mcpServers: aifastdb-devplan
 ```
+
+## ⚠️ 关键规则：开发阶段触发词识别
+
+**当用户说出以下任何模式时，必须首先调用 `devplan_start_phase` 工具**（将主任务标记为 in_progress）：
+
+| 用户说法示例 | 动作 |
+|---|---|
+| "请开始 phase-37 的任务" | → `devplan_start_phase(taskId: "phase-37")` |
+| "开始 phase-37" / "开始开发 phase-37" | → `devplan_start_phase(taskId: "phase-37")` |
+| "开始开发 phase-37 的任务" | → `devplan_start_phase(taskId: "phase-37")` |
+| "继续 phase-37" / "继续开发 phase-37" | → `devplan_start_phase(taskId: "phase-37")` |
+| "继续开发 phase-37 的任务" | → `devplan_start_phase(taskId: "phase-37")` |
+| "恢复 phase-37" / "恢复 phase-37 开发" | → `devplan_start_phase(taskId: "phase-37")` |
+| "启动 phase-37" / "启动 phase-37 开发" | → `devplan_start_phase(taskId: "phase-37")` |
+
+**识别规则**：只要用户消息中包含 `phase-` + 数字，且同时包含"开始"、"继续"、"恢复"、"启动"、"start"、"resume"中的任意一个词，就必须调用 `devplan_start_phase`。
+
+**工具是幂等的**：首次调用 = 启动（pending → in_progress），后续调用 = 恢复（已完成子任务保持 completed）。
 
 ## 快捷操作
 
@@ -86,9 +104,7 @@ devplan_start_phase(projectName: "<项目名>", taskId: "phase-X")
 # 幂等操作：首次调用=启动，再次调用=恢复（已完成子任务保持 completed）
 ```
 
-**触发词**："开始/继续/恢复 phase-X 开发" 均应调用此工具。
-
-### 工作流说明
+### 开发阶段工作流
 
 1. **启动/恢复**：`devplan_start_phase` → 将子任务转为 TodoWrite（保留已完成状态）→ 输出进度摘要 → 开始第一个 pending 任务
 2. **开发中**：完成代码后 → `devplan_complete_task` 回写状态 → 更新 Todo → 继续下一个
