@@ -110,6 +110,29 @@ devplan_start_phase(projectName: "<项目名>", taskId: "phase-X")
 2. **开发中**：完成代码后 → `devplan_complete_task` 回写状态 → 更新 Todo → 继续下一个
 3. **阶段完成**：所有子任务完成后，devplan 自动标记主任务为 completed
 
+### 阶段完成 → 下一阶段提示
+
+当主任务完成时（子任务全部完成自动触发，或手动完成），`devplan_complete_task` 返回结果中会包含以下额外字段：
+
+```json
+{
+  "nextPhase": {           // 下一个待处理的主任务（优先 in_progress，其次 pending，按 order 排序）
+    "taskId": "phase-17",
+    "title": "阶段十七: XXX",
+    "status": "pending",
+    "priority": "P0"
+  },
+  "remainingPhases": 3,    // 剩余未完成阶段数
+  "hint": "🎉 ... 还有 3 个待处理阶段。下一个：phase-17 ...。是否继续？"
+}
+```
+
+**AI 应遵循的行为**：
+- 在阶段完成总结的**最后**，展示 `hint` 的内容
+- 如果 `nextPhase` 存在，告知用户下一个阶段信息并询问是否继续
+- 如果 `remainingPhases === 0`，恭喜用户所有阶段全部完成
+- 用户回复"继续"/"开始 phase-X" 时，按触发词规则调用 `devplan_start_phase`
+
 ## 注意事项
 
 1. **通过 MCP 操作任务**：任务状态管理使用 `devplan_*` 系列 MCP 工具，不要手动编辑 JSONL 文件
