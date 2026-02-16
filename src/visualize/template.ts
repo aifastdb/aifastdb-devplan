@@ -336,8 +336,50 @@ export function getVisualizationHTML(projectName: string): string {
     .docs-content-body::-webkit-scrollbar { width: 6px; }
     .docs-content-body::-webkit-scrollbar-track { background: transparent; }
     .docs-content-body::-webkit-scrollbar-thumb { background: #374151; border-radius: 3px; }
-    .docs-content-empty { flex: 1; display: flex; align-items: center; justify-content: center; color: #4b5563; font-size: 14px; flex-direction: column; gap: 8px; }
+    .docs-content-empty { flex: 1; display: flex; flex-direction: column; min-height: 0; overflow: hidden; }
     .docs-content-empty .empty-icon { font-size: 48px; opacity: 0.4; }
+
+    /* RAG Chat UI */
+    .docs-chat-container { display: flex; flex-direction: column; flex: 1; min-height: 0; }
+    .docs-chat-messages { flex: 1; overflow-y: auto; padding: 20px 28px; scrollbar-width: thin; scrollbar-color: #374151 transparent; }
+    .docs-chat-messages::-webkit-scrollbar { width: 6px; }
+    .docs-chat-messages::-webkit-scrollbar-track { background: transparent; }
+    .docs-chat-messages::-webkit-scrollbar-thumb { background: #374151; border-radius: 3px; }
+    .docs-chat-welcome { text-align: center; padding: 60px 40px 30px; color: #6b7280; }
+    .docs-chat-welcome .welcome-icon { font-size: 48px; opacity: 0.4; margin-bottom: 12px; }
+    .docs-chat-welcome .welcome-title { font-size: 16px; font-weight: 600; color: #9ca3af; margin-bottom: 6px; }
+    .docs-chat-welcome .welcome-desc { font-size: 13px; color: #6b7280; line-height: 1.6; }
+    .docs-chat-welcome .welcome-tips { margin-top: 20px; display: flex; flex-wrap: wrap; gap: 8px; justify-content: center; }
+    .docs-chat-welcome .tip-chip { font-size: 12px; padding: 6px 14px; border-radius: 16px; background: rgba(99,102,241,0.1); border: 1px solid rgba(99,102,241,0.2); color: #a5b4fc; cursor: pointer; transition: all 0.15s; }
+    .docs-chat-welcome .tip-chip:hover { background: rgba(99,102,241,0.2); border-color: rgba(99,102,241,0.4); }
+
+    .chat-bubble { margin-bottom: 16px; max-width: 90%; animation: chatFadeIn 0.25s ease; }
+    .chat-bubble.user { margin-left: auto; }
+    .chat-bubble.assistant { margin-right: auto; }
+    .chat-bubble-inner { padding: 10px 16px; border-radius: 12px; font-size: 13px; line-height: 1.6; }
+    .chat-bubble.user .chat-bubble-inner { background: rgba(99,102,241,0.2); color: #c7d2fe; border-bottom-right-radius: 4px; }
+    .chat-bubble.assistant .chat-bubble-inner { background: #1f2937; color: #d1d5db; border: 1px solid #374151; border-bottom-left-radius: 4px; }
+    .chat-result-card { margin-top: 8px; padding: 10px 14px; border-radius: 8px; background: rgba(55,65,81,0.4); border: 1px solid #374151; cursor: pointer; transition: all 0.15s; }
+    .chat-result-card:hover { background: rgba(99,102,241,0.1); border-color: rgba(99,102,241,0.3); }
+    .chat-result-title { font-size: 13px; font-weight: 600; color: #a5b4fc; margin-bottom: 4px; display: flex; align-items: center; gap: 6px; }
+    .chat-result-score { font-size: 10px; padding: 1px 6px; border-radius: 4px; background: rgba(16,185,129,0.15); color: #6ee7b7; font-weight: 500; }
+    .chat-result-snippet { font-size: 11px; color: #9ca3af; line-height: 1.5; overflow: hidden; display: -webkit-box; -webkit-line-clamp: 3; -webkit-box-orient: vertical; }
+    .chat-result-meta { font-size: 10px; color: #6b7280; margin-top: 4px; display: flex; gap: 8px; }
+    .chat-no-result { color: #6b7280; font-size: 12px; margin-top: 8px; }
+    .chat-typing { display: flex; gap: 4px; padding: 12px 16px; }
+    .chat-typing-dot { width: 6px; height: 6px; border-radius: 50%; background: #6b7280; animation: chatTyping 1.2s infinite; }
+    .chat-typing-dot:nth-child(2) { animation-delay: 0.2s; }
+    .chat-typing-dot:nth-child(3) { animation-delay: 0.4s; }
+    @keyframes chatTyping { 0%,60%,100% { opacity: 0.3; transform: scale(0.8); } 30% { opacity: 1; transform: scale(1); } }
+    @keyframes chatFadeIn { from { opacity: 0; transform: translateY(8px); } to { opacity: 1; transform: translateY(0); } }
+
+    .docs-chat-input-wrap { padding: 12px 20px 16px; border-top: 1px solid #374151; flex-shrink: 0; display: flex; gap: 8px; align-items: flex-end; background: #111827; }
+    .docs-chat-input { flex: 1; background: #1f2937; border: 1px solid #374151; border-radius: 12px; padding: 10px 16px; color: #e5e7eb; font-size: 13px; outline: none; resize: none; min-height: 20px; max-height: 120px; line-height: 1.5; font-family: inherit; transition: border-color 0.2s; }
+    .docs-chat-input:focus { border-color: #6366f1; }
+    .docs-chat-input::placeholder { color: #6b7280; }
+    .docs-chat-send { width: 36px; height: 36px; border-radius: 10px; border: none; background: #6366f1; color: white; cursor: pointer; display: flex; align-items: center; justify-content: center; flex-shrink: 0; transition: all 0.15s; font-size: 16px; }
+    .docs-chat-send:hover { background: #818cf8; }
+    .docs-chat-send:disabled { background: #374151; color: #6b7280; cursor: not-allowed; }
     .docs-related { margin-top: 20px; border-top: 1px solid #374151; padding-top: 16px; }
     .docs-related-title { font-size: 13px; font-weight: 600; color: #9ca3af; margin-bottom: 10px; display: flex; align-items: center; gap: 6px; }
     .docs-related-item { display: flex; align-items: center; gap: 8px; padding: 5px 0; font-size: 12px; color: #d1d5db; }
@@ -496,18 +538,45 @@ export function getVisualizationHTML(projectName: string): string {
             <div style="text-align:center;padding:40px;color:#6b7280;font-size:12px;">加载中...</div>
           </div>
         </div>
-        <!-- Right: Document Content -->
+        <!-- Right: Document Content / Chat -->
         <div class="docs-content">
+          <!-- RAG Chat (default view) -->
           <div class="docs-content-empty" id="docsEmptyState">
-            <div class="empty-icon">📄</div>
-            <div>选择左侧文档查看内容</div>
+            <div class="docs-chat-container">
+              <div class="docs-chat-messages" id="docsChatMessages">
+                <div class="docs-chat-welcome" id="docsChatWelcome">
+                  <div class="welcome-icon">🔍</div>
+                  <div class="welcome-title">文档智能搜索</div>
+                  <div class="welcome-desc">输入问题，AI 将在文档库中搜索相关内容<br>支持语义搜索，理解你的意图而非仅匹配关键词</div>
+                  <div class="welcome-tips">
+                    <span class="tip-chip" onclick="chatSendTip(this)">有多少篇文档？</span>
+                    <span class="tip-chip" onclick="chatSendTip(this)">项目进度</span>
+                    <span class="tip-chip" onclick="chatSendTip(this)">有哪些阶段？</span>
+                    <span class="tip-chip" onclick="chatSendTip(this)">最近更新</span>
+                    <span class="tip-chip" onclick="chatSendTip(this)">帮助</span>
+                  </div>
+                  <div class="welcome-tips" style="margin-top:8px;">
+                    <span class="tip-chip" onclick="chatSendTip(this)">向量搜索</span>
+                    <span class="tip-chip" onclick="chatSendTip(this)">aifastdb vs LanceDB</span>
+                    <span class="tip-chip" onclick="chatSendTip(this)">GPU 加速</span>
+                    <span class="tip-chip" onclick="chatSendTip(this)">全文搜索</span>
+                  </div>
+                </div>
+              </div>
+              <div class="docs-chat-input-wrap">
+                <textarea class="docs-chat-input" id="docsChatInput" placeholder="发送消息搜索文档数据库..." rows="1" onkeydown="chatInputKeydown(event)" oninput="chatAutoResize(this)"></textarea>
+                <button class="docs-chat-send" id="docsChatSend" onclick="chatSend()" title="发送">↑</button>
+              </div>
+            </div>
           </div>
+          <!-- Document Content View -->
           <div id="docsContentView" style="display:none;flex-direction:column;flex:1;min-height:0;">
             <div class="docs-content-header">
-              <div>
+              <div style="flex:1;min-width:0;">
                 <div class="docs-content-title" id="docsContentTitle">文档标题</div>
                 <div class="docs-content-meta" id="docsContentMeta"></div>
               </div>
+              <button style="flex-shrink:0;background:none;border:1px solid #374151;border-radius:6px;padding:4px 10px;color:#9ca3af;font-size:11px;cursor:pointer;transition:all 0.15s;" onmouseover="this.style.borderColor='#6366f1';this.style.color='#a5b4fc'" onmouseout="this.style.borderColor='#374151';this.style.color='#9ca3af'" onclick="backToChat()" title="返回对话搜索">← 返回搜索</button>
             </div>
             <div class="docs-content-body" id="docsContentBody">
               <div class="doc-content" id="docsContentInner"></div>
@@ -1802,6 +1871,18 @@ function fmtTime(ts) {
   return time;
 }
 
+/** 文档列表用的短日期格式：MM-DD 或 YYYY-MM-DD */
+function fmtDateShort(ts) {
+  if (!ts) return '';
+  var d = new Date(ts);
+  var m = String(d.getMonth() + 1).padStart(2, '0');
+  var day = String(d.getDate()).padStart(2, '0');
+  if (d.getFullYear() !== new Date().getFullYear()) {
+    return d.getFullYear() + '-' + m + '-' + day;
+  }
+  return m + '-' + day;
+}
+
 // ========== Phase Expand (Stats page) ==========
 function togglePhaseExpand(el) {
   var wrap = el.closest('.phase-item-wrap');
@@ -2432,6 +2513,39 @@ function renderDocsList(docs) {
     groups[sec].push(d);
   }
 
+  // 每组内按 updatedAt 倒序排列（最新的在上方）
+  for (var gi = 0; gi < groupOrder.length; gi++) {
+    groups[groupOrder[gi]].sort(function(a, b) {
+      var ta = a.updatedAt || 0;
+      var tb = b.updatedAt || 0;
+      return tb - ta; // 降序
+    });
+  }
+
+  // 子文档也按 updatedAt 倒序
+  var parentKeys = Object.keys(childrenMap);
+  for (var pi = 0; pi < parentKeys.length; pi++) {
+    childrenMap[parentKeys[pi]].sort(function(a, b) {
+      var ta = a.updatedAt || 0;
+      var tb = b.updatedAt || 0;
+      return tb - ta;
+    });
+  }
+
+  // 分组按最新文档日期排序（最新的分组在上）
+  groupOrder.sort(function(secA, secB) {
+    var maxA = 0, maxB = 0;
+    var itemsA = groups[secA] || [];
+    var itemsB = groups[secB] || [];
+    for (var k = 0; k < itemsA.length; k++) {
+      if ((itemsA[k].updatedAt || 0) > maxA) maxA = itemsA[k].updatedAt || 0;
+    }
+    for (var k = 0; k < itemsB.length; k++) {
+      if ((itemsB[k].updatedAt || 0) > maxB) maxB = itemsB[k].updatedAt || 0;
+    }
+    return maxB - maxA;
+  });
+
   if (groupOrder.length === 0) {
     list.innerHTML = '<div style="text-align:center;padding:40px;color:#6b7280;font-size:12px;">暂无文档</div>';
     return;
@@ -2490,8 +2604,10 @@ function renderDocItemWithChildren(item, childrenMap, secIcon) {
   html += '<span class="docs-item-text" title="' + escHtml(item.title) + '">' + escHtml(item.title) + '</span>';
   if (hasChildren) {
     html += '<span class="docs-item-sub" style="color:#818cf8;">' + children.length + ' 子文档</span>';
-  } else if (item.subSection) {
-    html += '<span class="docs-item-sub">' + escHtml(item.subSection) + '</span>';
+  }
+  // 右侧显示日期（替代原来的 subSection 标签）
+  if (item.updatedAt) {
+    html += '<span class="docs-item-sub">' + fmtDateShort(item.updatedAt) + '</span>';
   }
   html += '</div>';
 
@@ -2690,6 +2806,161 @@ function renderDocContent(doc, section, subSection) {
   }
 
   document.getElementById('docsContentInner').innerHTML = contentHtml;
+}
+
+// ========== RAG Chat ==========
+var chatHistory = []; // [{role:'user'|'assistant', content:string, results?:array}]
+var chatBusy = false;
+
+/** 点击推荐话题 */
+function chatSendTip(el) {
+  var input = document.getElementById('docsChatInput');
+  if (input) { input.value = el.textContent; chatSend(); }
+}
+
+/** Enter 发送（Shift+Enter 换行） */
+function chatInputKeydown(e) {
+  if (e.key === 'Enter' && !e.shiftKey) {
+    e.preventDefault();
+    chatSend();
+  }
+}
+
+/** 自动调整 textarea 高度 */
+function chatAutoResize(el) {
+  el.style.height = 'auto';
+  el.style.height = Math.min(el.scrollHeight, 120) + 'px';
+}
+
+/** 发送消息并搜索 */
+function chatSend() {
+  if (chatBusy) return;
+  var input = document.getElementById('docsChatInput');
+  var query = (input.value || '').trim();
+  if (!query) return;
+
+  // 隐藏欢迎信息
+  var welcome = document.getElementById('docsChatWelcome');
+  if (welcome) welcome.style.display = 'none';
+
+  // 添加用户消息
+  chatHistory.push({ role: 'user', content: query });
+  chatRenderBubble('user', query);
+  input.value = '';
+  chatAutoResize(input);
+
+  // 显示加载动画
+  chatBusy = true;
+  document.getElementById('docsChatSend').disabled = true;
+  var loadingId = 'chat-loading-' + Date.now();
+  var msgBox = document.getElementById('docsChatMessages');
+  var loadingHtml = '<div class="chat-bubble assistant" id="' + loadingId + '"><div class="chat-bubble-inner"><div class="chat-typing"><div class="chat-typing-dot"></div><div class="chat-typing-dot"></div><div class="chat-typing-dot"></div></div></div></div>';
+  msgBox.insertAdjacentHTML('beforeend', loadingHtml);
+  msgBox.scrollTop = msgBox.scrollHeight;
+
+  // 调用搜索 API
+  fetch('/api/chat', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ query: query, limit: 5 })
+  }).then(function(r) { return r.json(); }).then(function(data) {
+    // 移除加载动画
+    var loadEl = document.getElementById(loadingId);
+    if (loadEl) loadEl.remove();
+
+    var replyHtml = '';
+
+    if (data.type === 'meta') {
+      // ---- 元信息直接回答 ----
+      replyHtml = chatFormatMarkdown(data.answer || '');
+    } else {
+      // ---- 文档搜索结果 ----
+      var results = data.results || [];
+      if (results.length > 0) {
+        replyHtml += '<div style="margin-bottom:8px;color:#9ca3af;font-size:12px;">找到 <strong style="color:#a5b4fc;">' + results.length + '</strong> 篇相关文档';
+        if (data.mode === 'hybrid') replyHtml += ' <span style="font-size:10px;color:#6b7280;">(语义+字面混合)</span>';
+        else if (data.mode === 'semantic') replyHtml += ' <span style="font-size:10px;color:#6b7280;">(语义搜索)</span>';
+        else replyHtml += ' <span style="font-size:10px;color:#6b7280;">(字面搜索)</span>';
+        replyHtml += '</div>';
+
+        for (var i = 0; i < results.length; i++) {
+          var r = results[i];
+          var docKey = r.section + (r.subSection ? '|' + r.subSection : '');
+          replyHtml += '<div class="chat-result-card" onclick="chatOpenDoc(\\x27' + docKey.replace(/'/g, "\\\\'") + '\\x27)">';
+          replyHtml += '<div class="chat-result-title">';
+          replyHtml += '<span>📄 ' + escHtml(r.title) + '</span>';
+          if (r.score != null) replyHtml += '<span class="chat-result-score">' + r.score.toFixed(3) + '</span>';
+          replyHtml += '</div>';
+          if (r.snippet) replyHtml += '<div class="chat-result-snippet">' + escHtml(r.snippet) + '</div>';
+          var metaParts = [];
+          if (r.section) metaParts.push(r.section);
+          if (r.updatedAt) metaParts.push(fmtDateShort(r.updatedAt));
+          if (r.version) metaParts.push('v' + r.version);
+          if (metaParts.length > 0) replyHtml += '<div class="chat-result-meta">' + metaParts.join(' · ') + '</div>';
+          replyHtml += '</div>';
+        }
+      } else {
+        replyHtml += '<div class="chat-no-result">🤔 未找到高度相关的文档。</div>';
+        replyHtml += '<div style="margin-top:8px;font-size:12px;color:#6b7280;line-height:1.6;">';
+        replyHtml += '建议：<br>';
+        replyHtml += '• 尝试使用更具体的 <strong>关键词</strong>（如 "向量搜索"、"GPU"、"LanceDB"）<br>';
+        replyHtml += '• 问项目统计问题（如 "有多少篇文档"、"项目进度"、"有哪些阶段"）<br>';
+        replyHtml += '• 输入 <strong>"帮助"</strong> 查看我的全部能力';
+        replyHtml += '</div>';
+      }
+    }
+
+    chatHistory.push({ role: 'assistant', content: replyHtml, results: data.results || [] });
+    chatRenderBubble('assistant', replyHtml, true);
+
+  }).catch(function(err) {
+    var loadEl = document.getElementById(loadingId);
+    if (loadEl) loadEl.remove();
+    chatRenderBubble('assistant', '<span style="color:#f87171;">搜索出错: ' + escHtml(err.message) + '</span>', true);
+  }).finally(function() {
+    chatBusy = false;
+    document.getElementById('docsChatSend').disabled = false;
+    document.getElementById('docsChatInput').focus();
+  });
+}
+
+/** 简单 Markdown → HTML 转换（用于元信息回答） */
+function chatFormatMarkdown(text) {
+  return text
+    .replace(/\\*\\*(.+?)\\*\\*/g, '<strong style="color:#a5b4fc;">$1</strong>')
+    .replace(/\\n/g, '<br>');
+}
+
+/** 渲染一条消息气泡 */
+function chatRenderBubble(role, content, isHtml) {
+  var msgBox = document.getElementById('docsChatMessages');
+  var bubble = document.createElement('div');
+  bubble.className = 'chat-bubble ' + role;
+  var inner = document.createElement('div');
+  inner.className = 'chat-bubble-inner';
+  if (isHtml) { inner.innerHTML = content; }
+  else { inner.textContent = content; }
+  bubble.appendChild(inner);
+  msgBox.appendChild(bubble);
+  msgBox.scrollTop = msgBox.scrollHeight;
+}
+
+/** 从聊天结果中点击打开文档 */
+function chatOpenDoc(docKey) {
+  selectDoc(docKey);
+}
+
+/** 返回聊天视图 */
+function backToChat() {
+  document.getElementById('docsContentView').style.display = 'none';
+  document.getElementById('docsEmptyState').style.display = 'flex';
+  // 取消左侧选中
+  currentDocKey = '';
+  var items = document.querySelectorAll('.docs-item');
+  for (var i = 0; i < items.length; i++) items[i].classList.remove('active');
+  // 聚焦输入框
+  var input = document.getElementById('docsChatInput');
+  if (input) input.focus();
 }
 
 // ========== Stats Dashboard ==========

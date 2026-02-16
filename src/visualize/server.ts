@@ -18,9 +18,16 @@
 import * as http from 'http';
 import * as path from 'path';
 import { DevPlanGraphStore } from '../dev-plan-graph-store';
-import { createDevPlan, getDefaultBasePath } from '../dev-plan-factory';
+import { createDevPlan, getDefaultBasePath, resolveBasePathForProject } from '../dev-plan-factory';
 import type { IDevPlanStore } from '../dev-plan-interface';
 import { getVisualizationHTML } from './template';
+import {
+  getAutopilotStatus,
+  getAutopilotNextAction,
+  recordHeartbeat,
+  getLastHeartbeat,
+} from '../autopilot';
+import type { ExecutorHeartbeat } from '../types';
 
 // ============================================================================
 // CLI Argument Parsing
@@ -68,7 +75,8 @@ function parseArgs(): CliArgs {
   }
 
   if (!basePath) {
-    basePath = getDefaultBasePath();
+    // 多项目路由：优先使用项目注册表路由的 basePath
+    basePath = resolveBasePathForProject(project);
   }
 
   return { project, port, basePath };
@@ -109,15 +117,154 @@ function createFreshStore(projectName: string, basePath: string): IDevPlanStore 
   return createDevPlan(projectName, basePath, 'graph');
 }
 
+// ============================================================================
+// Meta Question Detection — 元信息智能问答
+// ============================================================================
+
+/**
+ * 检测是否为元信息问题（关于项目/数据库本身的统计类问题）。
+ * 如果是，直接生成回答文本；如果不是，返回 null 继续走搜索流程。
+ */
+function detectMetaQuestion(
+  store: IDevPlanStore,
+  projectName: string,
+  query: string,
+  qLower: string,
+): string | null {
+  // ---- 文档数量 ----
+  if (matchAny(qLower, ['多少篇文档', '多少文档', '文档数量', '文档总数', '几篇文档', 'how many doc', 'document count'])) {
+    const sections = store.listSections();
+    const bySection: Record<string, number> = {};
+    for (const s of sections) {
+      bySection[s.section] = (bySection[s.section] || 0) + 1;
+    }
+    let detail = Object.entries(bySection)
+      .sort((a, b) => b[1] - a[1])
+      .map(([sec, cnt]) => `  • ${sec}: ${cnt} 篇`)
+      .join('\n');
+    return `📊 项目 **${projectName}** 共有 **${sections.length}** 篇文档。\n\n按类型分布：\n${detail}`;
+  }
+
+  // ---- 项目进度 ----
+  if (matchAny(qLower, ['项目进度', '完成进度', '整体进度', '完成率', '完成了多少', '进展如何', 'progress', 'how much done'])) {
+    const progress = store.getProgress();
+    const tasks = progress.tasks || [];
+    const completed = tasks.filter((t: any) => t.status === 'completed').length;
+    const inProgress = tasks.filter((t: any) => t.status === 'in_progress').length;
+    const pending = tasks.filter((t: any) => t.status === 'pending').length;
+    return `📊 项目 **${projectName}** 整体进度：**${progress.overallPercent || 0}%**\n\n` +
+      `• 主任务总数: ${progress.mainTaskCount || 0}\n` +
+      `• ✅ 已完成: ${completed}\n` +
+      `• 🔄 进行中: ${inProgress}\n` +
+      `• ⬜ 待开始: ${pending}\n` +
+      `• 子任务: ${progress.completedSubTasks || 0} / ${progress.subTaskCount || 0} 已完成`;
+  }
+
+  // ---- 主任务/阶段列表 ----
+  if (matchAny(qLower, ['有哪些阶段', '有多少阶段', '阶段列表', '任务列表', '所有阶段', 'phase list', 'all phases', '有多少个phase'])) {
+    const progress = store.getProgress();
+    const tasks = progress.tasks || [];
+    const statusIcon = (s: string) => s === 'completed' ? '✅' : s === 'in_progress' ? '🔄' : '⬜';
+    let lines = tasks.map((t: any) =>
+      `  ${statusIcon(t.status)} ${t.taskId}: ${t.title} (${t.completed}/${t.total})`
+    ).join('\n');
+    return `📋 项目 **${projectName}** 共有 **${tasks.length}** 个开发阶段：\n\n${lines}`;
+  }
+
+  // ---- 模块列表 ----
+  if (matchAny(qLower, ['有哪些模块', '模块列表', '功能模块', 'module list', 'all modules', '有多少模块'])) {
+    const modules = store.listModules();
+    if (modules.length === 0) {
+      return `📦 项目 **${projectName}** 暂未定义功能模块。`;
+    }
+    let lines = modules.map((m: any) =>
+      `  • **${m.name}** (${m.moduleId}) — ${m.status} | ${m.completedSubTaskCount || 0}/${m.subTaskCount || 0} 子任务`
+    ).join('\n');
+    return `📦 项目 **${projectName}** 共有 **${modules.length}** 个功能模块：\n\n${lines}`;
+  }
+
+  // ---- 最近完成/更新 ----
+  if (matchAny(qLower, ['最近完成', '最近更新', '最新完成', '最新的文档', '最新文档', 'recently completed', 'latest update'])) {
+    const sections = store.listSections();
+    const sorted = [...sections]
+      .filter((s: any) => s.updatedAt)
+      .sort((a: any, b: any) => (b.updatedAt || 0) - (a.updatedAt || 0))
+      .slice(0, 8);
+    if (sorted.length === 0) {
+      return `📄 暂无文档更新记录。`;
+    }
+    let lines = sorted.map((s: any) => {
+      const d = new Date(s.updatedAt);
+      const dateStr = `${d.getMonth() + 1}-${String(d.getDate()).padStart(2, '0')}`;
+      return `  • [${dateStr}] **${s.title}** (${s.section}${s.subSection ? '|' + s.subSection : ''})`;
+    }).join('\n');
+    return `📄 最近更新的文档：\n\n${lines}`;
+  }
+
+  // ---- 项目名称/是什么项目 ----
+  if (matchAny(qLower, ['什么项目', '项目介绍', '项目名称', '这是什么', 'what project', 'project name', '项目是什么'])) {
+    const sections = store.listSections();
+    const progress = store.getProgress();
+    const modules = store.listModules();
+    return `📌 当前项目: **${projectName}**\n\n` +
+      `• 文档总数: ${sections.length} 篇\n` +
+      `• 开发阶段: ${progress.mainTaskCount || 0} 个 (${progress.overallPercent || 0}% 完成)\n` +
+      `• 功能模块: ${modules.length} 个\n` +
+      `• 子任务: ${progress.completedSubTasks || 0} / ${progress.subTaskCount || 0}\n\n` +
+      `💡 你可以问我关于文档内容的问题，我会在文档库中搜索相关内容。`;
+  }
+
+  // ---- 搜索能力说明 ----
+  if (matchAny(qLower, ['你能做什么', '你会什么', '怎么用', '使用说明', 'help', '帮助', '功能介绍'])) {
+    const isSemanticEnabled = store.isSemanticSearchEnabled?.() || false;
+    return `🤖 我是 **DevPlan 文档助手**，可以帮你：\n\n` +
+      `📊 **回答项目统计问题**\n` +
+      `  例如: "有多少篇文档"、"项目进度"、"有哪些阶段"\n\n` +
+      `🔍 **搜索文档内容**\n` +
+      `  例如: "向量搜索"、"GPU 加速"、"aifastdb vs LanceDB"\n` +
+      `  搜索模式: ${isSemanticEnabled ? '语义+字面混合搜索 (Candle MiniLM)' : '字面匹配'}\n\n` +
+      `📄 **查看文档**\n` +
+      `  点击搜索结果卡片可直接查看完整文档\n\n` +
+      `⚠️ 注意: 我没有 LLM 推理能力，无法"理解"和"推理"，` +
+      `只能做文档检索和元信息查询。对于复杂问题建议直接搜索关键词。`;
+  }
+
+  return null; // 不是元信息问题，继续搜索流程
+}
+
+/** 检查 query 是否匹配任意关键词模式 */
+function matchAny(qLower: string, patterns: string[]): boolean {
+  return patterns.some(p => qLower.includes(p));
+}
+
+/**
+ * 读取 HTTP POST 请求体并解析为 JSON
+ */
+function readRequestBody(req: http.IncomingMessage): Promise<any> {
+  return new Promise((resolve, reject) => {
+    let data = '';
+    req.on('data', (chunk: Buffer) => { data += chunk.toString(); });
+    req.on('end', () => {
+      if (!data) { resolve({}); return; }
+      try {
+        resolve(JSON.parse(data));
+      } catch {
+        reject(new Error('Invalid JSON body'));
+      }
+    });
+    req.on('error', reject);
+  });
+}
+
 function startServer(projectName: string, basePath: string, port: number): void {
   const htmlContent = getVisualizationHTML(projectName);
 
-  const server = http.createServer((req, res) => {
+  const server = http.createServer(async (req, res) => {
     const url = new URL(req.url || '/', `http://localhost:${port}`);
 
     // CORS headers
     res.setHeader('Access-Control-Allow-Origin', '*');
-    res.setHeader('Access-Control-Allow-Methods', 'GET, OPTIONS');
+    res.setHeader('Access-Control-Allow-Methods', 'GET, POST, OPTIONS');
     res.setHeader('Access-Control-Allow-Headers', 'Content-Type');
     // 禁止浏览器缓存 API 响应，确保 F5 刷新时总是获取最新数据
     res.setHeader('Cache-Control', 'no-cache, no-store, must-revalidate');
@@ -335,6 +482,444 @@ function startServer(projectName: string, basePath: string, port: number): void 
           break;
         }
 
+        case '/api/chat': {
+          // POST /api/chat — 智能文档对话（元信息问答 + 语义搜索 + 分数过滤）
+          if (req.method !== 'POST') {
+            res.writeHead(405, { 'Content-Type': 'application/json; charset=utf-8' });
+            res.end(JSON.stringify({ error: 'Method Not Allowed. Use POST.' }));
+            break;
+          }
+
+          const body = await readRequestBody(req);
+          const query = body?.query;
+          if (!query || typeof query !== 'string' || query.trim().length === 0) {
+            res.writeHead(400, { 'Content-Type': 'application/json; charset=utf-8' });
+            res.end(JSON.stringify({ error: '缺少 query 参数' }));
+            break;
+          }
+
+          const store = createFreshStore(projectName, basePath);
+          const q = query.trim();
+          const qLower = q.toLowerCase();
+
+          // ================================================================
+          // 第一步：检测元信息问题，直接回答
+          // ================================================================
+          const metaAnswer = detectMetaQuestion(store, projectName, q, qLower);
+          if (metaAnswer) {
+            res.writeHead(200, { 'Content-Type': 'application/json; charset=utf-8' });
+            res.end(JSON.stringify({
+              query: q,
+              type: 'meta',
+              answer: metaAnswer,
+            }));
+            break;
+          }
+
+          // ================================================================
+          // 第二步：文档内容搜索（带分数过滤）
+          // ================================================================
+          const limit = body.limit || 5;
+          const MIN_SCORE = 0.03; // 低于此分数视为不相关
+
+          let results: any[] = [];
+          let searchMode = 'literal';
+          if (store.searchSectionsAdvanced) {
+            const isSemanticEnabled = store.isSemanticSearchEnabled?.() || false;
+            searchMode = isSemanticEnabled ? 'hybrid' : 'literal';
+            const hits = store.searchSectionsAdvanced(q, {
+              mode: searchMode as any,
+              limit: limit * 2, // 多取一些，后面过滤
+              minScore: 0,
+            });
+            results = hits
+              .filter((doc: any) => doc.score == null || doc.score >= MIN_SCORE)
+              .slice(0, limit)
+              .map((doc: any) => ({
+                section: doc.section,
+                subSection: doc.subSection || null,
+                title: doc.title,
+                score: doc.score != null ? Math.round(doc.score * 1000) / 1000 : null,
+                snippet: (doc.content || '').substring(0, 300).replace(/\n/g, ' ').trim(),
+                updatedAt: doc.updatedAt || null,
+                version: doc.version || null,
+              }));
+          } else {
+            const hits = store.searchSections(q, limit);
+            results = hits.map((doc: any) => ({
+              section: doc.section,
+              subSection: doc.subSection || null,
+              title: doc.title,
+              score: null,
+              snippet: (doc.content || '').substring(0, 300).replace(/\n/g, ' ').trim(),
+              updatedAt: doc.updatedAt || null,
+              version: doc.version || null,
+            }));
+          }
+
+          res.writeHead(200, { 'Content-Type': 'application/json; charset=utf-8' });
+          res.end(JSON.stringify({
+            query: q,
+            type: 'search',
+            mode: searchMode,
+            count: results.length,
+            results,
+          }));
+          break;
+        }
+
+        // ================================================================
+        // Autopilot API Endpoints (/api/auto/*)
+        // ================================================================
+
+        case '/api/auto/next-action': {
+          // GET /api/auto/next-action — 获取下一步该执行什么动作（executor 轮询）
+          const store = createFreshStore(projectName, basePath);
+          const nextAction = getAutopilotNextAction(store);
+          res.writeHead(200, { 'Content-Type': 'application/json; charset=utf-8' });
+          res.end(JSON.stringify(nextAction));
+          break;
+        }
+
+        case '/api/auto/current-phase': {
+          // GET /api/auto/current-phase — 获取当前进行中阶段及全部子任务状态
+          const store = createFreshStore(projectName, basePath);
+          const status = getAutopilotStatus(store);
+
+          if (!status.hasActivePhase || !status.activePhase) {
+            res.writeHead(200, { 'Content-Type': 'application/json; charset=utf-8' });
+            res.end(JSON.stringify({
+              hasActivePhase: false,
+              message: '当前无进行中的阶段',
+            }));
+            break;
+          }
+
+          // 获取活跃阶段的全部子任务详情
+          const subTasks = store.listSubTasks(status.activePhase.taskId).map((s: any) => ({
+            taskId: s.taskId,
+            title: s.title,
+            status: s.status,
+            description: s.description || null,
+            order: s.order,
+            completedAt: s.completedAt || null,
+          }));
+
+          res.writeHead(200, { 'Content-Type': 'application/json; charset=utf-8' });
+          res.end(JSON.stringify({
+            hasActivePhase: true,
+            activePhase: status.activePhase,
+            currentSubTask: status.currentSubTask || null,
+            nextPendingSubTask: status.nextPendingSubTask || null,
+            subTasks,
+          }));
+          break;
+        }
+
+        case '/api/auto/complete-task': {
+          // POST /api/auto/complete-task — 标记子任务完成
+          if (req.method !== 'POST') {
+            res.writeHead(405, { 'Content-Type': 'application/json; charset=utf-8' });
+            res.end(JSON.stringify({ error: 'Method Not Allowed. Use POST.' }));
+            break;
+          }
+
+          const body = await readRequestBody(req);
+          const taskId = body?.taskId;
+          if (!taskId || typeof taskId !== 'string') {
+            res.writeHead(400, { 'Content-Type': 'application/json; charset=utf-8' });
+            res.end(JSON.stringify({ error: '缺少 taskId 参数' }));
+            break;
+          }
+
+          const store = createFreshStore(projectName, basePath);
+          try {
+            const result = store.completeSubTask(taskId);
+            res.writeHead(200, { 'Content-Type': 'application/json; charset=utf-8' });
+            res.end(JSON.stringify({
+              success: true,
+              subTask: {
+                taskId: result.subTask.taskId,
+                title: result.subTask.title,
+                status: result.subTask.status,
+              },
+              mainTask: {
+                taskId: result.mainTask.taskId,
+                title: result.mainTask.title,
+                status: result.mainTask.status,
+                totalSubtasks: result.mainTask.totalSubtasks,
+                completedSubtasks: result.mainTask.completedSubtasks,
+              },
+              mainTaskCompleted: result.mainTaskCompleted,
+              completedAtCommit: result.completedAtCommit || null,
+            }));
+          } catch (err: any) {
+            res.writeHead(400, { 'Content-Type': 'application/json; charset=utf-8' });
+            res.end(JSON.stringify({ error: err.message || String(err) }));
+          }
+          break;
+        }
+
+        case '/api/auto/start-phase': {
+          // POST /api/auto/start-phase — 启动新阶段
+          if (req.method !== 'POST') {
+            res.writeHead(405, { 'Content-Type': 'application/json; charset=utf-8' });
+            res.end(JSON.stringify({ error: 'Method Not Allowed. Use POST.' }));
+            break;
+          }
+
+          const body = await readRequestBody(req);
+          const taskId = body?.taskId;
+          if (!taskId || typeof taskId !== 'string') {
+            res.writeHead(400, { 'Content-Type': 'application/json; charset=utf-8' });
+            res.end(JSON.stringify({ error: '缺少 taskId 参数' }));
+            break;
+          }
+
+          const store = createFreshStore(projectName, basePath);
+          const mainTask = store.getMainTask(taskId);
+          if (!mainTask) {
+            res.writeHead(404, { 'Content-Type': 'application/json; charset=utf-8' });
+            res.end(JSON.stringify({ error: `主任务 "${taskId}" 不存在` }));
+            break;
+          }
+
+          // 标记为 in_progress（幂等）
+          if (mainTask.status === 'pending') {
+            store.updateMainTaskStatus(taskId, 'in_progress');
+          }
+
+          const subTasks = store.listSubTasks(taskId).map((s: any) => ({
+            taskId: s.taskId,
+            title: s.title,
+            status: s.status,
+            description: s.description || null,
+            order: s.order,
+          }));
+
+          res.writeHead(200, { 'Content-Type': 'application/json; charset=utf-8' });
+          res.end(JSON.stringify({
+            success: true,
+            mainTask: {
+              taskId: mainTask.taskId,
+              title: mainTask.title,
+              status: 'in_progress',
+              totalSubtasks: subTasks.length,
+              completedSubtasks: subTasks.filter((s: any) => s.status === 'completed').length,
+            },
+            subTasks,
+            message: `阶段 ${taskId} 已启动，共 ${subTasks.length} 个子任务`,
+          }));
+          break;
+        }
+
+        case '/api/auto/heartbeat': {
+          // POST /api/auto/heartbeat — executor 心跳上报
+          if (req.method !== 'POST') {
+            res.writeHead(405, { 'Content-Type': 'application/json; charset=utf-8' });
+            res.end(JSON.stringify({ error: 'Method Not Allowed. Use POST.' }));
+            break;
+          }
+
+          const body = await readRequestBody(req);
+          if (!body?.executorId || !body?.status) {
+            res.writeHead(400, { 'Content-Type': 'application/json; charset=utf-8' });
+            res.end(JSON.stringify({ error: '缺少 executorId 或 status 参数' }));
+            break;
+          }
+
+          const heartbeat: ExecutorHeartbeat = {
+            executorId: body.executorId,
+            status: body.status,
+            lastScreenState: body.lastScreenState || undefined,
+            timestamp: body.timestamp || Date.now(),
+          };
+
+          recordHeartbeat(projectName, heartbeat);
+
+          res.writeHead(200, { 'Content-Type': 'application/json; charset=utf-8' });
+          res.end(JSON.stringify({
+            success: true,
+            receivedAt: Date.now(),
+            message: `心跳已接收: executor=${heartbeat.executorId}, status=${heartbeat.status}`,
+          }));
+          break;
+        }
+
+        case '/api/auto/status': {
+          // GET /api/auto/status — 获取完整的 autopilot 状态（含心跳信息）
+          const store = createFreshStore(projectName, basePath);
+          const status = getAutopilotStatus(store);
+          const heartbeatInfo = getLastHeartbeat(projectName);
+
+          res.writeHead(200, { 'Content-Type': 'application/json; charset=utf-8' });
+          res.end(JSON.stringify({
+            ...status,
+            executor: {
+              lastHeartbeat: heartbeatInfo.heartbeat,
+              receivedAt: heartbeatInfo.receivedAt || null,
+              isAlive: heartbeatInfo.isAlive,
+            },
+          }));
+          break;
+        }
+
+        // ==================================================================
+        // Autopilot API Endpoints (/api/auto/*)
+        // ==================================================================
+
+        case '/api/auto/next-action': {
+          // GET — 获取下一步该执行什么动作（供 executor 轮询）
+          const store = createFreshStore(projectName, basePath);
+          const nextAction = getAutopilotNextAction(store);
+          res.writeHead(200, { 'Content-Type': 'application/json; charset=utf-8' });
+          res.end(JSON.stringify(nextAction));
+          break;
+        }
+
+        case '/api/auto/current-phase': {
+          // GET — 获取当前进行中阶段及全部子任务状态
+          const store = createFreshStore(projectName, basePath);
+          const status = getAutopilotStatus(store);
+
+          if (!status.hasActivePhase || !status.activePhase) {
+            res.writeHead(200, { 'Content-Type': 'application/json; charset=utf-8' });
+            res.end(JSON.stringify({
+              hasActivePhase: false,
+              message: '当前没有进行中的阶段',
+            }));
+            break;
+          }
+
+          // 获取活跃阶段的全部子任务详情
+          const subTasks = store.listSubTasks(status.activePhase.taskId);
+          res.writeHead(200, { 'Content-Type': 'application/json; charset=utf-8' });
+          res.end(JSON.stringify({
+            hasActivePhase: true,
+            phase: status.activePhase,
+            currentSubTask: status.currentSubTask || null,
+            nextPendingSubTask: status.nextPendingSubTask || null,
+            subTasks: subTasks.map(s => ({
+              taskId: s.taskId,
+              title: s.title,
+              status: s.status,
+              description: s.description,
+              order: s.order,
+              completedAt: s.completedAt,
+            })),
+          }));
+          break;
+        }
+
+        case '/api/auto/complete-task': {
+          // POST — 标记子任务完成
+          if (req.method !== 'POST') {
+            res.writeHead(405, { 'Content-Type': 'application/json; charset=utf-8' });
+            res.end(JSON.stringify({ error: 'Method Not Allowed. Use POST.' }));
+            break;
+          }
+          const body = await readRequestBody(req);
+          const { taskId } = body;
+          if (!taskId || typeof taskId !== 'string') {
+            res.writeHead(400, { 'Content-Type': 'application/json; charset=utf-8' });
+            res.end(JSON.stringify({ error: '缺少 taskId 参数' }));
+            break;
+          }
+          const store = createFreshStore(projectName, basePath);
+          try {
+            const result = store.completeSubTask(taskId);
+            res.writeHead(200, { 'Content-Type': 'application/json; charset=utf-8' });
+            res.end(JSON.stringify({
+              success: true,
+              taskId,
+              mainTaskCompleted: result.mainTaskCompleted,
+              completedAtCommit: result.completedAtCommit || null,
+              mainTask: {
+                taskId: result.mainTask.taskId,
+                title: result.mainTask.title,
+                totalSubtasks: result.mainTask.totalSubtasks,
+                completedSubtasks: result.mainTask.completedSubtasks,
+                status: result.mainTask.status,
+              },
+            }));
+          } catch (err: any) {
+            res.writeHead(400, { 'Content-Type': 'application/json; charset=utf-8' });
+            res.end(JSON.stringify({ error: err.message || String(err) }));
+          }
+          break;
+        }
+
+        case '/api/auto/start-phase': {
+          // POST — 启动新阶段
+          if (req.method !== 'POST') {
+            res.writeHead(405, { 'Content-Type': 'application/json; charset=utf-8' });
+            res.end(JSON.stringify({ error: 'Method Not Allowed. Use POST.' }));
+            break;
+          }
+          const body = await readRequestBody(req);
+          const { taskId } = body;
+          if (!taskId || typeof taskId !== 'string') {
+            res.writeHead(400, { 'Content-Type': 'application/json; charset=utf-8' });
+            res.end(JSON.stringify({ error: '缺少 taskId 参数' }));
+            break;
+          }
+          const store = createFreshStore(projectName, basePath);
+          const mainTask = store.getMainTask(taskId);
+          if (!mainTask) {
+            res.writeHead(404, { 'Content-Type': 'application/json; charset=utf-8' });
+            res.end(JSON.stringify({ error: `主任务 "${taskId}" 未找到` }));
+            break;
+          }
+          if (mainTask.status === 'pending') {
+            store.updateMainTaskStatus(taskId, 'in_progress');
+          }
+          const subTasks = store.listSubTasks(taskId);
+          res.writeHead(200, { 'Content-Type': 'application/json; charset=utf-8' });
+          res.end(JSON.stringify({
+            success: true,
+            phase: {
+              taskId: mainTask.taskId,
+              title: mainTask.title,
+              status: 'in_progress',
+              totalSubtasks: subTasks.length,
+              completedSubtasks: subTasks.filter(s => s.status === 'completed').length,
+            },
+            subTasks: subTasks.map(s => ({
+              taskId: s.taskId,
+              title: s.title,
+              status: s.status,
+              description: s.description,
+              order: s.order,
+            })),
+          }));
+          break;
+        }
+
+        case '/api/auto/heartbeat': {
+          // POST — executor 心跳上报
+          if (req.method !== 'POST') {
+            res.writeHead(405, { 'Content-Type': 'application/json; charset=utf-8' });
+            res.end(JSON.stringify({ error: 'Method Not Allowed. Use POST.' }));
+            break;
+          }
+          const body = await readRequestBody(req);
+          const heartbeat: ExecutorHeartbeat = {
+            executorId: body.executorId || 'unknown',
+            status: body.status || 'active',
+            lastScreenState: body.lastScreenState,
+            timestamp: body.timestamp || Date.now(),
+          };
+          recordHeartbeat(projectName, heartbeat);
+          const hbInfo = getLastHeartbeat(projectName);
+          res.writeHead(200, { 'Content-Type': 'application/json; charset=utf-8' });
+          res.end(JSON.stringify({
+            success: true,
+            received: heartbeat,
+            isAlive: hbInfo.isAlive,
+          }));
+          break;
+        }
+
         case '/favicon.ico':
           res.writeHead(204);
           res.end();
@@ -361,9 +946,14 @@ function startServer(projectName: string, basePath: string, port: number): void 
     console.log(`║  地址:  ${url.padEnd(47)}║`);
     console.log('╠══════════════════════════════════════════════════════════╣');
     console.log('║  API 端点:                                              ║');
-    console.log(`║    GET /             可视化页面                         ║`);
-    console.log(`║    GET /api/graph    图谱数据 (JSON)                    ║`);
-    console.log(`║    GET /api/progress 项目进度 (JSON)                    ║`);
+    console.log(`║    GET  /                      可视化页面               ║`);
+    console.log(`║    GET  /api/graph             图谱数据 (JSON)          ║`);
+    console.log(`║    GET  /api/progress          项目进度 (JSON)          ║`);
+    console.log(`║    GET  /api/auto/next-action  下一步动作               ║`);
+    console.log(`║    GET  /api/auto/current-phase 当前阶段状态            ║`);
+    console.log(`║    POST /api/auto/complete-task 完成子任务              ║`);
+    console.log(`║    POST /api/auto/start-phase  启动新阶段               ║`);
+    console.log(`║    POST /api/auto/heartbeat    心跳上报                 ║`);
     console.log('╠══════════════════════════════════════════════════════════╣');
     console.log('║  按 Ctrl+C 停止服务器                                   ║');
     console.log('╚══════════════════════════════════════════════════════════╝');

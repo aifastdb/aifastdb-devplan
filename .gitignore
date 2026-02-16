@@ -5,3 +5,4 @@ dist/
 .DS_Store
 *.gwal
 DEVPLAN.md
+/executor/.venv

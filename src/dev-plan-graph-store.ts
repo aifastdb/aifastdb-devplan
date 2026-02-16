@@ -111,6 +111,8 @@ function sectionKey(section: string, subSection?: string): string {
 export class DevPlanGraphStore implements IDevPlanStore {
   private graph: SocialGraphV2;
   private projectName: string;
+  /** Git 操作的工作目录（多项目路由时指向项目根目录） */
+  private gitCwd: string | undefined;
   /** 缓存的项目根实体 ID */
   private projectEntityId: string | null = null;
   /** VibeSynapse 实例（用于 Embedding 生成），仅启用语义搜索时可用 */
@@ -120,6 +122,7 @@ export class DevPlanGraphStore implements IDevPlanStore {
 
   constructor(projectName: string, config: DevPlanGraphStoreConfig) {
     this.projectName = projectName;
+    this.gitCwd = config.gitCwd;
 
     // 构建 SocialGraphV2 配置
     const graphConfig: any = {
@@ -191,7 +194,7 @@ export class DevPlanGraphStore implements IDevPlanStore {
       try {
         this.synapse.embed('test');
         this.semanticSearchReady = true;
-        console.log('[DevPlan] Semantic search initialized (Candle MiniLM)');
+        console.error('[DevPlan] Semantic search initialized (Candle MiniLM)');
       } catch {
         console.warn('[DevPlan] VibeSynapse embed() dry-run failed. Falling back to literal search.');
         this.synapse = null;
@@ -1855,6 +1858,7 @@ export class DevPlanGraphStore implements IDevPlanStore {
         encoding: 'utf-8',
         timeout: 5000,
         stdio: ['pipe', 'pipe', 'pipe'],
+        cwd: this.gitCwd,
       }).trim();
     } catch {
       return undefined;
@@ -1867,6 +1871,7 @@ export class DevPlanGraphStore implements IDevPlanStore {
       execSync(`git merge-base --is-ancestor ${commit} ${target}`, {
         timeout: 5000,
         stdio: ['pipe', 'pipe', 'pipe'],
+        cwd: this.gitCwd,
       });
       return true;
     } catch {

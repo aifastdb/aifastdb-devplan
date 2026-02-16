@@ -1,0 +1,15 @@
+{
+  "defaultProject": "aifastdb-devplan",
+  "enableSemanticSearch": true,
+  "projects": {
+    "ai_db": {
+      "rootPath": "D:\\Project\\git\\ai_db"
+    },
+    "aifastdb-devplan": {
+      "rootPath": "D:\\Project\\git\\aifastdb-devplan"
+    },
+    "cursor_auto": {
+      "rootPath": "D:\\Project\\git\\cursor_auto"
+    }
+  }
+}

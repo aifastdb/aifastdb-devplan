@@ -68,6 +68,13 @@ export {
   type DevPlanGraphNode,
   type DevPlanGraphEdge,
   type DevPlanExportedGraph,
+  // Autopilot types
+  type AutopilotConfig,
+  type AutopilotAction,
+  type AutopilotNextAction,
+  type AutopilotStatus,
+  type ExecutorHeartbeat,
+  DEFAULT_AUTOPILOT_CONFIG,
 } from './types';
 
 // Store Implementations
@@ -79,8 +86,14 @@ export {
   createDevPlan,
   listDevPlans,
   getDefaultBasePath,
+  resolveBasePathForProject,
   getProjectEngine,
+  readDevPlanConfig,
+  writeDevPlanConfig,
+  resolveProjectName,
   type DevPlanEngine,
+  type DevPlanConfig,
+  type ProjectRegistryEntry,
 } from './dev-plan-factory';
 
 // Migration
@@ -89,3 +102,13 @@ export {
   type MigrateResult,
   type MigrateOptions,
 } from './dev-plan-migrate';
+
+// Autopilot
+export {
+  getAutopilotStatus,
+  getAutopilotNextAction,
+  getAutopilotConfig,
+  updateAutopilotConfig,
+  recordHeartbeat,
+  getLastHeartbeat,
+} from './autopilot';

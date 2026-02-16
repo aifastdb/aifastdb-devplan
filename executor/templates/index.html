@@ -1,0 +1,740 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>DevPlan Executor — 自动化监控</title>
+    <style>
+        * { margin: 0; padding: 0; box-sizing: border-box; }
+        body {
+            font-family: 'Segoe UI', 'Microsoft YaHei', sans-serif;
+            background: linear-gradient(135deg, #0f0f1e 0%, #1a1a2e 50%, #16213e 100%);
+            min-height: 100vh;
+            color: #e0e0e0;
+        }
+        .container { max-width: 1500px; margin: 0 auto; padding: 16px; }
+
+        /* ── Header ── */
+        header {
+            text-align: center; padding: 16px 0; margin-bottom: 16px;
+            border-bottom: 1px solid rgba(0,212,255,0.2);
+        }
+        header h1 { color: #00d4ff; font-size: 1.6em; letter-spacing: 2px; }
+        header .subtitle { color: #666; margin-top: 4px; font-size: 0.9em; }
+        .header-badges {
+            display: flex; justify-content: center; gap: 16px; margin-top: 8px;
+        }
+        .badge {
+            display: inline-flex; align-items: center; gap: 6px;
+            padding: 4px 12px; border-radius: 20px; font-size: 0.8em;
+            background: rgba(255,255,255,0.05); border: 1px solid rgba(255,255,255,0.1);
+        }
+        .badge .dot {
+            width: 8px; height: 8px; border-radius: 50%;
+            animation: pulse 2s infinite;
+        }
+        .badge .dot.green { background: #00ff88; }
+        .badge .dot.red { background: #ff4444; }
+        .badge .dot.yellow { background: #ffaa00; }
+        @keyframes pulse { 0%,100%{ opacity:1 } 50%{ opacity:0.4 } }
+
+        /* ── Countdown ── */
+        .countdown-badge {
+            display: inline-flex; align-items: center; gap: 6px;
+            padding: 4px 14px; border-radius: 20px; font-size: 0.8em;
+            background: rgba(0,212,255,0.08); border: 1px solid rgba(0,212,255,0.25);
+            font-family: 'Consolas', 'Fira Code', monospace;
+            min-width: 110px; justify-content: center;
+        }
+        .countdown-badge .countdown-num {
+            font-size: 1.15em; font-weight: 700; color: #00d4ff;
+            min-width: 20px; text-align: right;
+        }
+        .countdown-badge.active { border-color: rgba(0,255,136,0.4); background: rgba(0,255,136,0.06); }
+        .countdown-badge.active .countdown-num { color: #00ff88; }
+        .countdown-ring {
+            width: 22px; height: 22px; border-radius: 50%;
+            border: 2px solid rgba(0,212,255,0.2); position: relative;
+        }
+        .countdown-ring-fill {
+            position: absolute; inset: -2px; border-radius: 50%;
+            border: 2px solid transparent; border-top-color: #00d4ff;
+            transition: transform 1s linear;
+        }
+
+        /* ── Grid ── */
+        .main-grid {
+            display: grid;
+            grid-template-columns: 1fr 1fr 1fr;
+            gap: 16px;
+        }
+        @media (max-width: 1200px) { .main-grid { grid-template-columns: 1fr 1fr; } }
+        @media (max-width: 800px)  { .main-grid { grid-template-columns: 1fr; } }
+        .span-2 { grid-column: span 2; }
+        @media (max-width: 800px)  { .span-2 { grid-column: span 1; } }
+        .span-3 { grid-column: span 3; }
+        @media (max-width: 1200px) { .span-3 { grid-column: span 2; } }
+        @media (max-width: 800px)  { .span-3 { grid-column: span 1; } }
+
+        /* ── Card ── */
+        .card {
+            background: rgba(30,30,47,0.9); border-radius: 12px;
+            padding: 16px; box-shadow: 0 4px 24px rgba(0,0,0,0.3);
+            border: 1px solid rgba(255,255,255,0.04);
+        }
+        .card-header {
+            display: flex; align-items: center; gap: 8px;
+            margin-bottom: 12px; padding-bottom: 8px;
+            border-bottom: 1px solid rgba(255,255,255,0.08);
+        }
+        .card-header h2 { font-size: 1em; color: #00d4ff; font-weight: 600; }
+
+        /* ── Status Rows ── */
+        .status-grid { display: grid; gap: 8px; }
+        .status-row {
+            display: flex; justify-content: space-between; align-items: center;
+            padding: 8px 12px; background: rgba(255,255,255,0.03); border-radius: 6px;
+        }
+        .status-label { color: #777; font-size: 0.85em; }
+        .status-value { font-weight: 600; font-size: 0.9em; }
+
+        /* Status colors */
+        .s-WORKING        { color: #4CAF50; }
+        .s-IDLE           { color: #888; }
+        .s-INTERRUPTED    { color: #ffaa00; }
+        .s-WAITING_CONFIRM{ color: #00d4ff; }
+        .s-COMPLETED      { color: #00ff88; }
+        .s-NEXT_PHASE     { color: #9966ff; }
+        .s-TERMINAL_RUNNING { color: #ff9800; }
+        .s-ERROR          { color: #ff4444; }
+        .s-CONNECTION_ERROR { color: #ff6b6b; }
+        .s-PROVIDER_ERROR  { color: #ff8800; }
+        .s-RESPONSE_STALL  { color: #cc6600; }
+        .s-UNKNOWN        { color: #555; }
+
+        /* Action colors */
+        .a-send_task      { color: #00ff88; }
+        .a-send_continue  { color: #ffaa00; }
+        .a-start_phase    { color: #9966ff; }
+        .a-wait           { color: #888; }
+        .a-all_done       { color: #00d4ff; }
+        .a-error_recovery { color: #ff4444; }
+
+        /* ── Progress Bar ── */
+        .progress-wrap { display: flex; align-items: center; gap: 10px; }
+        .progress-bar {
+            flex: 1; height: 6px; background: rgba(255,255,255,0.08);
+            border-radius: 3px; overflow: hidden;
+        }
+        .progress-fill {
+            height: 100%; border-radius: 3px;
+            background: linear-gradient(90deg, #00d4ff, #00ff88);
+            transition: width 0.5s ease;
+        }
+        .progress-text { min-width: 50px; text-align: right; font-size: 0.85em; color: #aaa; }
+
+        /* ── Decision Box ── */
+        .decision-box {
+            background: rgba(0,212,255,0.05); border-left: 3px solid #00d4ff;
+            padding: 10px 14px; border-radius: 0 8px 8px 0;
+        }
+        .decision-title { color: #00d4ff; font-size: 0.8em; margin-bottom: 4px; }
+        .decision-content { font-size: 0.9em; line-height: 1.5; }
+
+        /* ── Raw Response ── */
+        .raw-box {
+            background: rgba(0,0,0,0.3); padding: 10px; border-radius: 6px;
+            font-family: 'Consolas', 'Fira Code', monospace; font-size: 0.82em;
+            line-height: 1.5; max-height: 120px; overflow-y: auto;
+            white-space: pre-wrap; word-break: break-all;
+        }
+
+        /* ── Screenshots ── */
+        .dual-screenshots { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; }
+        .screenshot-item {
+            background: rgba(255,255,255,0.02); border-radius: 8px; padding: 8px;
+        }
+        .screenshot-label {
+            text-align: center; font-size: 0.78em; color: #666; margin-bottom: 6px;
+        }
+        .screenshot-box {
+            width: 100%; min-height: 140px; background: rgba(0,0,0,0.3);
+            border-radius: 6px; display: flex; align-items: center;
+            justify-content: center; overflow: hidden; cursor: pointer;
+        }
+        .screenshot-box:hover { box-shadow: 0 0 8px rgba(0,212,255,0.2); }
+        .screenshot-box img { max-width: 100%; max-height: 200px; object-fit: contain; }
+        .screenshot-placeholder { color: #444; font-size: 0.85em; }
+        .screenshot-time {
+            text-align: center; font-size: 0.75em; color: #00d4ff;
+            font-family: monospace; margin-top: 4px;
+        }
+
+        /* ── Quadrant Grid (2×2) ── */
+        .quad-grid {
+            display: grid; grid-template-columns: 1fr 1fr; gap: 6px;
+        }
+        .quad-cell {
+            position: relative; border-radius: 6px; overflow: hidden;
+            background: rgba(0,0,0,0.3); min-height: 100px;
+            display: flex; align-items: center; justify-content: center;
+        }
+        .quad-cell img { max-width: 100%; max-height: 180px; object-fit: contain; }
+        .quad-cell-label {
+            position: absolute; top: 4px; left: 6px;
+            font-size: 0.68em; padding: 1px 6px; border-radius: 3px;
+            background: rgba(0,0,0,0.6); z-index: 2;
+        }
+        .quad-cell-status {
+            position: absolute; bottom: 4px; right: 6px;
+            font-size: 0.72em; padding: 1px 6px; border-radius: 3px;
+            background: rgba(0,0,0,0.6); font-weight: 600; z-index: 2;
+        }
+        /* 左侧象限 — 置灰不可点击 */
+        .quad-cell.disabled {
+            opacity: 0.35; cursor: not-allowed; pointer-events: none;
+        }
+        .quad-cell.disabled::after {
+            content: ''; position: absolute; inset: 0;
+            background: rgba(50,50,60,0.5); z-index: 1;
+        }
+        /* 右侧象限 — 可点击放大 */
+        .quad-cell.active {
+            cursor: pointer; border: 1px solid rgba(153,102,255,0.3);
+            transition: border-color 0.2s, box-shadow 0.2s;
+        }
+        .quad-cell.active:hover {
+            border-color: rgba(153,102,255,0.8);
+            box-shadow: 0 0 12px rgba(153,102,255,0.3);
+        }
+
+        /* ── Lightbox Modal ── */
+        .lightbox-overlay {
+            display: none; position: fixed; inset: 0; z-index: 9999;
+            background: rgba(0,0,0,0.88); align-items: center; justify-content: center;
+            cursor: zoom-out;
+        }
+        .lightbox-overlay.open { display: flex; }
+        .lightbox-overlay img {
+            max-width: 92vw; max-height: 92vh; object-fit: contain;
+            border-radius: 8px; box-shadow: 0 0 40px rgba(0,212,255,0.2);
+        }
+        .lightbox-label {
+            position: fixed; top: 16px; left: 50%; transform: translateX(-50%);
+            color: #aaa; font-size: 0.9em; background: rgba(0,0,0,0.6);
+            padding: 6px 20px; border-radius: 20px; z-index: 10000;
+        }
+        .lightbox-close {
+            position: fixed; top: 16px; right: 24px; color: #888; font-size: 1.6em;
+            cursor: pointer; z-index: 10000; background: rgba(0,0,0,0.5);
+            width: 36px; height: 36px; border-radius: 50%;
+            display: flex; align-items: center; justify-content: center;
+            transition: color 0.2s;
+        }
+        .lightbox-close:hover { color: #fff; }
+
+        /* ── Logs ── */
+        .logs-box {
+            max-height: 260px; overflow-y: auto;
+            font-family: 'Consolas', monospace; font-size: 0.8em;
+        }
+        .log-entry {
+            padding: 5px 8px; border-bottom: 1px solid rgba(255,255,255,0.03);
+            display: flex; gap: 8px;
+        }
+        .log-time { color: #555; min-width: 62px; }
+        .log-level { min-width: 48px; font-weight: 600; }
+        .log-level.INFO    { color: #00d4ff; }
+        .log-level.WARNING { color: #ffaa00; }
+        .log-level.ERROR   { color: #ff4444; }
+        .log-level.DEBUG   { color: #666; }
+        .log-msg { flex: 1; word-break: break-all; }
+
+        /* ── Controls ── */
+        .ctrl-row {
+            display: flex; gap: 8px; flex-wrap: wrap; align-items: center;
+            margin-bottom: 10px;
+        }
+        .ctrl-label { color: #777; font-size: 0.85em; min-width: 60px; }
+        .ctrl-input {
+            flex: 1; min-width: 160px; padding: 8px 12px;
+            border: 1px solid rgba(255,255,255,0.1); border-radius: 6px;
+            background: rgba(0,0,0,0.2); color: #e0e0e0; font-size: 0.9em;
+        }
+        .ctrl-input:focus { outline: none; border-color: #00d4ff; }
+        .ctrl-input-sm { width: 60px; min-width: 60px; flex: unset; text-align: center; }
+        .btn {
+            padding: 8px 16px; border: none; border-radius: 6px; cursor: pointer;
+            font-size: 0.85em; font-weight: 600; transition: all 0.15s;
+            display: inline-flex; align-items: center; gap: 6px;
+        }
+        .btn:hover { transform: translateY(-1px); box-shadow: 0 3px 12px rgba(0,0,0,0.3); }
+        .btn:active { transform: translateY(0); }
+        .btn:disabled { opacity: 0.4; cursor: not-allowed; transform: none; }
+        .btn-primary { background: linear-gradient(135deg, #00d4ff, #0099cc); color: #fff; }
+        .btn-success { background: linear-gradient(135deg, #00ff88, #00cc6a); color: #111; }
+        .btn-warning { background: linear-gradient(135deg, #ffaa00, #ff8800); color: #111; }
+        .btn-ghost  {
+            background: transparent; border: 1px solid rgba(255,255,255,0.15); color: #aaa;
+        }
+        .btn-ghost:hover { border-color: #00d4ff; color: #00d4ff; }
+
+        /* ── Footer ── */
+        footer {
+            text-align: center; padding: 12px; color: #444; font-size: 0.8em;
+            margin-top: 16px;
+        }
+    </style>
+</head>
+<body>
+<div class="container">
+    <!-- ═══ Header ═══ -->
+    <header>
+        <h1>DevPlan Executor</h1>
+        <div class="subtitle">Cursor IDE 无人值守自动化监控</div>
+        <div class="header-badges">
+            <span class="badge">
+                <span class="dot" id="runDot"></span>
+                <span id="runLabel">--</span>
+            </span>
+            <span class="badge" id="badgeProject">项目: --</span>
+            <span class="badge" id="badgeExecutor">Executor: --</span>
+            <span class="badge" id="badgeOverall">进度: --</span>
+            <span class="countdown-badge" id="countdownBadge" title="距下次截图分析">
+                <span class="countdown-ring"><span class="countdown-ring-fill" id="countdownRing"></span></span>
+                <span>下次截图</span>
+                <span class="countdown-num" id="countdownNum">--</span>
+                <span style="color:#666">s</span>
+            </span>
+        </div>
+    </header>
+
+    <!-- ═══ Control Panel ═══ -->
+    <div class="card" style="margin-bottom: 16px;">
+        <div class="card-header"><h2>🎮 控制面板</h2></div>
+        <div class="ctrl-row">
+            <button class="btn btn-primary" onclick="findInput()">🎯 识别输入框</button>
+            <input class="ctrl-input" id="sendText" value="请继续" placeholder="输入文本">
+            <button class="btn btn-success" id="btnSend" onclick="sendText()">📤 发送</button>
+            <button class="btn btn-ghost" onclick="quickSend('请继续')">请继续</button>
+        </div>
+        <div class="ctrl-row">
+            <span class="ctrl-label">截图间隔</span>
+            <input class="ctrl-input ctrl-input-sm" type="number" id="intervalInput" value="1.5" min="0.5" max="10" step="0.5">
+            <span style="color:#666;font-size:0.85em">秒</span>
+            <button class="btn btn-ghost" onclick="applyInterval()">应用</button>
+            <span style="flex:1"></span>
+            <span class="ctrl-label">启动阶段</span>
+            <input class="ctrl-input ctrl-input-sm" style="width:100px" id="phaseInput" placeholder="phase-X">
+            <button class="btn btn-warning" onclick="startPhase()">🚀 启动</button>
+        </div>
+    </div>
+
+    <!-- ═══ Main Grid ═══ -->
+    <div class="main-grid">
+
+        <!-- ─── DevPlan 状态 ─── -->
+        <div class="card">
+            <div class="card-header"><h2>📋 DevPlan 状态</h2></div>
+            <div class="status-grid">
+                <div class="status-row">
+                    <span class="status-label">当前阶段</span>
+                    <span class="status-value" id="phaseInfo">--</span>
+                </div>
+                <div class="status-row">
+                    <span class="status-label">阶段进度</span>
+                    <div class="progress-wrap">
+                        <div class="progress-bar"><div class="progress-fill" id="phaseFill" style="width:0"></div></div>
+                        <span class="progress-text" id="phaseText">0/0</span>
+                    </div>
+                </div>
+                <div class="status-row">
+                    <span class="status-label">当前任务</span>
+                    <span class="status-value" id="taskInfo" style="font-size:0.85em">--</span>
+                </div>
+                <div class="status-row">
+                    <span class="status-label">建议动作</span>
+                    <span class="status-value" id="devplanAction">--</span>
+                </div>
+            </div>
+            <div style="margin-top:10px;font-size:0.82em;color:#666" id="devplanMsg"></div>
+        </div>
+
+        <!-- ─── UI 视觉状态 ─── -->
+        <div class="card">
+            <div class="card-header"><h2>👁️ UI 视觉状态</h2></div>
+            <div class="status-grid">
+                <div class="status-row">
+                    <span class="status-label">屏幕状态</span>
+                    <span class="status-value" id="uiStatus">--</span>
+                </div>
+                <div class="status-row">
+                    <span class="status-label">屏幕变化</span>
+                    <span class="status-value" id="screenChange">--</span>
+                </div>
+                <div class="status-row">
+                    <span class="status-label">重试计数</span>
+                    <span class="status-value" id="retryCount">0</span>
+                </div>
+            </div>
+            <div style="margin-top:10px;">
+                <div style="color:#666;font-size:0.8em;margin-bottom:4px">模型响应</div>
+                <div class="raw-box" id="rawResponse">等待分析...</div>
+            </div>
+        </div>
+
+        <!-- ─── 决策引擎 ─── -->
+        <div class="card">
+            <div class="card-header"><h2>🧠 决策引擎</h2></div>
+            <div class="decision-box" style="margin-bottom:12px">
+                <div class="decision-title">最终动作</div>
+                <div class="decision-content" id="decisionAction" style="font-size:1.1em;font-weight:700">--</div>
+            </div>
+            <div class="decision-box" style="border-left-color:#666">
+                <div class="decision-title">决策原因</div>
+                <div class="decision-content" id="decisionMsg">--</div>
+            </div>
+        </div>
+
+        <!-- ─── 截图对比 ─── -->
+        <div class="card span-2">
+            <div class="card-header"><h2>📸 连续截图对比</h2></div>
+            <div class="dual-screenshots">
+                <div class="screenshot-item">
+                    <div class="screenshot-label">截图 1（T+0s）</div>
+                    <div class="screenshot-box" id="ssBox1"><span class="screenshot-placeholder">等待截图...</span></div>
+                    <div class="screenshot-time" id="ssTime1">--:--:--</div>
+                </div>
+                <div class="screenshot-item">
+                    <div class="screenshot-label" id="ss2Label">截图 2（T+1.5s）</div>
+                    <div class="screenshot-box" id="ssBox2"><span class="screenshot-placeholder">等待截图...</span></div>
+                    <div class="screenshot-time" id="ssTime2">--:--:--</div>
+                </div>
+            </div>
+            <!-- 四象限模式：2×2 网格 -->
+            <div id="quadSection" style="display:none; margin-top: 14px; border-top: 1px solid rgba(255,255,255,0.06); padding-top: 12px;">
+                <div style="display:flex; align-items:center; gap:8px; margin-bottom:8px;">
+                    <span style="color:#9966ff; font-size:0.85em; font-weight:600;">🔲 四象限分析</span>
+                    <span style="color:#555; font-size:0.75em;">左侧（边栏）跳过 · 右侧（内容区）→ AI 识别 · 点击右侧可放大</span>
+                </div>
+                <div class="quad-grid">
+                    <!-- 左上 — 置灰不可点击 -->
+                    <div class="quad-cell disabled" id="quadTLCell">
+                        <span class="quad-cell-label" style="color:#666;">左上 · 边栏</span>
+                        <span id="quadTLImg" class="screenshot-placeholder">不分析</span>
+                    </div>
+                    <!-- 右上 — 可点击放大 -->
+                    <div class="quad-cell active" id="quadTRCell" onclick="openLightbox('quadTRImg','右上（代码编辑区）')">
+                        <span class="quad-cell-label" style="color:#9966ff;">右上 · 编辑区</span>
+                        <span class="quad-cell-status" id="quadTRStatus">--</span>
+                        <span id="quadTRImg" class="screenshot-placeholder">等待截图...</span>
+                    </div>
+                    <!-- 左下 — 置灰不可点击 -->
+                    <div class="quad-cell disabled" id="quadBLCell">
+                        <span class="quad-cell-label" style="color:#666;">左下 · 边栏</span>
+                        <span id="quadBLImg" class="screenshot-placeholder">不分析</span>
+                    </div>
+                    <!-- 右下 — 可点击放大（最重要） -->
+                    <div class="quad-cell active" id="quadBRCell" onclick="openLightbox('quadBRImg','右下（输入框+弹窗）⭐')" style="border-color:rgba(153,102,255,0.5);">
+                        <span class="quad-cell-label" style="color:#ff9800;">右下 · 输入框 ⭐</span>
+                        <span class="quad-cell-status" id="quadBRStatus">--</span>
+                        <span id="quadBRImg" class="screenshot-placeholder">等待截图...</span>
+                    </div>
+                </div>
+            </div>
+        </div>
+
+    <!-- ═══ Lightbox Modal ═══ -->
+    <div class="lightbox-overlay" id="lightboxOverlay" onclick="closeLightbox()">
+        <span class="lightbox-label" id="lightboxLabel"></span>
+        <span class="lightbox-close" onclick="closeLightbox()">✕</span>
+        <img id="lightboxImg" src="" alt="放大预览">
+    </div>
+
+        <!-- ─── 日志 ─── -->
+        <div class="card span-3">
+            <div class="card-header"><h2>📝 运行日志</h2></div>
+            <div class="logs-box" id="logsBox">
+                <div class="log-entry">
+                    <span class="log-time">--:--:--</span>
+                    <span class="log-level INFO">INFO</span>
+                    <span class="log-msg">等待启动...</span>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <footer>
+        <span>最后更新: <span id="lastUpdate">--:--:--</span></span>
+    </footer>
+</div>
+
+<script>
+const STATUS_NAMES = {
+    WORKING:'工作中', IDLE:'空闲', INTERRUPTED:'已中断', WAITING_CONFIRM:'等待确认',
+    COMPLETED:'已完成', NEXT_PHASE:'阶段完成', TERMINAL_RUNNING:'终端运行中',
+    ERROR:'错误', CONNECTION_ERROR:'连接错误', PROVIDER_ERROR:'Provider错误',
+    RESPONSE_STALL:'响应停滞', UNKNOWN:'未知',
+};
+const ACTION_NAMES = {
+    send_task:'发送任务', send_continue:'发送继续', start_phase:'启动阶段',
+    wait:'等待中', all_done:'全部完成', error_recovery:'错误恢复',
+};
+
+function updateUI(d) {
+    // Header badges
+    const runDot = document.getElementById('runDot');
+    runDot.className = 'dot ' + (d.running ? 'green' : 'red');
+    document.getElementById('runLabel').textContent = d.running ? '运行中' : '已停止';
+    document.getElementById('badgeProject').textContent = '项目: ' + (d.project_name || '--');
+    document.getElementById('badgeExecutor').textContent = 'Executor: ' + (d.executor_id || '--');
+    document.getElementById('badgeOverall').textContent = '进度: ' + (d.overall_progress || '--');
+
+    // DevPlan 状态
+    const phaseStr = d.current_phase ? (d.current_phase + ' — ' + (d.current_phase_title||'')) : '--';
+    document.getElementById('phaseInfo').textContent = phaseStr;
+
+    const pp = (d.phase_progress || '0/0').split('/');
+    const done = parseInt(pp[0]) || 0, total = parseInt(pp[1]) || 0;
+    const pct = total > 0 ? (done / total * 100) : 0;
+    document.getElementById('phaseFill').style.width = pct + '%';
+    document.getElementById('phaseText').textContent = d.phase_progress || '0/0';
+
+    const taskStr = d.current_task_id ? (d.current_task_id + ': ' + (d.current_task_title||'')) : '--';
+    document.getElementById('taskInfo').textContent = taskStr;
+
+    const daEl = document.getElementById('devplanAction');
+    daEl.textContent = ACTION_NAMES[d.devplan_action] || d.devplan_action || '--';
+    daEl.className = 'status-value a-' + (d.devplan_action || '');
+    document.getElementById('devplanMsg').textContent = d.devplan_message || '';
+
+    // UI 视觉状态
+    const usEl = document.getElementById('uiStatus');
+    usEl.textContent = STATUS_NAMES[d.ui_status] || d.ui_status || '--';
+    usEl.className = 'status-value s-' + (d.ui_status || '');
+    document.getElementById('screenChange').textContent = d.screen_changing ? '有变化 🟢' : '无变化 ⚪';
+    document.getElementById('retryCount').textContent = d.continue_retries || 0;
+    document.getElementById('rawResponse').textContent = d.raw_response || '等待分析...';
+
+    // 决策引擎
+    const decEl = document.getElementById('decisionAction');
+    decEl.textContent = ACTION_NAMES[d.decision_action] || d.decision_action || '--';
+    decEl.className = 'decision-content a-' + (d.decision_action || '');
+    document.getElementById('decisionMsg').textContent = d.decision_message || '--';
+
+    // 截图间隔和时间（截图 base64 由独立 /api/screenshots 拉取）
+    if (d.screenshot_time_1) document.getElementById('ssTime1').textContent = d.screenshot_time_1;
+    if (d.screenshot_time_2) document.getElementById('ssTime2').textContent = d.screenshot_time_2;
+    if (d.screenshot_interval) {
+        document.getElementById('intervalInput').value = d.screenshot_interval;
+        document.getElementById('ss2Label').textContent = '截图 2（T+' + d.screenshot_interval + 's）';
+    }
+
+    // 四象限模式（状态标签由 SSE 更新，截图由独立端点拉取）
+    const quadSec = document.getElementById('quadSection');
+    if (d.split_quadrant) {
+        quadSec.style.display = 'block';
+        const trStatusEl = document.getElementById('quadTRStatus');
+        trStatusEl.textContent = STATUS_NAMES[d.quad_top_right_status] || d.quad_top_right_status || '--';
+        trStatusEl.className = 'quad-cell-status s-' + (d.quad_top_right_status || '');
+        const brStatusEl = document.getElementById('quadBRStatus');
+        brStatusEl.textContent = STATUS_NAMES[d.quad_bottom_right_status] || d.quad_bottom_right_status || '--';
+        brStatusEl.className = 'quad-cell-status s-' + (d.quad_bottom_right_status || '');
+    } else {
+        quadSec.style.display = 'none';
+    }
+
+    // 日志
+    if (d.logs && d.logs.length) {
+        const html = [...d.logs].reverse().map(l =>
+            '<div class="log-entry">' +
+            '<span class="log-time">' + l.time + '</span>' +
+            '<span class="log-level ' + l.level + '">' + l.level + '</span>' +
+            '<span class="log-msg">' + l.message + '</span></div>'
+        ).join('');
+        document.getElementById('logsBox').innerHTML = html;
+    }
+
+    document.getElementById('lastUpdate').textContent = d.last_update || '--:--:--';
+
+    // ── 客户端倒计时（由服务器信号触发，本地每秒递减） ──
+    const serverCountdown = d.next_tick_countdown || 0;
+    const interval = d.poll_interval || 15;
+    if (serverCountdown > 0 && _cdLocalValue <= 0) {
+        // 服务器通知倒计时开始 → 启动本地定时器
+        _cdStartLocal(serverCountdown, interval);
+    } else if (serverCountdown <= 0 && _cdLocalValue > 0) {
+        // 服务器通知倒计时结束（正在分析）→ 停止本地定时器
+        _cdStopLocal();
+    }
+}
+
+// ═══ 客户端倒计时管理 ═══
+let _cdLocalValue = 0;      // 当前本地倒计时值
+let _cdTimerId = null;       // 定时器 ID
+let _cdTotalInterval = 15;   // 总间隔（用于进度环计算）
+
+function _cdStartLocal(seconds, total) {
+    _cdLocalValue = seconds;
+    _cdTotalInterval = total || seconds;
+    _cdStopLocal();  // 先清理旧定时器
+    _cdRender();
+    _cdTimerId = window.setInterval(() => {
+        _cdLocalValue--;
+        if (_cdLocalValue <= 0) {
+            _cdLocalValue = 0;
+            _cdStopLocal();
+        }
+        _cdRender();
+    }, 1000);
+}
+
+function _cdStopLocal() {
+    if (_cdTimerId) {
+        clearInterval(_cdTimerId);
+        _cdTimerId = null;
+    }
+}
+
+function _cdRender() {
+    const cdEl = document.getElementById('countdownNum');
+    const cdBadge = document.getElementById('countdownBadge');
+    const cdRing = document.getElementById('countdownRing');
+    if (_cdLocalValue > 0) {
+        cdEl.textContent = _cdLocalValue;
+        cdBadge.classList.remove('active');
+        cdBadge.title = '距下次截图分析 ' + _cdLocalValue + ' 秒';
+        const angle = 360 * (1 - _cdLocalValue / _cdTotalInterval);
+        cdRing.style.transform = 'rotate(' + angle + 'deg)';
+    } else {
+        cdEl.textContent = '⏳';
+        cdBadge.classList.add('active');
+        cdBadge.title = '正在截图分析中...';
+        cdRing.style.transform = 'rotate(0deg)';
+    }
+}
+
+// ═══ SSE（轻量状态推送，不含截图 base64） ═══
+function connectSSE() {
+    const es = new EventSource('/api/stream');
+    es.onmessage = e => updateUI(JSON.parse(e.data));
+    es.onerror = () => { console.log('SSE 断开，3s 后重连'); setTimeout(connectSSE, 3000); };
+}
+
+// ═══ 截图独立拉取（每 5 秒一次，减少 SSE 带宽） ═══
+let _lastScreenshotTime1 = '';
+function fetchScreenshots() {
+    fetch('/api/screenshots').then(r => r.json()).then(d => {
+        // 只在截图有变化时更新 DOM（避免图片闪烁）
+        if (d.screenshot1 && d.screenshot_time_1 !== _lastScreenshotTime1) {
+            _lastScreenshotTime1 = d.screenshot_time_1;
+            // 全屏截图
+            document.getElementById('ssBox1').innerHTML = '<img src="data:image/png;base64,' + d.screenshot1 + '">';
+            document.getElementById('ssBox2').innerHTML = '<img src="data:image/png;base64,' + d.screenshot2 + '">';
+            if (d.screenshot_time_1) document.getElementById('ssTime1').textContent = d.screenshot_time_1;
+            if (d.screenshot_time_2) document.getElementById('ssTime2').textContent = d.screenshot_time_2;
+        }
+        // 四象限截图（独立判断，可能和全屏截图不同时更新）
+        if (d.quad_top_left) {
+            const el = document.getElementById('quadTLImg');
+            if (el) el.outerHTML = '<img id="quadTLImg" src="data:image/png;base64,' + d.quad_top_left + '">';
+        }
+        if (d.quad_top_right) {
+            const el = document.getElementById('quadTRImg');
+            if (el) el.outerHTML = '<img id="quadTRImg" src="data:image/png;base64,' + d.quad_top_right + '">';
+        }
+        if (d.quad_bottom_left) {
+            const el = document.getElementById('quadBLImg');
+            if (el) el.outerHTML = '<img id="quadBLImg" src="data:image/png;base64,' + d.quad_bottom_left + '">';
+        }
+        if (d.quad_bottom_right) {
+            const el = document.getElementById('quadBRImg');
+            if (el) el.outerHTML = '<img id="quadBRImg" src="data:image/png;base64,' + d.quad_bottom_right + '">';
+        }
+    }).catch(() => {});
+}
+
+// ═══ 初始化 ═══
+fetch('/api/state').then(r => r.json()).then(d => {
+    updateUI(d);
+    fetchScreenshots();
+    connectSSE();
+    // 定期拉取截图（每 5 秒）
+    window.setInterval(fetchScreenshots, 5000);
+});
+
+// Controls
+function findInput() {
+    fetch('/api/find_input', {method:'POST'}).then(r=>r.json()).then(d => {
+        alert(d.success ? '已定位输入框' : '失败: ' + d.message);
+    });
+}
+function sendText() {
+    const text = document.getElementById('sendText').value || '请继续';
+    const btn = document.getElementById('btnSend');
+    btn.disabled = true; btn.textContent = '⏳';
+    fetch('/api/send_text', {
+        method:'POST', headers:{'Content-Type':'application/json'},
+        body: JSON.stringify({text})
+    }).then(r=>r.json()).then(d => {
+        btn.textContent = d.success ? '✅' : '❌';
+        setTimeout(() => { btn.innerHTML = '📤 发送'; btn.disabled = false; }, 1500);
+    }).catch(() => {
+        btn.innerHTML = '📤 发送'; btn.disabled = false;
+    });
+}
+function quickSend(t) { document.getElementById('sendText').value = t; sendText(); }
+function applyInterval() {
+    const v = parseFloat(document.getElementById('intervalInput').value) || 1.5;
+    fetch('/api/set_interval', {
+        method:'POST', headers:{'Content-Type':'application/json'},
+        body: JSON.stringify({interval: v})
+    }).then(r=>r.json()).then(d => {
+        if (d.success) document.getElementById('ss2Label').textContent = '截图 2（T+' + d.interval + 's）';
+    });
+}
+function startPhase() {
+    const id = document.getElementById('phaseInput').value.trim();
+    if (!id) { alert('请输入阶段 ID，如 phase-6'); return; }
+    fetch('/api/start_phase', {
+        method:'POST', headers:{'Content-Type':'application/json'},
+        body: JSON.stringify({phaseId: id})
+    }).then(r=>r.json()).then(d => {
+        alert(d.success ? '已启动 ' + id : '失败: ' + d.message);
+    });
+}
+
+// ── Lightbox (点击放大) ──
+function openLightbox(imgId, label) {
+    const imgEl = document.getElementById(imgId);
+    if (!imgEl || !imgEl.src) return;
+    const overlay = document.getElementById('lightboxOverlay');
+    document.getElementById('lightboxImg').src = imgEl.src;
+    document.getElementById('lightboxLabel').textContent = label || '';
+    overlay.classList.add('open');
+}
+function closeLightbox() {
+    document.getElementById('lightboxOverlay').classList.remove('open');
+}
+// ESC 关闭
+document.addEventListener('keydown', function(e) {
+    if (e.key === 'Escape') closeLightbox();
+});
+// 全屏截图也可点击放大
+document.getElementById('ssBox1').addEventListener('click', function() {
+    var img = this.querySelector('img');
+    if (img) { openLightbox_src(img.src, '截图 1（全屏）'); }
+});
+document.getElementById('ssBox2').addEventListener('click', function() {
+    var img = this.querySelector('img');
+    if (img) { openLightbox_src(img.src, '截图 2（全屏）'); }
+});
+function openLightbox_src(src, label) {
+    if (!src) return;
+    document.getElementById('lightboxImg').src = src;
+    document.getElementById('lightboxLabel').textContent = label || '';
+    document.getElementById('lightboxOverlay').classList.add('open');
+}
+</script>
+</body>
+</html>

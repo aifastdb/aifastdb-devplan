@@ -1,140 +1,86 @@
 ---
-description: DevPlan 开发计划管理工具。当用户提到开发计划、任务进度、文档管理、或说"开始/继续/恢复/启动 phase-X"时激活。
+description: aifastdb-devplan 项目的 DevPlan 配置。包含项目标识、文档层级、开发阶段。通用的 DevPlan 工作流规则由用户级全局规则提供。
 globs: []
 alwaysApply: true
+mcpServers: aifastdb-devplan
 ---
 
-# DevPlan — 开发计划管理
+# aifastdb-devplan 项目 — DevPlan 配置
 
-## MCP Server
+> **MCP Server**: `aifastdb-devplan`  
+> **项目定位**: 基于 aifastdb 存储引擎的通用开发计划管理 MCP Server
+
+## 项目标识
 
 ```
-mcpServers: aifastdb-devplan
+projectName = "aifastdb-devplan"
 ```
 
-## ⚠️ 关键规则：开发阶段触发词识别
+## 文档层级
 
-**当用户说出以下任何模式时，必须首先调用 `devplan_start_phase` 工具**（将主任务标记为 in_progress）：
-
-| 用户说法示例 | 动作 |
-|---|---|
-| "请开始 phase-37 的任务" | → `devplan_start_phase(taskId: "phase-37")` |
-| "开始 phase-37" / "开始开发 phase-37" | → `devplan_start_phase(taskId: "phase-37")` |
-| "开始开发 phase-37 的任务" | → `devplan_start_phase(taskId: "phase-37")` |
-| "继续 phase-37" / "继续开发 phase-37" | → `devplan_start_phase(taskId: "phase-37")` |
-| "继续开发 phase-37 的任务" | → `devplan_start_phase(taskId: "phase-37")` |
-| "恢复 phase-37" / "恢复 phase-37 开发" | → `devplan_start_phase(taskId: "phase-37")` |
-| "启动 phase-37" / "启动 phase-37 开发" | → `devplan_start_phase(taskId: "phase-37")` |
-
-**识别规则**：只要用户消息中包含 `phase-` + 数字，且同时包含"开始"、"继续"、"恢复"、"启动"、"start"、"resume"中的任意一个词，就必须调用 `devplan_start_phase`。
-
-**工具是幂等的**：首次调用 = 启动（pending → in_progress），后续调用 = 恢复（已完成子任务保持 completed）。
+| 层级 | 文件 | 用途 | 大小 |
+|------|------|------|------|
+| Layer 1 (鸟瞰) | [aifastdb-devplan-overview.md](mdc:docs/aifastdb-devplan-overview.md) | AI 首选阅读，< 500 行，一次读完 | ~320 行 |
+| Layer 2 (详细) | [DEVPLAN_ReadMe.md](mdc:DEVPLAN_ReadMe.md) | 完整功能文档，分段读取 | 2100+ 行 |
+| Layer 3 (实时) | `.devplan/aifastdb-devplan/` | MCP 工具查询任务状态 | — |
 
 ## 快捷操作
 
-### 初始化 / 查看现有计划
-```
-devplan_init()                                    # 列出所有已有计划
-devplan_init(projectName: "my-project")           # 初始化新计划
-```
-
 ### 查看项目进度
 ```
-devplan_get_progress(projectName: "<项目名>")
+devplan_get_progress(projectName: "aifastdb-devplan")
 ```
 
 ### 查看任务列表
 ```
-devplan_list_tasks(projectName: "<项目名>")                             # 列出所有主任务
-devplan_list_tasks(projectName: "<项目名>", parentTaskId: "phase-1")    # 指定主任务的子任务
-devplan_list_tasks(projectName: "<项目名>", status: "pending")          # 跨所有主任务查询未完成子任务
-```
-
-### 创建任务
-```
-devplan_create_main_task(projectName: "<项目名>", taskId: "phase-1", title: "阶段一", priority: "P0")
-devplan_add_sub_task(projectName: "<项目名>", taskId: "T1.1", parentTaskId: "phase-1", title: "子任务")
-devplan_upsert_task(...)   # 幂等导入（推荐批量导入使用）
+devplan_list_tasks(projectName: "aifastdb-devplan")
+devplan_list_tasks(projectName: "aifastdb-devplan", parentTaskId: "phase-1")
+devplan_list_tasks(projectName: "aifastdb-devplan", status: "pending")
 ```
 
 ### 完成任务
 ```
-devplan_complete_task(projectName: "<项目名>", taskId: "T1.1")         # 完成子任务（自动更新进度）
-devplan_complete_task(projectName: "<项目名>", taskId: "phase-1", taskType: "main")  # 手动完成主任务
+devplan_complete_task(projectName: "aifastdb-devplan", taskId: "T1.1")
 ```
 
 ### Git 同步检查
 ```
-devplan_sync_git(projectName: "<项目名>", dryRun: true)   # 先预览
-devplan_sync_git(projectName: "<项目名>")                  # 实际执行回退
+devplan_sync_git(projectName: "aifastdb-devplan", dryRun: true)
+devplan_sync_git(projectName: "aifastdb-devplan")
 ```
 
-### 文档管理
+### 查看/更新文档片段
 ```
-devplan_save_section(projectName: "<项目名>", section: "overview", title: "概述", content: "...")
-devplan_list_sections(projectName: "<项目名>")
-devplan_get_section(projectName: "<项目名>", section: "overview")
-devplan_export_markdown(projectName: "<项目名>", scope: "tasks")
-```
-
-### 功能模块
-```
-devplan_create_module(projectName: "<项目名>", moduleId: "auth", name: "认证模块")
-devplan_list_modules(projectName: "<项目名>")
-devplan_get_module(projectName: "<项目名>", moduleId: "auth")
+devplan_list_sections(projectName: "aifastdb-devplan")
+devplan_get_section(projectName: "aifastdb-devplan", section: "overview")
+devplan_get_section(projectName: "aifastdb-devplan", section: "technical_notes", subSection: "multi-project-routing")
 ```
 
-## 数据存储
-
-数据存储在项目内 `.devplan/` 目录（JSONL 格式），天然跟随 Git 版本管理：
-
+### 导出 Markdown
 ```
-.devplan/{projectName}/
-├── documents.jsonl    # 文档片段
-├── tasks.jsonl        # 主任务 + 子任务
-└── modules.jsonl      # 功能模块
+devplan_export_markdown(projectName: "aifastdb-devplan", scope: "tasks")
+devplan_export_markdown(projectName: "aifastdb-devplan", scope: "full")
 ```
 
-## 启动/恢复开发阶段
-
+### 功能模块管理
 ```
-devplan_start_phase(projectName: "<项目名>", taskId: "phase-X")
-# 自动将主任务标记为 in_progress，返回全部子任务列表（含已完成状态）
-# AI 应将返回的子任务创建为 Cursor TodoList（使用 TodoWrite）
-# 幂等操作：首次调用=启动，再次调用=恢复（已完成子任务保持 completed）
+devplan_list_modules(projectName: "aifastdb-devplan")
+devplan_get_module(projectName: "aifastdb-devplan", moduleId: "<模块ID>")
 ```
 
-### 开发阶段工作流
+## 开发阶段概览
 
-1. **启动/恢复**：`devplan_start_phase` → 将子任务转为 TodoWrite（保留已完成状态）→ 输出进度摘要 → 开始第一个 pending 任务
-2. **开发中**：完成代码后 → `devplan_complete_task` 回写状态 → 更新 Todo → 继续下一个
-3. **阶段完成**：所有子任务完成后，devplan 自动标记主任务为 completed
-
-### 阶段完成 → 下一阶段提示
-
-当主任务完成时（子任务全部完成自动触发，或手动完成），`devplan_complete_task` 返回结果中会包含以下额外字段：
-
-```json
-{
-  "nextPhase": {           // 下一个待处理的主任务（优先 in_progress，其次 pending，按 order 排序）
-    "taskId": "phase-17",
-    "title": "阶段十七: XXX",
-    "status": "pending",
-    "priority": "P0"
-  },
-  "remainingPhases": 3,    // 剩余未完成阶段数
-  "hint": "🎉 ... 还有 3 个待处理阶段。下一个：phase-17 ...。是否继续？"
-}
-```
-
-**AI 应遵循的行为**：
-- 在阶段完成总结的**最后**，展示 `hint` 的内容
-- 如果 `nextPhase` 存在，告知用户下一个阶段信息并询问是否继续
-- 如果 `remainingPhases === 0`，恭喜用户所有阶段全部完成
-- 用户回复"继续"/"开始 phase-X" 时，按触发词规则调用 `devplan_start_phase`
+| 阶段 | 状态 | 说明 |
+|------|------|------|
+| 阶段一 | ✅ 已完成 | 多项目路由完善与测试 (5/5) |
+| 阶段二 | ⬜ 待开发 | Autopilot HTTP API 开发 |
+| 阶段三 | ⬜ 待开发 | Autopilot MCP 工具 |
+| 阶段四 | ⬜ 待开发 | Python Executor 核心 |
+| 阶段五 | ⬜ 待开发 P1 | Executor GUI 自动化与视觉分析 |
+| 阶段六 | ⬜ 待开发 P1 | Executor Web UI 与集成测试 |
 
 ## 注意事项
 
-1. **通过 MCP 操作任务**：任务状态管理使用 `devplan_*` 系列 MCP 工具，不要手动编辑 JSONL 文件
-2. **完成任务后同步**：完成代码实现后，调用 `devplan_complete_task` 持久化状态（自动锚定 Git commit）
-3. **Git 回滚后检查**：如果执行了 `git reset` 或切换分支，运行 `devplan_sync_git` 检查任务状态一致性
+1. **优先读概览文件**：初次了解项目时，先读 [aifastdb-devplan-overview.md](mdc:docs/aifastdb-devplan-overview.md)（< 500 行），再按需深入 [DEVPLAN_ReadMe.md](mdc:DEVPLAN_ReadMe.md) 的具体章节
+2. **数据存储位置**：本项目的 devplan 数据存储在 `D:\Project\git\aifastdb-devplan\.devplan\aifastdb-devplan\`（非 ai_db 目录下）
+3. **源码即产品**：本项目的 `src/` 目录就是 DevPlan MCP Server 的源码，修改后需 `npm run build` 并重启 Cursor

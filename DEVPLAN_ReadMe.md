@@ -40,7 +40,9 @@ v3.x   (2026-02-09)  统计仪表盘、侧边栏导航、UI 增强
   ↓
 v4.0.0 (2026-02-13)  任务排序 + 语义搜索 — order 字段、VibeSynapse 集成
   ↓
-v4.2.0 (2026-02-13)  文档列表弹层 + 统计栏增强 — 层级展示、/api/docs 端点（当前版本）
+v4.2.0 (2026-02-13)  文档列表弹层 + 统计栏增强 — 层级展示、/api/docs 端点
+  ↓
+v5.0.0 (规划中)      Autopilot 模块 — cursor_auto 融合、/api/auto/* 端点、3 个新 MCP 工具
 ```
 
 ### 1.3 项目结构
@@ -50,10 +52,10 @@ aifastdb-devplan/
 ├── package.json                        # npm 包配置 (v1.0.3)
 ├── tsconfig.json                       # TypeScript 配置 (ES2020, CommonJS, strict)
 ├── README.md                           # 使用说明（中英双语）
-├── DEVPLAN.md                          # 本文档
+├── DEVPLAN_ReadMe.md                   # 本文档
 │
-├── src/
-│   ├── types.ts                        # 所有类型定义（463 行）
+├── src/                                # TypeScript — DevPlan 核心 + MCP + 可视化
+│   ├── types.ts                        # 所有类型定义（463 行 + Autopilot 类型）
 │   ├── dev-plan-interface.ts           # IDevPlanStore 抽象接口（249 行，30+ 方法）
 │   ├── dev-plan-document-store.ts      # Document 引擎实现（EnhancedDocumentStore/JSONL）
 │   ├── dev-plan-graph-store.ts         # Graph 引擎实现（SocialGraphV2）
@@ -61,29 +63,55 @@ aifastdb-devplan/
 │   ├── dev-plan-migrate.ts             # 数据迁移工具（document ↔ graph）
 │   ├── index.ts                        # npm 包导出入口
 │   ├── mcp-server/
-│   │   └── index.ts                    # MCP Server — 23 个 devplan_* 工具
+│   │   └── index.ts                    # MCP Server — 23 个 devplan_* 工具（规划 +3 autopilot 工具）
 │   └── visualize/
 │       ├── template.ts                 # 自包含 HTML 模板（vis-network + 暗色主题）
-│       └── server.ts                   # 轻量 HTTP 服务器（CLI + 自动打开浏览器）
+│       └── server.ts                   # 轻量 HTTP 服务器（现有 API + 规划 /api/auto/* 端点）
+│
+├── executor/                           # Python — Autopilot 执行器（规划中，从 cursor_auto 迁入）
+│   ├── pyproject.toml                  #   Python 依赖与项目元数据
+│   ├── README.md                       #   executor 使用说明
+│   ├── src/                            #   Python 源码
+│   │   ├── engine.py                   #     主控引擎（双通道决策）
+│   │   ├── devplan_client.py           #     DevPlan HTTP 客户端
+│   │   ├── cursor_controller.py        #     GUI 自动化
+│   │   ├── vision_analyzer.py          #     视觉分析（精简后）
+│   │   ├── ui_server.py                #     Web UI 监控
+│   │   └── config.py                   #     配置管理
+│   ├── templates/                      #   Web UI 前端
+│   └── tests/                          #   Python 测试
 │
 └── .cursor/
     └── rules/
         └── dev-plan-management.mdc     # Cursor Rules 配置
 ```
 
+> **注意**：`executor/` 目录为规划中的 Autopilot 模块（v5.0.0），详见 [第 13 节](#13-autopilot-模块--cursor_auto-融合方案)。`tsconfig.json` 的 `include: ["src/**/*"]` 和 `package.json` 的 `files: ["dist"]` 天然排除 `executor/`，对 TypeScript 编译和 npm 发布零影响。
+
 ### 1.4 依赖关系
 
 ```
 aifastdb-devplan (独立项目)
-  ├── aifastdb (^2.2.6)                 # 底层存储引擎
-  │   ├── EnhancedDocumentStore         # Document 引擎的底层依赖
-  │   ├── SocialGraphV2                 # Graph 引擎的底层依赖（含 HNSW 向量索引）
-  │   ├── VibeSynapse                   # 感知引擎（Candle MiniLM Embedding 生成）
-  │   └── ContentType / DocumentInput   # 类型依赖
-  └── @modelcontextprotocol/sdk (^1.0.0) # MCP 协议 SDK
+  │
+  ├── [TypeScript] src/
+  │   ├── aifastdb (^2.5.1)                 # 底层存储引擎
+  │   │   ├── EnhancedDocumentStore         # Document 引擎的底层依赖
+  │   │   ├── SocialGraphV2                 # Graph 引擎的底层依赖（含 HNSW 向量索引）
+  │   │   ├── VibeSynapse                   # 感知引擎（Candle MiniLM Embedding 生成）
+  │   │   └── ContentType / DocumentInput   # 类型依赖
+  │   └── @modelcontextprotocol/sdk (^1.0.0) # MCP 协议 SDK
+  │
+  └── [Python] executor/ (规划中)
+      ├── requests                          # HTTP 客户端（调用 /api/auto/* 端点）
+      ├── pyautogui                         # GUI 自动化（鼠标、键盘、截图）
+      ├── pygetwindow                       # 窗口管理
+      ├── ollama                            # 视觉 AI 模型调用
+      ├── Pillow                            # 图像处理
+      ├── pyperclip                         # 剪贴板操作
+      └── Flask                             # Web UI 监控后端
 ```
 
-依赖方向始终是 `aifastdb-devplan → aifastdb`（单向依赖），`ai_db` 不知晓也不依赖 `aifastdb-devplan` 的存在。
+依赖方向始终是 `aifastdb-devplan → aifastdb`（单向依赖），`ai_db` 不知晓也不依赖 `aifastdb-devplan` 的存在。TypeScript 和 Python 之间通过 HTTP API 通信，无直接代码依赖。
 
 ---
 
@@ -299,9 +327,9 @@ MainTask ◀──N:M──▶ DevPlanDoc   (通过 task_has_doc 关系双向关
 
 ---
 
-## 4. MCP 工具（23 个）
+## 4. MCP 工具（23 个，规划扩展至 26 个）
 
-`aifastdb-devplan` 作为 MCP Server 提供 23 个工具，工具名统一以 `devplan_` 为前缀。
+`aifastdb-devplan` 作为 MCP Server 提供 23 个工具，工具名统一以 `devplan_` 为前缀。规划中的 v5.0.0 将新增 3 个 `devplan_auto_*` 工具（详见 [第 13.4.1 节](#1341-新增-mcp-工具3-个--共-26-个)）。
 
 ### 4.1 初始化（1 个）
 
@@ -622,13 +650,18 @@ CLI: aifastdb-devplan-visual --project <name> [--port <port>] [--base-path <path
 MCP: devplan_start_visual (projectName, port?)
   ↓
 HTTP Server (Node.js http 模块)
-  ├── GET /             → 自包含 HTML 页面（vis-network CDN + 内联 JS/CSS）
-  ├── GET /api/graph    → DevPlanGraphStore.exportGraph() → JSON
-  ├── GET /api/progress → getProgress() → JSON
-  ├── GET /api/stats    → 详细统计数据 → JSON
-  ├── GET /api/doc      → 文档内容查询 → JSON
-  ├── GET /api/docs     → 文档列表（含层级信息） → JSON
-  └── GET /favicon.ico  → 204 No Content
+  ├── GET  /                       → 自包含 HTML 页面（vis-network CDN + 内联 JS/CSS）
+  ├── GET  /api/graph              → DevPlanGraphStore.exportGraph() → JSON
+  ├── GET  /api/progress           → getProgress() → JSON
+  ├── GET  /api/stats              → 详细统计数据 → JSON
+  ├── GET  /api/doc                → 文档内容查询 → JSON
+  ├── GET  /api/docs               → 文档列表（含层级信息） → JSON
+  ├── GET  /api/auto/next-action   → Autopilot 下一步动作建议 → JSON (规划中)
+  ├── GET  /api/auto/current-phase → 当前阶段详情 → JSON (规划中)
+  ├── POST /api/auto/complete-task → 标记子任务完成 → JSON (规划中)
+  ├── POST /api/auto/start-phase   → 启动新阶段 → JSON (规划中)
+  ├── POST /api/auto/heartbeat     → executor 心跳上报 → JSON (规划中)
+  └── GET  /favicon.ico            → 204 No Content
 ```
 
 **核心设计决策**：每次 API 请求都创建新的 store 实例（`createFreshStore`），确保读取磁盘上最新的 WAL 数据。因为 MCP 工具在另一个进程中更新任务状态，复用启动时的 store 实例会导致数据过时。
@@ -644,6 +677,11 @@ HTTP Server (Node.js http 模块)
 | `/api/doc` | GET | application/json | 文档内容查询，参数 `?section=xxx&subSection=yyy` |
 | `/api/docs` | GET | application/json | 文档列表（不含内容），返回 `{ docs: [...] }`，含 `parentDoc`/`childDocs` 层级信息 |
 | `/favicon.ico` | GET | 204 | 避免浏览器 404 |
+| `/api/auto/next-action` | GET | application/json | **(规划中)** Autopilot 下一步动作建议，详见 [第 13.4.2 节](#1342-可视化服务器新增-api-端点5-个) |
+| `/api/auto/current-phase` | GET | application/json | **(规划中)** 当前进行中阶段及子任务状态 |
+| `/api/auto/complete-task` | POST | application/json | **(规划中)** executor 回报子任务完成 |
+| `/api/auto/start-phase` | POST | application/json | **(规划中)** executor 请求启动新阶段 |
+| `/api/auto/heartbeat` | POST | application/json | **(规划中)** executor 心跳上报 |
 
 **`/api/stats` 返回结构**（在 `/api/progress` 基础上扩展）：
 
@@ -997,13 +1035,35 @@ ai_db (aifastdb npm 包)                          ← 不受 devplan 影响，�
 └── packages/node/ts/mcp-server/index.ts         ← 8 个 Legacy 工具（独立运行）
 
 aifastdb-devplan (独立项目，依赖 aifastdb npm 包)
-├── src/dev-plan-document-store.ts               ← import { EnhancedDocumentStore } from 'aifastdb'
-├── src/dev-plan-graph-store.ts                  ← import { SocialGraphV2, VibeSynapse } from 'aifastdb'
-├── src/dev-plan-factory.ts                      ← 根据 engine.json 选择上述两个实现之一
-├── src/dev-plan-migrate.ts                      ← 数据迁移工具（document ↔ graph）
-├── src/visualize/template.ts                    ← 图谱可视化 HTML 模板（vis-network）
-├── src/visualize/server.ts                      ← 轻量 HTTP 可视化服务器
-└── src/mcp-server/index.ts                      ← 23 个 devplan_* 工具
+├── [TypeScript] src/
+│   ├── src/dev-plan-document-store.ts           ← import { EnhancedDocumentStore } from 'aifastdb'
+│   ├── src/dev-plan-graph-store.ts              ← import { SocialGraphV2, VibeSynapse } from 'aifastdb'
+│   ├── src/dev-plan-factory.ts                  ← 根据 engine.json 选择上述两个实现之一
+│   ├── src/dev-plan-migrate.ts                  ← 数据迁移工具（document ↔ graph）
+│   ├── src/visualize/template.ts                ← 图谱可视化 HTML 模板（vis-network）
+│   ├── src/visualize/server.ts                  ← 轻量 HTTP 可视化服务器 + /api/auto/* 端点 (规划中)
+│   └── src/mcp-server/index.ts                  ← 23 + 3 个 devplan_* 工具 (3 个 autopilot 规划中)
+│
+└── [Python] executor/ (规划中，从 cursor_auto 重构迁入)
+    ├── executor/src/devplan_client.py            ← HTTP 客户端，调用 /api/auto/* 端点
+    ├── executor/src/engine.py                    ← 双通道决策引擎（DevPlan 状态 + UI 截图）
+    ├── executor/src/cursor_controller.py         ← GUI 自动化（pyautogui）
+    └── executor/src/vision_analyzer.py           ← 视觉分析（Ollama，精简后）
+```
+
+**通信关系**：
+
+```
+Cursor IDE 中的 AI
+  ├→ [MCP stdio] aifastdb-devplan MCP Server (23+3 个工具)
+  │     └→ devplan_complete_task() 更新任务状态
+  │
+  └→ [GUI 操作] cursor_controller.py 模拟键鼠操作
+
+executor (Python 进程)
+  ├→ [HTTP] GET/POST /api/auto/*  →  aifastdb-devplan-visual (Node.js HTTP 服务器)
+  ├→ [截图] pyautogui.screenshot()  →  vision_analyzer.py → Ollama
+  └→ [GUI] cursor_controller.py → pyautogui → Cursor IDE 窗口
 ```
 
 `ai_db` 中保留的 8 个 Legacy 工具（`save_document`, `get_document`, `list_documents`, `search_documents`, `list_tasks`, `generate_task_id`, `save_architecture`, `get_architecture`）与 DevPlan 完全隔离：
@@ -1471,6 +1531,629 @@ interface DevPlanDocTree {
 | 5 | ~~搜索短期优化（属性索引）~~ | ~~P1~~ | ~~2h~~ | ✅ v4.0.0 已完成 |
 | 6 | ~~搜索中期（Embedding + 向量索引）~~ | ~~P2~~ | ~~8h~~ | ✅ v4.0.0 已完成 |
 | 7 | ~~搜索长期（VibeSynapse 集成）~~ | ~~P2~~ | ~~16h~~ | ✅ v4.0.0 已完成 |
+
+---
+
+## 13. Autopilot 模块 — cursor_auto 融合方案
+
+> 规划日期: 2026-02-15  
+> 状态: **规划中**  
+> 关联项目: `cursor_auto`（`D:\Project\git\cursor_auto`）
+
+### 13.1 背景与动机
+
+#### 13.1.1 cursor_auto 项目概述
+
+[cursor_auto](../cursor_auto/) 是一个 Cursor IDE 无人值守自动化工具，核心能力：
+
+| 能力 | 实现方式 |
+|------|---------|
+| **屏幕状态感知** | 截图 + Ollama 视觉模型（Gemma 3:27b）识别 UI 状态 |
+| **GUI 自动化** | pyautogui + pygetwindow + pyperclip 操作 Cursor 窗口 |
+| **任务队列** | `tasks.txt` 纯文本文件，逐行发送给 Cursor AI |
+| **Web 监控** | Flask + SSE 实时推送状态到浏览器 |
+
+**cursor_auto 当前技术栈**：
+
+```
+Python 3.x
+├── pyautogui >= 0.9.54      # GUI 自动化（鼠标、键盘、截图）
+├── pygetwindow              # 窗口管理（激活、定位）
+├── ollama >= 0.1.0          # 视觉 AI 模型调用
+├── Pillow >= 10.0.0         # 图像处理（截图裁剪）
+├── pyperclip >= 1.8.2       # 剪贴板操作
+└── Flask >= 3.0.0           # Web UI 后端 + SSE
+```
+
+**cursor_auto 当前代码量**（约 2624 行）：
+
+| 模块 | 行数 | 职责 |
+|------|------|------|
+| `automator.py` | 614 | 主控循环：截图→分析→决策→执行 |
+| `cursor_controller.py` | 447 | GUI 操作：窗口激活、文本输入、快捷键 |
+| `vision_analyzer.py` | 395 | 视觉分析：截图→Ollama→状态识别 |
+| `ui_server.py` | 225 | Web UI：Flask + SSE 实时监控 |
+| `task_manager.py` | 199 | 任务管理：从 tasks.txt 加载/切换任务 |
+| `config.py` | 76 | 配置：模型、超时、坐标、状态标记 |
+| `templates/index.html` | 668 | Web 前端页面 |
+
+#### 13.1.2 核心问题：纯截图方案的缺陷
+
+cursor_auto 当前的信息获取完全依赖"截图 → 视觉 AI 识别"，存在根本性缺陷：
+
+| 问题 | 表现 | 影响 |
+|------|------|------|
+| **状态识别不准确** | Ollama 视觉模型对复杂 UI 的识别率不稳定 | 误判导致错误操作（如误发"请继续"） |
+| **缺乏语义理解** | 只能识别 UI 视觉特征，无法理解"任务是否真正完成" | COMPLETED 状态可能只是 AI 生成了回复但未通过测试 |
+| **无任务上下文** | 不知道当前 Cursor 在执行什么任务、属于哪个阶段 | 任务切换盲目，只能按 `tasks.txt` 顺序发送 |
+| **状态不持久** | 重启后丢失所有进度，无法断点续传 | 长时间运行任务链时风险极高 |
+| **资源浪费** | 每次轮询都要调用视觉模型，即使什么都没发生 | 增加 GPU/CPU 开销和延迟 |
+
+#### 13.1.3 DevPlan 已经解决了任务感知
+
+DevPlan 的任务系统天然提供了 cursor_auto 缺失的能力：
+
+```
+当前方案（截图驱动）:
+  [截图] → [Ollama分析] → "这看起来像是完成了" → [发送下一个任务]
+                                ↑ 不确定! 可能误判!
+
+升级方案（MCP 任务感知）:
+  [DevPlan API 轮询] → task.status === "completed" → [确定完成!] → [自动启动下一阶段]
+  [截图分析] → "AI 停在等待确认/中断/报错" → [发送"请继续"]
+```
+
+**核心思路**：DevPlan 负责"做什么"（任务编排），截图分析负责"什么时候能操作"（UI 状态检测）。
+
+### 13.2 融合方案选择：方案 C — Monorepo + 清晰分区
+
+#### 13.2.1 三种方案对比
+
+| | 方案 A：保持 2 个 repo | 方案 B：完全混合合并 | **方案 C：Monorepo + 清晰分区** ✅ |
+|---|---|---|---|
+| **结构** | 各自独立 | Python 代码混在 TypeScript 中 | Python 代码放 `executor/` 目录，TypeScript 不动 |
+| **API 同步** | 改了 TS API 要跑到另一个 repo 改 Python 客户端 | 同 repo 一起改 | 同 repo 一起改 ✅ |
+| **npm 发布** | 不受影响 | 需要小心排除 Python 文件 | `package.json` 的 `files: ["dist"]` 天然排除 ✅ |
+| **TypeScript 编译** | 不受影响 | 可能冲突 | `tsconfig.json` 的 `include: ["src/**/*"]` 完全忽略 `executor/` ✅ |
+| **Git 版本** | API 变更需两边协调 commit | 一个 commit 搞定 | 一个 commit 搞定 ✅ |
+| **构建互不干扰** | 天然隔离 | 可能冲突 | `tsc` 只编译 `src/`，Python 无需编译 ✅ |
+
+#### 13.2.2 方案 C 可行性论证
+
+**构建隔离**已由现有配置天然保证：
+
+```json
+// package.json — npm 发布仅包含 dist/
+"files": ["dist", "README.md", "LICENSE"]
+
+// tsconfig.json — TypeScript 编译器仅处理 src/
+"include": ["src/**/*"],
+"exclude": ["node_modules", "dist"]
+```
+
+Python 代码放在 `executor/` 目录下，对 TypeScript 编译和 npm 发布**零影响**。
+
+**技术栈差异分析**：
+
+| 维度 | TypeScript (DevPlan) | Python (Executor) | 结论 |
+|------|---------------------|-------------------|------|
+| **职责** | 任务编排（大脑） | GUI 操作（双手） | 互补不重叠 |
+| **运行时** | Node.js（MCP Server） | 桌面进程（需 GUI 访问） | 独立进程 |
+| **构建** | `tsc` → `dist/` | 无需编译 | 互不干扰 |
+| **依赖** | npm (`package.json`) | pip (`pyproject.toml`) | 各自管理 |
+| **发布** | npm registry | 不发布（本地工具） | 无冲突 |
+
+### 13.3 合并后的目录结构
+
+```
+aifastdb-devplan/                          # 项目根 (Git repo)
+│
+├── src/                                   # TypeScript — DevPlan 核心 + MCP + API
+│   ├── types.ts                           #   类型定义（现有 + Autopilot 类型扩展）
+│   ├── dev-plan-interface.ts              #   IDevPlanStore 接口（现有）
+│   ├── dev-plan-graph-store.ts            #   Graph 引擎（现有）
+│   ├── dev-plan-document-store.ts         #   Document 引擎（现有）
+│   ├── dev-plan-factory.ts                #   工厂函数（现有）
+│   ├── dev-plan-migrate.ts                #   引擎迁移（现有）
+│   ├── index.ts                           #   npm 包导出入口（现有）
+│   │
+│   ├── mcp-server/
+│   │   └── index.ts                       #   MCP Server（现有 23 个工具 + 新增 3 个 autopilot 工具）
+│   │
+│   └── visualize/
+│       ├── server.ts                      #   HTTP 服务器（现有 API + 新增 /api/auto/* 端点）
+│       └── template.ts                    #   可视化 HTML 模板（现有）
+│
+├── executor/                              # Python — Autopilot 执行器（从 cursor_auto 重构迁入）
+│   ├── pyproject.toml                     #   Python 依赖与项目元数据
+│   ├── README.md                          #   executor 使用说明
+│   │
+│   ├── src/
+│   │   ├── __init__.py
+│   │   ├── engine.py                      #   ★ 主控引擎（原 automator.py 重写）
+│   │   ├── devplan_client.py              #   ★ DevPlan HTTP 客户端（新增）
+│   │   ├── cursor_controller.py           #   GUI 自动化（从 cursor_auto 迁入）
+│   │   ├── vision_analyzer.py             #   视觉分析（精简后，只判断 UI 状态）
+│   │   ├── ui_server.py                   #   Web UI 监控（增强：集成 DevPlan 进度）
+│   │   └── config.py                      #   配置管理（升级为 dataclass/pydantic）
+│   │
+│   ├── templates/
+│   │   └── index.html                     #   Web UI 前端（增强版）
+│   │
+│   └── tests/
+│       ├── test_devplan_client.py
+│       └── test_engine.py
+│
+├── package.json                           # npm 配置（现有，不变）
+├── tsconfig.json                          # TypeScript 配置（现有，不变）
+├── package-lock.json
+├── dist/                                  # TypeScript 编译产物
+├── DEVPLAN_ReadMe.md                      # 本文档
+├── LICENSE
+└── README.md
+```
+
+**关键隔离点**：
+
+| 文件/配置 | 范围 | executor/ 可见性 |
+|-----------|------|-----------------|
+| `tsconfig.json` → `include: ["src/**/*"]` | 仅编译 `src/` | ❌ 不可见 |
+| `package.json` → `files: ["dist", ...]` | 仅发布 `dist/` | ❌ 不可见 |
+| `.gitignore` | 全 repo | ✅ 共享（需新增 `executor/__pycache__/` 等） |
+| `git commit` | 全 repo | ✅ TS + Python 变更一次提交 |
+
+### 13.4 TypeScript 侧新增：Autopilot 模块
+
+#### 13.4.1 新增 MCP 工具（3 个 → 共 26 个）
+
+| 工具名 | 说明 | 必需参数 | 可选参数 |
+|--------|------|---------|---------|
+| `devplan_auto_status` | 查询自动化执行状态：是否有进行中阶段、当前子任务、阻塞原因 | `projectName` | — |
+| `devplan_auto_next` | 智能推荐下一步动作：发送任务 / 请继续 / 启动新阶段 / 等待 / 全部完成 | `projectName` | — |
+| `devplan_auto_config` | 配置自动化参数：轮询间隔、自动启动下一阶段、最大重试次数 | `projectName` | `config` |
+
+**`devplan_auto_status` 返回值**：
+
+```typescript
+{
+  hasActivePhase: boolean;           // 是否有进行中的阶段
+  activePhase?: {
+    taskId: string;
+    title: string;
+    totalSubtasks: number;
+    completedSubtasks: number;
+    percent: number;
+  };
+  currentSubTask?: {                 // 当前进行中的子任务
+    taskId: string;
+    title: string;
+    status: TaskStatus;
+  };
+  nextPendingSubTask?: {             // 下一个待执行的子任务
+    taskId: string;
+    title: string;
+  };
+  nextPendingPhase?: {               // 下一个待启动的阶段
+    taskId: string;
+    title: string;
+    priority: string;
+  };
+  remainingPhases: number;           // 剩余未完成阶段数
+}
+```
+
+**`devplan_auto_next` 返回值**：
+
+```typescript
+{
+  action: 'send_task' | 'send_continue' | 'start_phase' | 'wait' | 'all_done';
+  phase?: { taskId, title, status, totalSubtasks, completedSubtasks };
+  subTask?: { taskId, title, description, status };
+  message: string;                   // 人类可读的行动建议
+}
+```
+
+#### 13.4.2 可视化服务器新增 API 端点（5 个）
+
+在 `src/visualize/server.ts` 的 `switch (url.pathname)` 中新增：
+
+| 端点 | 方法 | 说明 | 调用者 |
+|------|------|------|--------|
+| `GET /api/auto/next-action` | GET | 获取下一步该执行什么动作（等效于 `devplan_auto_next`） | executor 轮询 |
+| `GET /api/auto/current-phase` | GET | 获取当前进行中阶段及全部子任务状态 | executor 轮询 |
+| `POST /api/auto/complete-task` | POST | 标记子任务完成（等效于 `devplan_complete_task`） | executor 回调 |
+| `POST /api/auto/start-phase` | POST | 启动新阶段（等效于 `devplan_start_phase`） | executor 请求 |
+| `POST /api/auto/heartbeat` | POST | executor 心跳上报（含 UI 状态信息） | executor 定时 |
+
+**`GET /api/auto/next-action` 响应示例**：
+
+```json
+{
+  "action": "send_task",
+  "phase": {
+    "taskId": "phase-17",
+    "title": "阶段十七: 分布式查询优化",
+    "status": "in_progress",
+    "totalSubtasks": 8,
+    "completedSubtasks": 3
+  },
+  "subTask": {
+    "taskId": "T17.4",
+    "title": "实现查询计划缓存",
+    "description": "为跨库查询计划添加 LRU 缓存...",
+    "status": "pending"
+  },
+  "message": "当前阶段有 5 个待完成子任务，下一个: T17.4 — 实现查询计划缓存"
+}
+```
+
+**`POST /api/auto/heartbeat` 请求体**：
+
+```json
+{
+  "executorId": "cursor-auto-001",
+  "status": "active",
+  "lastScreenState": "WORKING",
+  "timestamp": 1739612345678
+}
+```
+
+**设计决策 — 为什么通过 HTTP API 而不是直接读 JSONL/WAL**：
+
+| 方案 | 优点 | 缺点 |
+|------|------|------|
+| 直接读取 `.devplan/` 数据文件 | 零延迟，无需网络 | 耦合存储格式，引擎切换时需适配；Python 需解析 WAL |
+| MCP stdio 子进程 | 标准协议，完全解耦 | 需管理子进程生命周期，实现复杂 |
+| **HTTP API** ✅ | 简单可靠，Python `requests` 即可；可视化服务器已有完整框架 | 需要可视化服务器在运行 |
+
+选择 HTTP API 因为：
+1. 可视化服务器已有 `createFreshStore()` 模式，每次请求读取最新数据
+2. 已有 CORS 头、错误处理、CLI 参数解析等基础设施
+3. Python 的 `requests` 调用 HTTP API 极其简单
+4. 可视化服务器本就需要运行（提供仪表盘），不增加运维负担
+
+#### 13.4.3 数据模型扩展
+
+在 `src/types.ts` 中新增：
+
+```typescript
+// ============================================================================
+// Autopilot 相关类型
+// ============================================================================
+
+/** Autopilot 自动化配置 */
+export interface AutopilotConfig {
+  /** 是否启用 autopilot */
+  enabled: boolean;
+  /** executor 轮询间隔（秒） */
+  pollIntervalSeconds: number;
+  /** 阶段完成后自动启动下一个 */
+  autoStartNextPhase: boolean;
+  /** 发送"请继续"的最大连续重试次数 */
+  maxContinueRetries: number;
+  /** 子任务卡住超时时间（分钟） */
+  stuckTimeoutMinutes: number;
+}
+
+/** Autopilot 下一步动作类型 */
+export type AutopilotAction = 
+  | 'send_task'       // 发送新的子任务内容给 Cursor
+  | 'send_continue'   // 发送"请继续"（AI 被中断/限速）
+  | 'start_phase'     // 启动新阶段
+  | 'wait'            // 等待（任务进行中，无需操作）
+  | 'all_done';       // 全部任务完成
+
+/** Autopilot 动作建议 */
+export interface AutopilotNextAction {
+  action: AutopilotAction;
+  phase?: {
+    taskId: string;
+    title: string;
+    status: TaskStatus;
+    totalSubtasks: number;
+    completedSubtasks: number;
+  };
+  subTask?: {
+    taskId: string;
+    title: string;
+    description?: string;
+    status: TaskStatus;
+  };
+  message: string;
+}
+
+/** Autopilot 执行状态 */
+export interface AutopilotStatus {
+  hasActivePhase: boolean;
+  activePhase?: {
+    taskId: string;
+    title: string;
+    totalSubtasks: number;
+    completedSubtasks: number;
+    percent: number;
+  };
+  currentSubTask?: {
+    taskId: string;
+    title: string;
+    status: TaskStatus;
+  };
+  nextPendingSubTask?: {
+    taskId: string;
+    title: string;
+  };
+  nextPendingPhase?: {
+    taskId: string;
+    title: string;
+    priority: string;
+  };
+  remainingPhases: number;
+}
+
+/** Executor 心跳数据 */
+export interface ExecutorHeartbeat {
+  executorId: string;
+  status: 'active' | 'paused' | 'stopped';
+  lastScreenState?: string;
+  timestamp: number;
+}
+```
+
+### 13.5 Python 侧：Autopilot Executor
+
+#### 13.5.1 模块职责对比（重构前 → 重构后）
+
+| 原模块 (cursor_auto) | 重构方向 | 新模块 (executor) |
+|----------------------|---------|-------------------|
+| `task_manager.py` | **删除**，由 DevPlan API 替代 | `devplan_client.py` ★ 新增 |
+| `automator.py` | **重写**为双通道决策引擎 | `engine.py` |
+| `vision_analyzer.py` | **精简** Prompt，不再判断"任务完成" | `vision_analyzer.py` |
+| `cursor_controller.py` | **基本保留**，修复坐标硬编码 | `cursor_controller.py` |
+| `config.py` | **升级**为 dataclass/pydantic | `config.py` |
+| `ui_server.py` | **增强**：集成 DevPlan 进度信息 | `ui_server.py` |
+| `tasks.txt` | **删除** | — |
+
+#### 13.5.2 devplan_client.py — DevPlan HTTP 客户端
+
+```python
+"""
+DevPlan HTTP 客户端 — 与 aifastdb-devplan 可视化服务器通信。
+
+通过 /api/auto/* 端点获取任务状态、提交完成、启动新阶段。
+"""
+import requests
+from dataclasses import dataclass
+from typing import Optional
+
+@dataclass
+class DevPlanConfig:
+    base_url: str = "http://localhost:3210"
+    timeout: int = 10  # 秒
+
+class DevPlanClient:
+    def __init__(self, config: DevPlanConfig = None):
+        self.config = config or DevPlanConfig()
+        self.session = requests.Session()
+    
+    def get_next_action(self) -> dict:
+        """GET /api/auto/next-action — 获取下一步动作建议"""
+        resp = self.session.get(
+            f"{self.config.base_url}/api/auto/next-action",
+            timeout=self.config.timeout
+        )
+        resp.raise_for_status()
+        return resp.json()
+    
+    def get_current_phase(self) -> dict:
+        """GET /api/auto/current-phase — 获取当前阶段详情"""
+        resp = self.session.get(
+            f"{self.config.base_url}/api/auto/current-phase",
+            timeout=self.config.timeout
+        )
+        resp.raise_for_status()
+        return resp.json()
+    
+    def complete_task(self, task_id: str) -> dict:
+        """POST /api/auto/complete-task — 标记子任务完成"""
+        resp = self.session.post(
+            f"{self.config.base_url}/api/auto/complete-task",
+            json={"taskId": task_id},
+            timeout=self.config.timeout
+        )
+        resp.raise_for_status()
+        return resp.json()
+    
+    def start_phase(self, task_id: str) -> dict:
+        """POST /api/auto/start-phase — 启动新阶段"""
+        resp = self.session.post(
+            f"{self.config.base_url}/api/auto/start-phase",
+            json={"taskId": task_id},
+            timeout=self.config.timeout
+        )
+        resp.raise_for_status()
+        return resp.json()
+    
+    def heartbeat(self, executor_id: str, status: str, 
+                  screen_state: Optional[str] = None) -> dict:
+        """POST /api/auto/heartbeat — 心跳上报"""
+        resp = self.session.post(
+            f"{self.config.base_url}/api/auto/heartbeat",
+            json={
+                "executorId": executor_id,
+                "status": status,
+                "lastScreenState": screen_state,
+            },
+            timeout=self.config.timeout
+        )
+        resp.raise_for_status()
+        return resp.json()
+    
+    def get_progress(self) -> dict:
+        """GET /api/progress — 获取项目进度（现有端点）"""
+        resp = self.session.get(
+            f"{self.config.base_url}/api/progress",
+            timeout=self.config.timeout
+        )
+        resp.raise_for_status()
+        return resp.json()
+```
+
+#### 13.5.3 双通道决策引擎
+
+executor 的核心创新是**双通道联合决策**：同时采集 DevPlan 任务状态和 UI 截图状态，综合判断下一步操作。
+
+**决策矩阵**：
+
+| DevPlan 任务状态 | 截图 UI 状态 | 联合判断 | 执行动作 |
+|----------------|-------------|---------|---------|
+| 有 pending 子任务 | IDLE（空闲） | ✅ 可以发送新任务 | 发送子任务内容到 Cursor |
+| 子任务 in_progress | WORKING | 正常，等待 | 不操作 |
+| 子任务 in_progress | INTERRUPTED / 中断 | AI 被中断 | 发送"请继续" |
+| 子任务 in_progress | ERROR | AI 遇到错误 | 发送"请继续"或错误处理 |
+| 子任务 in_progress | IDLE（超时） | AI 可能完成了但没回调 | 重新检查 DevPlan 状态 |
+| 全部子任务 completed | 任意 | 阶段完成 | 自动 start_phase 下一阶段 |
+| 无 pending 阶段 | 任意 | 全部完成 | 停止自动化 |
+
+**关键改进**：
+
+1. **不再依赖截图判断"任务是否完成"** — 由 Cursor 中的 AI 调用 `devplan_complete_task` 提供精确状态
+2. **截图只负责判断 UI 层面的卡住/中断/报错** — 这是视觉分析真正擅长的事
+3. **支持"任务完成 → 自动启动下一阶段"** — 全程自动，无需人工发送新任务
+
+#### 13.5.4 精简后的 VisionAnalyzer Prompt
+
+重构后，VisionAnalyzer 的 Prompt 大幅精简——不再需要判断"任务完成/下一步"：
+
+```
+原 Prompt（判断 8 种状态）：
+  INTERRUPTED | WAITING_CONFIRMATION | TERMINAL_RUNNING | 
+  ERROR | COMPLETED | WORKING | IDLE | UNKNOWN
+
+精简后 Prompt（只判断 4 种 UI 状态）：
+  WORKING    — AI 正在生成内容
+  IDLE       — 输入框空闲，无活动
+  INTERRUPTED — 出现"Continue"按钮或限速提示
+  ERROR      — 出现错误信息
+```
+
+去掉了 `COMPLETED`（由 DevPlan 精确判断）和 `TERMINAL_RUNNING`/`WAITING_CONFIRMATION`（合并到 `WORKING`）。
+
+### 13.6 完整工作流
+
+```
+┌─────────────────────────── Autopilot 全流程 ───────────────────────────────┐
+│                                                                            │
+│  1. 用户在 Cursor IDE 中说 "开始 phase-17 开发"                            │
+│     ├→ AI 调用 devplan_start_phase("phase-17")                            │
+│     ├→ AI 创建 TodoList，开始执行第一个子任务 T17.1                        │
+│     └→ DevPlan 标记 phase-17 为 in_progress                               │
+│                                                                            │
+│  2. executor (Python) 后台自动运行中                                       │
+│     ├→ 轮询 GET /api/auto/current-phase                                  │
+│     │  → phase-17 in_progress, T17.1 in_progress                         │
+│     ├→ 截图判断 UI 状态 = WORKING                                        │
+│     └→ 联合决策: 任务进行中 + UI 正在工作 = 不操作，等待                   │
+│                                                                            │
+│  3. AI 遇到限速/中断                                                      │
+│     ├→ Cursor 显示 "Continue" 按钮                                       │
+│     ├→ executor 截图检测 UI = INTERRUPTED                                │
+│     ├→ DevPlan 状态: T17.1 仍 in_progress（AI 没机会调 complete）         │
+│     ├→ 联合决策: 任务未完成 + UI 中断 = 发送"请继续"                      │
+│     └→ executor 通过 GUI 自动化发送"请继续"                               │
+│                                                                            │
+│  4. AI 完成子任务 T17.1                                                   │
+│     ├→ AI 调用 devplan_complete_task("T17.1")                             │
+│     ├→ DevPlan 标记 T17.1 completed，更新 phase-17 进度 (1/8)            │
+│     ├→ AI 继续执行 T17.2                                                 │
+│     └→ executor 下次轮询看到 T17.1 completed, T17.2 in_progress          │
+│                                                                            │
+│  5. phase-17 全部 8 个子任务完成                                          │
+│     ├→ DevPlan 自动标记 phase-17 completed                               │
+│     ├→ executor 轮询 GET /api/auto/next-action                           │
+│     │  → { action: "start_phase", phase: { taskId: "phase-18" } }        │
+│     ├→ executor POST /api/auto/start-phase { taskId: "phase-18" }        │
+│     ├→ executor 在 Cursor IDE 中发送 "请开始 phase-18 的任务"             │
+│     └→ AI 收到指令，调用 devplan_start_phase("phase-18")，继续开发       │
+│                                                                            │
+│  6. 循环直到所有阶段完成                                                  │
+│     ├→ /api/auto/next-action 返回 { action: "all_done" }                 │
+│     └→ executor 停止自动化，通知用户                                      │
+│                                                                            │
+└────────────────────────────────────────────────────────────────────────────┘
+```
+
+### 13.7 与现有功能的对比
+
+| 维度 | cursor_auto 当前 | 融合后 (Autopilot) |
+|------|----------------|-------------------|
+| **任务感知** | 纯截图猜测 | DevPlan 精确状态 + 截图辅助 |
+| **任务来源** | `tasks.txt` 手写 | DevPlan 结构化任务（优先级、排序、关联文档） |
+| **进度追踪** | 无（重启丢失） | Git 锚定 + 可视化仪表盘 |
+| **断点续传** | 不支持 | DevPlan 完美支持（任务状态持久化） |
+| **多项目** | 一次只能跑一个 `tasks.txt` | DevPlan 多项目管理 |
+| **可视化** | 简陋 Web UI | DevPlan 图谱可视化 + 统计仪表盘 |
+| **准确性** | Ollama 视觉模型判断 | DevPlan 精确状态（100%）+ 截图辅助（UI 层） |
+| **AI 上下文** | AI 不知道有自动化工具在运行 | AI 通过 MCP 工具感知 autopilot 状态 |
+
+### 13.8 实施路线图
+
+#### 阶段一（P0）：cursor_auto 基础重构
+
+> 目标：解决当前代码质量问题，为 MCP 集成做准备。
+
+| 子任务 | 说明 |
+|--------|------|
+| 引入策略模式统一状态处理 | 将重复的 `_handle_*` 方法抽象为状态处理策略 |
+| 分离关注点 | CursorController 不应包含 AI 模型调用 |
+| 使用标准 logging 模块 | 替换自制日志系统 |
+| 配置系统升级 | 引入 dataclass 或 pydantic，支持 YAML/TOML |
+| 异步架构改造 | 使用 `asyncio` 替换阻塞式 `time.sleep()` |
+
+#### 阶段二（P0）：DevPlan Autopilot API
+
+> 目标：在可视化服务器中新增自动化 API 端点，在 MCP Server 中新增 3 个工具。
+
+| 子任务 | 涉及文件 |
+|--------|---------|
+| 设计并实现 `/api/auto/next-action` 端点 | `src/visualize/server.ts` |
+| 实现 `/api/auto/current-phase` 端点 | `src/visualize/server.ts` |
+| 实现 `/api/auto/complete-task` 和 `/api/auto/start-phase` 端点 | `src/visualize/server.ts` |
+| 实现 `/api/auto/heartbeat` 端点 | `src/visualize/server.ts` |
+| 新增 `devplan_auto_status` MCP 工具 | `src/mcp-server/index.ts` |
+| 新增 `devplan_auto_next` MCP 工具 | `src/mcp-server/index.ts` |
+| 新增 `devplan_auto_config` MCP 工具 | `src/mcp-server/index.ts` |
+| 新增 Autopilot 类型定义 | `src/types.ts` |
+
+#### 阶段三（P1）：executor 迁入 + 接入 DevPlan
+
+> 目标：将 cursor_auto 重构为 executor，迁入 devplan 项目，接入 HTTP API。
+
+| 子任务 | 说明 |
+|--------|------|
+| 创建 `executor/` 目录结构 | `pyproject.toml`、`src/`、`tests/` |
+| 实现 `devplan_client.py` | HTTP 客户端，封装 `/api/auto/*` 调用 |
+| 重写 `engine.py` | 双通道决策引擎（DevPlan 状态 + UI 截图） |
+| 精简 `vision_analyzer.py` | Prompt 精简为 4 种 UI 状态 |
+| 迁入 `cursor_controller.py` | GUI 自动化（基本保留） |
+| 删除 `tasks.txt` 依赖 | 所有任务从 DevPlan 获取 |
+| 实现自动阶段切换 | 阶段完成后自动 `start_phase` 下一阶段 |
+
+#### 阶段四（P2）：增强与优化
+
+| 子任务 | 说明 |
+|--------|------|
+| 输入框定位改进 | 使用 UI Automation API 替代坐标硬编码 |
+| AI 模型层抽象 | 支持 Ollama / OpenAI 等多后端 |
+| Web UI 集成 DevPlan 进度 | 在 executor 的 Web UI 中展示阶段进度 |
+| 可视化集成 | 在 DevPlan 图谱中展示 autopilot 状态 |
+| 测试覆盖 | 单元测试和集成测试 |
+
+### 13.9 cursor_auto 原 repo 处理
+
+合并完成后：
+
+1. `D:\Project\git\cursor_auto` 归档（保留但不再更新）
+2. 在 cursor_auto 的 README 中标注："本项目已迁移至 `aifastdb-devplan/executor/`"
+3. 后续所有开发在 `aifastdb-devplan` 项目中进行
 
 ---
 

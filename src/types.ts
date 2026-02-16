@@ -399,6 +399,8 @@ export interface DevPlanStoreConfig {
   taskPath: string;
   /** 功能模块存储路径 */
   modulePath: string;
+  /** Git 操作的工作目录（多项目路由时指向项目根目录，默认 process.cwd()） */
+  gitCwd?: string;
 }
 
 /**
@@ -413,6 +415,8 @@ export interface DevPlanGraphStoreConfig {
   enableSemanticSearch?: boolean;
   /** Embedding 向量维度（默认 384，MiniLM-L6-v2） */
   embeddingDimension?: number;
+  /** Git 操作的工作目录（多项目路由时指向项目根目录，默认 process.cwd()） */
+  gitCwd?: string;
 }
 
 /**
@@ -499,6 +503,99 @@ export interface DevPlanExportedGraph {
   /** 所有边 */
   edges: DevPlanGraphEdge[];
 }
+
+// ============================================================================
+// Constants
+// ============================================================================
+
+// ============================================================================
+// Autopilot Types
+// ============================================================================
+
+/** Autopilot 自动化配置 */
+export interface AutopilotConfig {
+  /** 是否启用 autopilot */
+  enabled: boolean;
+  /** executor 轮询间隔（秒） */
+  pollIntervalSeconds: number;
+  /** 阶段完成后自动启动下一个 */
+  autoStartNextPhase: boolean;
+  /** 发送"请继续"的最大连续重试次数 */
+  maxContinueRetries: number;
+  /** 子任务卡住超时时间（分钟） */
+  stuckTimeoutMinutes: number;
+}
+
+/** Autopilot 下一步动作类型 */
+export type AutopilotAction =
+  | 'send_task'       // 发送新的子任务内容给 Cursor
+  | 'send_continue'   // 发送"请继续"（AI 被中断/限速）
+  | 'start_phase'     // 启动新阶段
+  | 'wait'            // 等待（任务进行中，无需操作）
+  | 'all_done';       // 全部任务完成
+
+/** Autopilot 动作建议 */
+export interface AutopilotNextAction {
+  action: AutopilotAction;
+  phase?: {
+    taskId: string;
+    title: string;
+    status: TaskStatus;
+    totalSubtasks: number;
+    completedSubtasks: number;
+  };
+  subTask?: {
+    taskId: string;
+    title: string;
+    description?: string;
+    status: TaskStatus;
+  };
+  message: string;
+}
+
+/** Autopilot 执行状态 */
+export interface AutopilotStatus {
+  hasActivePhase: boolean;
+  activePhase?: {
+    taskId: string;
+    title: string;
+    totalSubtasks: number;
+    completedSubtasks: number;
+    percent: number;
+  };
+  currentSubTask?: {
+    taskId: string;
+    title: string;
+    status: TaskStatus;
+  };
+  nextPendingSubTask?: {
+    taskId: string;
+    title: string;
+  };
+  nextPendingPhase?: {
+    taskId: string;
+    title: string;
+    priority: string;
+  };
+  remainingPhases: number;
+}
+
+/** Executor 心跳数据 */
+export interface ExecutorHeartbeat {
+  executorId: string;
+  status: 'active' | 'paused' | 'stopped';
+  lastScreenState?: string;
+  timestamp: number;
+}
+
+/** Autopilot 配置的默认值 */
+export const DEFAULT_AUTOPILOT_CONFIG: AutopilotConfig = {
+  enabled: false,
+  pollIntervalSeconds: 15,
+  autoStartNextPhase: true,
+  maxContinueRetries: 5,
+  stuckTimeoutMinutes: 30,
+};
 
 // ============================================================================
 // Constants

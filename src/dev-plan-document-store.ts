@@ -81,9 +81,12 @@ export class DevPlanDocumentStore implements IDevPlanStore {
   private taskStore: InstanceType<typeof EnhancedDocumentStore>;
   private moduleStore: InstanceType<typeof EnhancedDocumentStore>;
   private projectName: string;
+  /** Git 操作的工作目录（多项目路由时指向项目根目录） */
+  private gitCwd: string | undefined;
 
   constructor(projectName: string, config: DevPlanStoreConfig) {
     this.projectName = projectName;
+    this.gitCwd = config.gitCwd;
     this.docStore = new EnhancedDocumentStore(
       config.documentPath,
       documentStoreProductionConfig()
@@ -1762,6 +1765,7 @@ export class DevPlanDocumentStore implements IDevPlanStore {
         encoding: 'utf-8',
         timeout: 5000,
         stdio: ['pipe', 'pipe', 'pipe'], // 静默 stderr
+        cwd: this.gitCwd,
       }).trim();
     } catch {
       return undefined; // 非 Git 仓库或 Git 不可用
@@ -1780,6 +1784,7 @@ export class DevPlanDocumentStore implements IDevPlanStore {
       execSync(`git merge-base --is-ancestor ${commit} ${target}`, {
         timeout: 5000,
         stdio: ['pipe', 'pipe', 'pipe'],
+        cwd: this.gitCwd,
       });
       return true; // exit code 0 = is ancestor
     } catch {

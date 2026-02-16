@@ -22,6 +22,9 @@
  * - devplan_get_module: Get module details with associated tasks and docs
  * - devplan_update_module: Update module info
  * - devplan_start_visual: Start the graph visualization HTTP server
+ * - devplan_auto_status: Query autopilot execution status
+ * - devplan_auto_next: Intelligently recommend the next autopilot action
+ * - devplan_auto_config: Get or update autopilot configuration
  */
 
 // @ts-ignore - MCP SDK types will be available after npm install
@@ -36,6 +39,8 @@ import {
   McpError,
 } from '@modelcontextprotocol/sdk/types.js';
 
+import * as fs from 'fs';
+import * as path from 'path';
 import {
   createDevPlan,
   listDevPlans,
@@ -44,6 +49,8 @@ import {
   readDevPlanConfig,
   writeDevPlanConfig,
   resolveProjectName as factoryResolveProjectName,
+  resolveBasePathForProject,
+  getDefaultBasePath,
   type DevPlanEngine,
 } from '../dev-plan-factory';
 import { migrateEngine } from '../dev-plan-migrate';
@@ -55,7 +62,15 @@ import {
   type TaskStatus,
   type TaskPriority,
   type SearchMode,
+  type AutopilotConfig,
 } from '../types';
+import {
+  getAutopilotStatus,
+  getAutopilotNextAction,
+  getAutopilotConfig,
+  updateAutopilotConfig,
+  getLastHeartbeat,
+} from '../autopilot';
 
 // ============================================================================
 // DevPlan Store Cache
@@ -85,7 +100,7 @@ function getDevPlan(projectName: string, engine?: DevPlanEngine): IDevPlanStore 
 const TOOLS = [
   {
     name: 'devplan_init',
-    description: 'Initialize a development plan for a project. Creates an empty plan structure. Also lists existing plans if no projectName is given.\n初始化项目的开发计划。创建空的计划结构。如果不提供 projectName 则列出已有的计划。',
+    description: 'Initialize a development plan for a project. Creates an empty plan structure. Also lists existing plans if no projectName is given. Auto-generates .cursor/rules/dev-plan-management.mdc template if not present.\n初始化项目的开发计划。创建空的计划结构。如果不提供 projectName 则列出已有的计划。自动生成 .cursor/rules/ 模板文件（仅首次）。',
     inputSchema: {
       type: 'object' as const,
       properties: {
@@ -676,6 +691,62 @@ const TOOLS = [
       required: ['projectName'],
     },
   },
+  // ========================================================================
+  // Autopilot Tools (3 个)
+  // ========================================================================
+  {
+    name: 'devplan_auto_status',
+    description: 'Query autopilot execution status: whether there is an active phase, current sub-task, next pending sub-task, next pending phase, and remaining phases count.\n查询自动化执行状态：是否有进行中阶段、当前子任务、下一个待执行子任务、下一个待启动阶段、剩余未完成阶段数。',
+    inputSchema: {
+      type: 'object' as const,
+      properties: {
+        projectName: {
+          type: 'string',
+          description: `Project name (required)\n项目名称（必需）`,
+        },
+      },
+      required: ['projectName'],
+    },
+  },
+  {
+    name: 'devplan_auto_next',
+    description: 'Intelligently recommend the next action for autopilot: send_task (send next sub-task), send_continue (AI was interrupted), start_phase (start a new phase), wait (task in progress), or all_done (everything completed).\n智能推荐下一步自动化动作：send_task（发送子任务）、send_continue（AI 被中断）、start_phase（启动新阶段）、wait（等待中）、all_done（全部完成）。',
+    inputSchema: {
+      type: 'object' as const,
+      properties: {
+        projectName: {
+          type: 'string',
+          description: `Project name (required)\n项目名称（必需）`,
+        },
+      },
+      required: ['projectName'],
+    },
+  },
+  {
+    name: 'devplan_auto_config',
+    description: 'Get or update autopilot configuration: poll interval, auto-start next phase, max continue retries, stuck timeout. Call without config to read current settings.\n获取或更新自动化配置：轮询间隔、自动启动下一阶段、最大重试次数、卡住超时。不传 config 则读取当前配置。',
+    inputSchema: {
+      type: 'object' as const,
+      properties: {
+        projectName: {
+          type: 'string',
+          description: `Project name (required)\n项目名称（必需）`,
+        },
+        config: {
+          type: 'object',
+          description: 'Partial config to merge. Omit to read current config.\n要合并的配置。省略则读取当前配置。',
+          properties: {
+            enabled: { type: 'boolean', description: 'Enable/disable autopilot' },
+            pollIntervalSeconds: { type: 'number', description: 'Executor poll interval in seconds' },
+            autoStartNextPhase: { type: 'boolean', description: 'Auto-start next phase when current completes' },
+            maxContinueRetries: { type: 'number', description: 'Max consecutive "continue" retries' },
+            stuckTimeoutMinutes: { type: 'number', description: 'Sub-task stuck timeout in minutes' },
+          },
+        },
+      },
+      required: ['projectName'],
+    },
+  },
 ];
 
 // ============================================================================
@@ -736,6 +807,8 @@ interface ToolArgs {
   order?: number;
   /** devplan_save_section: 父文档标识 */
   parentDoc?: string;
+  /** devplan_auto_config: Autopilot 配置（部分更新） */
+  config?: Partial<AutopilotConfig>;
 }
 
 /**
@@ -785,8 +858,9 @@ async function handleToolCall(name: string, args: ToolArgs): Promise<string> {
       const plan = getDevPlan(args.projectName);
       const engine = getProjectEngine(args.projectName) || 'graph';
 
-      // 自动写入/更新 .devplan/config.json，记录 defaultProject + enableSemanticSearch
-      const existingConfig = readDevPlanConfig();
+      // 自动写入/更新工作区级 .devplan/config.json
+      const defaultBase = getDefaultBasePath();
+      const existingConfig = readDevPlanConfig(defaultBase);
       if (!existingConfig) {
         writeDevPlanConfig({
           defaultProject: args.projectName,
@@ -794,14 +868,84 @@ async function handleToolCall(name: string, args: ToolArgs): Promise<string> {
         });
       }
 
+      // 多项目工作区：自动注册新项目到工作区 config.json 的 projects 表
+      // 当项目名不在 projects 注册表中时，尝试在工作区根目录的同级查找同名目录
+      let autoRegistered = false;
+      const workspaceConfig = readDevPlanConfig(defaultBase) || {
+        defaultProject: args.projectName,
+        enableSemanticSearch: true,
+      };
+      if (!workspaceConfig.projects?.[args.projectName]) {
+        // 尝试自动发现项目根目录：
+        // 如果 defaultBase 在某个项目下 (如 D:\xxx\ai_db\.devplan)，
+        // 取其父目录 (D:\xxx\) 作为工作区根，查找 D:\xxx\{projectName}\
+        const devplanParent = path.dirname(defaultBase); // e.g. D:\Project\git\ai_db
+        const workspaceRoot = path.dirname(devplanParent); // e.g. D:\Project\git
+        const candidateRoot = path.join(workspaceRoot, args.projectName);
+
+        if (fs.existsSync(candidateRoot) && fs.statSync(candidateRoot).isDirectory()) {
+          // 找到了同名目录，自动注册到 projects 表
+          if (!workspaceConfig.projects) {
+            workspaceConfig.projects = {};
+          }
+          workspaceConfig.projects[args.projectName] = { rootPath: candidateRoot };
+          writeDevPlanConfig(workspaceConfig, defaultBase);
+          autoRegistered = true;
+          console.error(`[devplan] Auto-registered project "${args.projectName}" → ${candidateRoot}`);
+        } else {
+          console.error(`[devplan] Project "${args.projectName}" not found at candidate path: ${candidateRoot}, using default basePath`);
+        }
+      }
+
+      // 多项目工作区：如果项目路由到独立目录，也在该目录创建 config.json
+      const projectBase = resolveBasePathForProject(args.projectName);
+      if (projectBase !== defaultBase) {
+        const projectLocalConfig = readDevPlanConfig(projectBase);
+        if (!projectLocalConfig) {
+          writeDevPlanConfig({
+            defaultProject: args.projectName,
+            enableSemanticSearch: true,
+          }, projectBase);
+          console.error(`[devplan] Created project-level config.json at ${projectBase}`);
+        }
+      }
+
+      // 自动生成 .cursor/rules/dev-plan-management.mdc 模板
+      // 仅当项目根目录可确定、且规则文件不存在时生成
+      let cursorRuleGenerated = false;
+      const projectRoot = path.dirname(projectBase); // projectBase = xxx/.devplan → projectRoot = xxx
+      const cursorRulesDir = path.join(projectRoot, '.cursor', 'rules');
+      const cursorRuleFile = path.join(cursorRulesDir, 'dev-plan-management.mdc');
+
+      if (projectRoot && !fs.existsSync(cursorRuleFile)) {
+        try {
+          if (!fs.existsSync(cursorRulesDir)) {
+            fs.mkdirSync(cursorRulesDir, { recursive: true });
+          }
+          const ruleContent = generateCursorRuleTemplate(args.projectName);
+          fs.writeFileSync(cursorRuleFile, ruleContent, 'utf-8');
+          cursorRuleGenerated = true;
+          console.error(`[devplan] Generated Cursor Rule template at ${cursorRuleFile}`);
+        } catch (err) {
+          console.error(`[devplan] Failed to generate Cursor Rule: ${err}`);
+        }
+      }
+
       return JSON.stringify({
         success: true,
         projectName: args.projectName,
         engine,
+        basePath: projectBase,
+        autoRegistered,
+        cursorRuleGenerated,
+        cursorRulePath: cursorRuleGenerated ? cursorRuleFile : null,
         configDefaultProject: readDevPlanConfig()?.defaultProject || null,
+        registeredProjects: Object.keys(readDevPlanConfig(defaultBase)?.projects || {}),
         availableSections: ALL_SECTIONS,
         sectionDescriptions: SECTION_DESCRIPTIONS,
-        message: `DevPlan initialized for "${args.projectName}" with engine "${engine}". Use devplan_save_section to add document sections and devplan_create_main_task to add development phases.`,
+        message: autoRegistered
+          ? `DevPlan initialized for "${args.projectName}" with engine "${engine}". Project auto-registered at ${projectBase}.`
+          : `DevPlan initialized for "${args.projectName}" with engine "${engine}".`,
       });
     }
 
@@ -1683,6 +1827,60 @@ async function handleToolCall(name: string, args: ToolArgs): Promise<string> {
       }
     }
 
+    // ==================================================================
+    // Autopilot Tool Handlers
+    // ==================================================================
+
+    case 'devplan_auto_status': {
+      if (!args.projectName) {
+        throw new McpError(ErrorCode.InvalidParams, 'Missing required: projectName');
+      }
+      const plan = getDevPlan(args.projectName);
+      const status = getAutopilotStatus(plan);
+      const hbInfo = getLastHeartbeat(args.projectName);
+
+      return JSON.stringify({
+        ...status,
+        executor: {
+          isAlive: hbInfo.isAlive,
+          lastHeartbeat: hbInfo.heartbeat,
+          lastHeartbeatReceivedAt: hbInfo.receivedAt || null,
+        },
+      }, null, 2);
+    }
+
+    case 'devplan_auto_next': {
+      if (!args.projectName) {
+        throw new McpError(ErrorCode.InvalidParams, 'Missing required: projectName');
+      }
+      const plan = getDevPlan(args.projectName);
+      const nextAction = getAutopilotNextAction(plan);
+
+      return JSON.stringify(nextAction, null, 2);
+    }
+
+    case 'devplan_auto_config': {
+      if (!args.projectName) {
+        throw new McpError(ErrorCode.InvalidParams, 'Missing required: projectName');
+      }
+
+      if (args.config && typeof args.config === 'object') {
+        // 更新配置
+        const updated = updateAutopilotConfig(args.projectName, args.config);
+        return JSON.stringify({
+          action: 'updated',
+          config: updated,
+        }, null, 2);
+      } else {
+        // 读取配置
+        const current = getAutopilotConfig(args.projectName);
+        return JSON.stringify({
+          action: 'read',
+          config: current,
+        }, null, 2);
+      }
+    }
+
     default:
       throw new McpError(ErrorCode.MethodNotFound, `Unknown tool: ${name}`);
   }
@@ -1740,6 +1938,70 @@ async function main() {
   await server.connect(transport);
 
   console.error('aifastdb-devplan MCP Server started');
+}
+
+/**
+ * 生成项目专属的 Cursor Rule 模板文件内容。
+ *
+ * 模板只包含项目专属信息（projectName、文档层级占位、快捷操作、开发阶段占位）。
+ * 通用的 DevPlan 工作流规则由用户级全局 Cursor Rule 或 MCP 工具描述提供。
+ */
+function generateCursorRuleTemplate(projectName: string): string {
+  return `---
+description: ${projectName} 项目的 DevPlan 配置。包含项目标识、文档层级、开发阶段。通用的 DevPlan 工作流规则由用户级全局规则提供。
+globs: []
+alwaysApply: true
+mcpServers: aifastdb-devplan
+---
+
+# ${projectName} 项目 — DevPlan 配置
+
+> **MCP Server**: \`aifastdb-devplan\`
+> 通用的 DevPlan 工作流（触发词识别、阶段工作流、完成流程等）由用户级全局 Cursor Rule 提供。
+
+## 项目标识
+
+\`\`\`
+projectName = "${projectName}"
+\`\`\`
+
+## 文档层级
+
+| 层级 | 文件 | 用途 | 大小 |
+|------|------|------|------|
+| Layer 1 (鸟瞰) | \`docs/${projectName}-overview.md\` | AI 首选阅读，< 500 行 | — |
+| Layer 2 (详细) | （项目完整设计文档） | 分段读取 | — |
+| Layer 3 (实时) | \`.devplan/${projectName}/\` | MCP 工具查询任务状态 | — |
+
+## 快捷操作
+
+\`\`\`
+devplan_get_progress(projectName: "${projectName}")
+devplan_list_tasks(projectName: "${projectName}")
+devplan_list_tasks(projectName: "${projectName}", status: "pending")
+devplan_complete_task(projectName: "${projectName}", taskId: "T1.1")
+devplan_sync_git(projectName: "${projectName}", dryRun: true)
+devplan_list_sections(projectName: "${projectName}")
+devplan_get_section(projectName: "${projectName}", section: "overview")
+devplan_export_markdown(projectName: "${projectName}", scope: "tasks")
+devplan_list_modules(projectName: "${projectName}")
+\`\`\`
+
+## 开发阶段概览
+
+| 阶段 | 状态 | 说明 |
+|------|------|------|
+| （使用 devplan_list_tasks 查看最新状态） | | |
+
+## 注意事项
+
+1. **优先读概览文件**：初次了解项目时，先读概览文件（< 500 行），再按需深入完整设计文档
+2. **数据存储位置**：本项目的 devplan 数据存储在项目根目录的 \`.devplan/${projectName}/\` 下
+3. **通过 MCP 操作任务**：任务状态管理使用 \`devplan_*\` 系列 MCP 工具，不要手动编辑数据文件
+4. **完成任务后同步**：完成代码实现后，调用 \`devplan_complete_task\` 持久化状态（自动锚定 Git commit）
+5. **Git 回滚后检查**：如果执行了 \`git reset\` 或切换分支，运行 \`devplan_sync_git\` 检查任务状态一致性
+6. **概览文件需手动更新**：当有重大架构变更、新增阶段或新 API 时，同步更新概览文档
+`;
 }
 
 // Run

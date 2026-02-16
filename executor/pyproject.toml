@@ -1,0 +1,42 @@
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.backends"
+
+[project]
+name = "devplan-executor"
+version = "1.0.0"
+description = "DevPlan Autopilot Executor — Cursor IDE 无人值守自动化引擎"
+readme = "README.md"
+requires-python = ">=3.10"
+license = { text = "MIT" }
+
+dependencies = [
+    # GUI 自动化
+    "pyautogui>=0.9.54",
+    "pygetwindow>=0.0.9",
+    "pyperclip>=1.8.2",
+    # 图像处理
+    "Pillow>=10.0.0",
+    "numpy>=1.24.0",
+    # Ollama 视觉 AI
+    "ollama>=0.1.0",
+    # HTTP 客户端
+    "httpx>=0.27.0",
+    # 配置管理
+    "pydantic>=2.0.0",
+    "pydantic-settings>=2.0.0",
+    # Web UI 监控面板
+    "flask>=3.0.0",
+]
+
+[project.optional-dependencies]
+dev = [
+    "pytest>=8.0.0",
+    "pytest-asyncio>=0.23.0",
+]
+
+[project.scripts]
+devplan-executor = "src.main:main"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src"]
