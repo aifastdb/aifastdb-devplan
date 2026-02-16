@@ -19,13 +19,31 @@ Autopilot 执行器入口，实现：
 from __future__ import annotations
 
 import argparse
+import io
 import logging
+import os
 import signal
 import sys
 import time
 from datetime import datetime
 from pathlib import Path
 from typing import Optional
+
+
+def _ensure_utf8_stdio() -> None:
+    """确保 stdout/stderr 使用 UTF-8 编码（Windows 中文系统默认 GBK，无法输出 emoji）"""
+    if sys.platform == "win32":
+        # 设置控制台代码页为 UTF-8
+        os.system("chcp 65001 > nul 2>&1")
+        for stream_name in ("stdout", "stderr"):
+            stream = getattr(sys, stream_name)
+            if hasattr(stream, "reconfigure"):
+                stream.reconfigure(encoding="utf-8", errors="replace")
+            elif hasattr(stream, "buffer"):
+                setattr(sys, stream_name, io.TextIOWrapper(
+                    stream.buffer, encoding="utf-8", errors="replace",
+                    line_buffering=stream.line_buffering,
+                ))
 
 from .config import ExecutorConfig, UIStatus, get_config
 from .cursor_controller import CursorController
@@ -513,6 +531,7 @@ def parse_args() -> argparse.Namespace:
 
 def main() -> None:
     """程序主入口"""
+    _ensure_utf8_stdio()
     args = parse_args()
 
     # 加载配置：文件 → 环境变量 → 命令行参数

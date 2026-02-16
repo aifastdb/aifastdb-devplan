@@ -1,22 +1,21 @@
 @echo off
 setlocal enabledelayedexpansion
-chcp 65001 >nul 2>&1
-title DevPlan Executor â€” Autopilot
+title DevPlan Executor ¡ª Autopilot
 
 echo.
 echo   ========================================================
-echo     DevPlan Executor â€” ä¸€é”®å¯åŠ¨è„šæœ¬
+echo     DevPlan Executor ¡ª Ò»¼üÆô¶¯½Å±¾
 echo   ========================================================
 echo.
 
-:: â”€â”€ é»˜è®¤å‚æ•°ï¼ˆå¯åœ¨æ­¤å¤„ä¿®æ”¹ï¼‰ â”€â”€
+:: ©¤©¤ Ä¬ÈÏ²ÎÊý£¨¿ÉÔÚ´Ë´¦ÐÞ¸Ä£© ©¤©¤
 set PROJECT=ai_db
 set DEVPLAN_PORT=3210
 set POLL_INTERVAL=15
 set UI_PORT=5000
 set DEVPLAN_ROOT=D:\Project\git\aifastdb-devplan
 
-:: â”€â”€ å‘½ä»¤è¡Œå‚æ•°è¦†ç›– â”€â”€
+:: ©¤©¤ ÃüÁîÐÐ²ÎÊý¸²¸Ç ©¤©¤
 :parse_args
 if "%~1"=="" goto args_done
 if /i "%~1"=="--project" (set PROJECT=%~2& shift& shift& goto parse_args)
@@ -27,117 +26,119 @@ shift
 goto parse_args
 :args_done
 
-:: â”€â”€ åˆ‡æ¢åˆ° executor ç›®å½• â”€â”€
+:: ©¤©¤ ÇÐ»»µ½ executor Ä¿Â¼ ©¤©¤
 cd /d "%~dp0"
-echo [1/6] å·¥ä½œç›®å½•: %CD%
+echo [1/6] ¹¤×÷Ä¿Â¼: %CD%
 
-:: â”€â”€ æ¸…ç†æ—§è¿›ç¨‹ â”€â”€
-echo [2/6] æ£€æŸ¥å¹¶æ¸…ç†æ—§è¿›ç¨‹...
+:: ©¤©¤ ÇåÀí¾É½ø³Ì ©¤©¤
+echo [2/6] ¼ì²é²¢ÇåÀí¾É½ø³Ì...
 
-:: æ¸…ç†å ç”¨ Executor UI ç«¯å£çš„æ‰€æœ‰æ—§è¿›ç¨‹
+:: ÇåÀíÕ¼ÓÃ Executor UI ¶Ë¿ÚµÄËùÓÐ¾É½ø³Ì
 set NEED_WAIT=0
 for /f "tokens=5" %%a in ('netstat -ano ^| findstr /c:"LISTENING" ^| findstr /c:":%UI_PORT% "') do (
-    echo       æ¸…ç†æ—§ Executor è¿›ç¨‹ ^(PID: %%a^)...
+    echo       ÇåÀí¾É Executor ½ø³Ì ^(PID: %%a^)...
     taskkill /pid %%a /f >nul 2>&1
     set NEED_WAIT=1
 )
-:: äºŒæ¬¡æ¸…ç†ï¼šFlask debug æ¨¡å¼å¯èƒ½äº§ç”Ÿå­è¿›ç¨‹ï¼Œç«¯å£å¯èƒ½è¢«æ–° PID å ç”¨
+:: ¶þ´ÎÇåÀí£ºFlask debug Ä£Ê½¿ÉÄÜ²úÉú×Ó½ø³Ì£¬¶Ë¿Ú¿ÉÄÜ±»ÐÂ PID Õ¼ÓÃ
 for /f "tokens=5" %%a in ('netstat -ano ^| findstr /c:"LISTENING" ^| findstr /c:":%UI_PORT% "') do (
-    echo       æ¸…ç†æ®‹ç•™è¿›ç¨‹ ^(PID: %%a^)...
+    echo       ÇåÀí²ÐÁô½ø³Ì ^(PID: %%a^)...
     taskkill /pid %%a /f >nul 2>&1
     set NEED_WAIT=1
 )
 if "!NEED_WAIT!"=="1" (
-    echo       ç­‰å¾…ç«¯å£é‡Šæ”¾...
+    echo       µÈ´ý¶Ë¿ÚÊÍ·Å...
     timeout /t 2 /nobreak >nul
-    echo       æ—§è¿›ç¨‹å·²æ¸…ç†
+    echo       ¾É½ø³ÌÒÑÇåÀí
 ) else (
-    echo       æ— æ—§è¿›ç¨‹éœ€è¦æ¸…ç†
+    echo       ÎÞ¾É½ø³ÌÐèÒªÇåÀí
 )
 
-:: â”€â”€ æ£€æŸ¥ Python â”€â”€
+:: ©¤©¤ ¼ì²é Python ©¤©¤
 python --version >nul 2>&1
 if errorlevel 1 (
-    echo [é”™è¯¯] æœªæ‰¾åˆ° Pythonï¼Œè¯·å…ˆå®‰è£… Python 3.10+
+    echo [´íÎó] Î´ÕÒµ½ Python£¬ÇëÏÈ°²×° Python 3.10+
     pause
     exit /b 1
 )
-echo [3/6] Python å·²å°±ç»ª
+echo [3/6] Python ÒÑ¾ÍÐ÷
 
-:: â”€â”€ æ£€æŸ¥ä¾èµ– â”€â”€
+:: ©¤©¤ ¼ì²éÒÀÀµ ©¤©¤
 python -c "import pyautogui, pyperclip, ollama, httpx, pydantic_settings, flask, numpy, PIL" >nul 2>&1
 if errorlevel 1 (
-    echo [3/6] ä¾èµ–ç¼ºå¤±ï¼Œæ­£åœ¨å®‰è£…...
+    echo [3/6] ÒÀÀµÈ±Ê§£¬ÕýÔÚ°²×°...
     pip install -e . --quiet
     if errorlevel 1 (
-        echo [é”™è¯¯] ä¾èµ–å®‰è£…å¤±è´¥
+        echo [´íÎó] ÒÀÀµ°²×°Ê§°Ü
         pause
         exit /b 1
     )
-    echo [3/6] ä¾èµ–å®‰è£…å®Œæˆ
+    echo [3/6] ÒÀÀµ°²×°Íê³É
 ) else (
-    echo [3/6] ä¾èµ–å·²å°±ç»ª
+    echo [3/6] ÒÀÀµÒÑ¾ÍÐ÷
 )
 
-:: â”€â”€ æ£€æŸ¥ Node.js â”€â”€
+:: ©¤©¤ ¼ì²é Node.js ©¤©¤
 node --version >nul 2>&1
 if errorlevel 1 (
-    echo [é”™è¯¯] æœªæ‰¾åˆ° Node.jsï¼ŒDevPlan å¯è§†åŒ–æœåŠ¡éœ€è¦ Node.js
+    echo [´íÎó] Î´ÕÒµ½ Node.js£¬DevPlan ¿ÉÊÓ»¯·þÎñÐèÒª Node.js
     pause
     exit /b 1
 )
-echo [4/6] Node.js å·²å°±ç»ª
+echo [4/6] Node.js ÒÑ¾ÍÐ÷
 
-:: â”€â”€ å¯åŠ¨ DevPlan å¯è§†åŒ–æœåŠ¡ â”€â”€
-echo [5/6] å¯åŠ¨ DevPlan å¯è§†åŒ–æœåŠ¡ (ç«¯å£: %DEVPLAN_PORT%)...
+:: ©¤©¤ Æô¶¯ DevPlan ¿ÉÊÓ»¯·þÎñ ©¤©¤
+echo [5/6] Æô¶¯ DevPlan ¿ÉÊÓ»¯·þÎñ (¶Ë¿Ú: %DEVPLAN_PORT%)...
 
-:: å…ˆæ£€æŸ¥ç«¯å£æ˜¯å¦å·²è¢«å ç”¨ï¼ˆæœåŠ¡å¯èƒ½å·²åœ¨è¿è¡Œï¼‰
+:: ÏÈ¼ì²é¶Ë¿ÚÊÇ·ñÒÑ±»Õ¼ÓÃ£¨·þÎñ¿ÉÄÜÒÑÔÚÔËÐÐ£©
 powershell -Command "try { $r = Invoke-WebRequest -Uri 'http://127.0.0.1:%DEVPLAN_PORT%/api/progress?project=%PROJECT%' -TimeoutSec 2 -UseBasicParsing -ErrorAction Stop; exit 0 } catch { exit 1 }" >nul 2>&1
 if %errorlevel%==0 (
-    echo [5/6] DevPlan å¯è§†åŒ–æœåŠ¡å·²åœ¨è¿è¡Œï¼Œè·³è¿‡å¯åŠ¨
+    echo [5/6] DevPlan ¿ÉÊÓ»¯·þÎñÒÑÔÚÔËÐÐ£¬Ìø¹ýÆô¶¯
     goto start_executor
 )
 
-:: åœ¨æ–°çª—å£ä¸­å¯åŠ¨ DevPlan å¯è§†åŒ–æœåŠ¡
+:: ÔÚÐÂ´°¿ÚÖÐÆô¶¯ DevPlan ¿ÉÊÓ»¯·þÎñ
 start "DevPlan Visualize Server" /min cmd /c "cd /d %DEVPLAN_ROOT% && node dist/visualize/server.js --project %PROJECT% --port %DEVPLAN_PORT%"
 
-:: ç­‰å¾…æœåŠ¡å°±ç»ªï¼ˆæœ€å¤šç­‰ 15 ç§’ï¼‰
-echo       ç­‰å¾…æœåŠ¡å°±ç»ª...
+:: µÈ´ý·þÎñ¾ÍÐ÷£¨×î¶àµÈ 15 Ãë£©
+echo       µÈ´ý·þÎñ¾ÍÐ÷...
 set /a WAIT_COUNT=0
 :wait_loop
 if %WAIT_COUNT% geq 15 (
-    echo [è­¦å‘Š] DevPlan æœåŠ¡ 15 ç§’å†…æœªå°±ç»ªï¼Œç»§ç»­å¯åŠ¨ Executor...
+    echo [¾¯¸æ] DevPlan ·þÎñ 15 ÃëÄÚÎ´¾ÍÐ÷£¬¼ÌÐøÆô¶¯ Executor...
     goto start_executor
 )
 timeout /t 1 /nobreak >nul
 set /a WAIT_COUNT+=1
 powershell -Command "try { $r = Invoke-WebRequest -Uri 'http://127.0.0.1:%DEVPLAN_PORT%/api/progress?project=%PROJECT%' -TimeoutSec 2 -UseBasicParsing -ErrorAction Stop; exit 0 } catch { exit 1 }" >nul 2>&1
 if %errorlevel%==0 (
-    echo [5/6] DevPlan å¯è§†åŒ–æœåŠ¡å·²å°±ç»ª (http://127.0.0.1:%DEVPLAN_PORT%)
+    echo [5/6] DevPlan ¿ÉÊÓ»¯·þÎñÒÑ¾ÍÐ÷ (http://127.0.0.1:%DEVPLAN_PORT%)
     goto start_executor
 )
-echo       ç­‰å¾…ä¸­... (%WAIT_COUNT%/15)
+echo       µÈ´ýÖÐ... (%WAIT_COUNT%/15)
 goto wait_loop
 
 :start_executor
-:: â”€â”€ å¯åŠ¨ Executor â”€â”€
-echo [6/6] å¯åŠ¨ Executor...
+:: ©¤©¤ Æô¶¯ Executor ©¤©¤
+echo [6/6] Æô¶¯ Executor...
 echo.
-echo       é¡¹ç›®:         %PROJECT%
+echo       ÏîÄ¿:         %PROJECT%
 echo       DevPlan:      http://127.0.0.1:%DEVPLAN_PORT%
-echo       è½®è¯¢é—´éš”:     %POLL_INTERVAL%s
+echo       ÂÖÑ¯¼ä¸ô:     %POLL_INTERVAL%s
 echo       Web UI:       http://127.0.0.1:%UI_PORT%
-echo       æŒ‰ Ctrl+C åœæ­¢
+echo       °´ Ctrl+C Í£Ö¹
 echo.
 
+chcp 65001 >nul 2>&1
 python -m src.main --project %PROJECT% --port %DEVPLAN_PORT% --interval %POLL_INTERVAL% --ui-port %UI_PORT%
+chcp 936 >nul 2>&1
 
-:: â”€â”€ Executor åœæ­¢åŽæ¸…ç† â”€â”€
+:: ©¤©¤ Executor Í£Ö¹ºóÇåÀí ©¤©¤
 echo.
-echo Executor å·²åœæ­¢ï¼Œæ­£åœ¨å…³é—­ DevPlan å¯è§†åŒ–æœåŠ¡...
+echo Executor ÒÑÍ£Ö¹£¬ÕýÔÚ¹Ø±Õ DevPlan ¿ÉÊÓ»¯·þÎñ...
 
-:: å…³é—­ DevPlan å¯è§†åŒ–æœåŠ¡çª—å£
+:: ¹Ø±Õ DevPlan ¿ÉÊÓ»¯·þÎñ´°¿Ú
 taskkill /fi "WINDOWTITLE eq DevPlan Visualize Server" /f >nul 2>&1
 
-echo å…¨éƒ¨æœåŠ¡å·²åœæ­¢
+echo È«²¿·þÎñÒÑÍ£Ö¹
 pause

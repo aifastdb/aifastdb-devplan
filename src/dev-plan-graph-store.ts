@@ -25,6 +25,7 @@ import {
 } from 'aifastdb';
 
 import * as path from 'path';
+import * as fs from 'fs';
 import type { IDevPlanStore } from './dev-plan-interface';
 import type {
   DevPlanSection,
@@ -124,13 +125,27 @@ export class DevPlanGraphStore implements IDevPlanStore {
     this.projectName = projectName;
     this.gitCwd = config.gitCwd;
 
+    // ── WAL 目录迁移：旧名 → 语义化新名 ──
+    // 必须在 SocialGraphV2 构造之前执行，否则 recover() 会找不到旧数据
+    DevPlanGraphStore.migrateWalDirNames(config.graphPath);
+
     // 构建 SocialGraphV2 配置
     const graphConfig: any = {
       path: config.graphPath,
       shardCount: config.shardCount || 4,
       walEnabled: true,
       mode: 'balanced',
-      shardNames: ['entities', 'relations', 'index', 'meta'],
+      shardNames: ['tasks', 'relations', 'docs', 'modules'],
+      // 显式路由：DevPlan 实体类型 → 对应分片
+      typeShardMapping: {
+        'devplan-project': 0,      // 项目根节点 → tasks shard
+        'devplan-main-task': 0,    // 主任务     → tasks shard
+        'devplan-sub-task': 0,     // 子任务     → tasks shard
+        'devplan-doc': 2,          // 文档片段   → docs shard
+        'devplan-module': 3,       // 功能模块   → modules shard
+        '_default': 0,             // 未知类型   → tasks shard (fallback)
+      },
+      relationShardId: 1,          // 所有关系   → relations shard
     };
 
     // 如果启用语义搜索，配置 SocialGraphV2 的向量搜索
@@ -208,6 +223,51 @@ export class DevPlanGraphStore implements IDevPlanStore {
       );
       this.synapse = null;
       this.semanticSearchReady = false;
+    }
+  }
+
+  // ==========================================================================
+  // WAL Directory Migration (旧分片名 → 语义化新名)
+  // ==========================================================================
+
+  /**
+   * 一次性迁移：将旧 WAL 目录名重命名为语义化新名。
+   *
+   * 映射表：
+   * - shard_0_entities → shard_0_tasks
+   * - shard_2_index    → shard_2_docs
+   * - shard_3_meta     → shard_3_modules
+   * - shard_1_relations 不变
+   *
+   * 该方法必须在 `new SocialGraphV2(config)` 之前调用。
+   * 幂等：如果旧目录不存在或新目录已存在则跳过。
+   */
+  private static migrateWalDirNames(graphPath: string): void {
+    const walBase = path.join(graphPath, 'wal');
+    if (!fs.existsSync(walBase)) return; // 全新安装，无需迁移
+
+    const renames: Array<[string, string]> = [
+      ['shard_0_entities', 'shard_0_tasks'],
+      ['shard_2_index',    'shard_2_docs'],
+      ['shard_3_meta',     'shard_3_modules'],
+    ];
+
+    for (const [oldName, newName] of renames) {
+      const oldDir = path.join(walBase, oldName);
+      const newDir = path.join(walBase, newName);
+
+      if (fs.existsSync(oldDir) && !fs.existsSync(newDir)) {
+        try {
+          fs.renameSync(oldDir, newDir);
+          console.error(`[DevPlan] WAL dir migrated: ${oldName} → ${newName}`);
+        } catch (e) {
+          console.warn(
+            `[DevPlan] Failed to migrate WAL dir ${oldName} → ${newName}: ${
+              e instanceof Error ? e.message : String(e)
+            }`
+          );
+        }
+      }
     }
   }
 
