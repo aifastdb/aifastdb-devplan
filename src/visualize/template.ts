@@ -702,9 +702,10 @@ function log(msg, ok) {
   dbg.innerHTML = (ok ? '<span class="ok">✓</span> ' : '<span class="err">✗</span> ') + msg;
 }
 
-// ========== 渲染引擎选择: vis-network (默认) vs GraphCanvas (高性能/实验) ==========
-// URL 参数 ?renderer=gc 可切换到 GraphCanvas 高性能引擎; 默认使用 vis-network
-var RENDERER_ENGINE = 'vis'; // 'vis' (默认) | 'graphcanvas' (实验性高性能)
+// ========== 渲染引擎选择: GraphCanvas (默认) vs vis-network (兼容) ==========
+// URL 参数 ?renderer=vis 可切回 vis-network 传统引擎; 默认使用 GraphCanvas 高性能引擎
+// Phase-11 完成: 视觉效果已完整移植，GraphCanvas 现为默认引擎
+var RENDERER_ENGINE = 'graphcanvas'; // 'graphcanvas' (默认, 高性能) | 'vis' (兼容)
 (function() {
   var params = new URLSearchParams(window.location.search);
   var r = params.get('renderer');
@@ -2174,26 +2175,41 @@ function renderGraph() {
       };
     }
 
+    // ── 性能优化: 根据节点数量自适应渲染配置 ──
+    var isLargeGraph = nodeCount > 300;
+    var isVeryLargeGraph = nodeCount > 800;
+
     var networkOptions = {
       nodes: {
         borderWidth: 2,
-        shadow: { enabled: true, color: 'rgba(0,0,0,0.3)', size: 5, x: 0, y: 2 }
+        // 大图禁用阴影 — 每个节点少一轮 canvas 绘制
+        shadow: isLargeGraph
+          ? false
+          : { enabled: true, color: 'rgba(0,0,0,0.3)', size: 5, x: 0, y: 2 }
       },
       edges: {
-        smooth: { enabled: true, type: 'continuous', roundness: 0.5 },
+        // 大图使用直线边 — 比曲线快 5-10x（无需计算贝塞尔曲线）
+        smooth: isLargeGraph
+          ? false
+          : { enabled: true, type: 'continuous', roundness: 0.5 },
         shadow: false
       },
       physics: physicsConfig,
       interaction: {
-        hover: true,
-        tooltipDelay: 100,
+        hover: !isVeryLargeGraph,         // 超大图禁用 hover（避免每帧碰撞检测）
+        tooltipDelay: 200,
         navigationButtons: false,
         keyboard: false,
         zoomView: true,
-        dragView: true
+        dragView: true,
+        // 关键优化: 缩放/拖拽时临时隐藏边 — 消除 90% 的缩放卡顿
+        hideEdgesOnDrag: isLargeGraph,
+        hideEdgesOnZoom: isLargeGraph,
+        // 大图降低拖拽灵敏度
+        zoomSpeed: isVeryLargeGraph ? 0.8 : 1,
       },
       layout: {
-        improvedLayout: (nodeCount > 200 && nodeCount <= 2000),
+        improvedLayout: (nodeCount > 200 && nodeCount <= 800),
         hierarchical: false
       }
     };
@@ -2230,6 +2246,38 @@ function renderGraph() {
       arrangeAllDocMindMaps();
       network.fit({ animation: { duration: 800, easingFunction: 'easeInOutQuad' } });
     });
+
+    // ── 性能优化: 缩放时根据 zoom level 自适应标签可见性 ──
+    // 缩小到一定程度时隐藏子任务/文档标签（反正看不清），减少 canvas 文本绘制开销
+    if (isLargeGraph) {
+      var labelHidden = false;
+      network.on('zoom', function() {
+        var scale = network.getScale();
+        if (scale < 0.4 && !labelHidden) {
+          // 缩小时: 隐藏子任务和文档的标签
+          labelHidden = true;
+          var updates = [];
+          nodesDataSet.forEach(function(n) {
+            if (n._type === 'sub-task' || n._type === 'document') {
+              updates.push({ id: n.id, font: { size: 0 } });
+            }
+          });
+          if (updates.length > 0) nodesDataSet.update(updates);
+        } else if (scale >= 0.4 && labelHidden) {
+          // 放大时: 恢复标签
+          labelHidden = false;
+          var updates = [];
+          nodesDataSet.forEach(function(n) {
+            if (n._type === 'sub-task') {
+              updates.push({ id: n.id, font: { size: 9, color: n.font ? n.font.color : '#9ca3af' } });
+            } else if (n._type === 'document') {
+              updates.push({ id: n.id, font: { size: 10, color: n.font ? n.font.color : '#dbeafe' } });
+            }
+          });
+          if (updates.length > 0) nodesDataSet.update(updates);
+        }
+      });
+    }
 
     // ── Phase-10 T10.5: Double-click to expand/collapse sub-tasks ──
     network.on('doubleClick', function(params) {

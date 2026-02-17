@@ -314,6 +314,16 @@ ViewportManager.prototype._bindEvents = function() {
     var delta = -e.deltaY;
     var factor = 1 + delta * self._zoomSpeed;
     factor = Math.max(0.5, Math.min(factor, 2)); // clamp per-event
+
+    // T11.8: Flag zooming state to skip edge rendering during rapid zoom
+    var engine = self._engine;
+    engine._isZooming = true;
+    if (engine._zoomTimer) clearTimeout(engine._zoomTimer);
+    engine._zoomTimer = setTimeout(function() {
+      engine._isZooming = false;
+      engine.markDirty(); // Redraw with edges after zoom stops
+    }, 150);
+
     self.zoom(factor, x, y);
   }, { passive: false });
 

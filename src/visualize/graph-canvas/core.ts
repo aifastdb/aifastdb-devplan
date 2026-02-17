@@ -71,6 +71,10 @@ function GraphCanvas(container, options) {
   this._idleFrames = 0;       // consecutive frames with nothing to draw
   this._idleThreshold = 30;   // sleep after N idle frames (~0.5s at 60fps)
 
+  // ── Interaction performance flags (T11.8) ──
+  this._isZooming = false;    // true during wheel zoom (edges hidden)
+  this._zoomTimer = null;     // debounce timer for zoom end
+
   // ── Event Callbacks ───────────────────────────────────────────────────
   this._eventHandlers = {};   // eventName → [callback, ...]
 
@@ -100,6 +104,8 @@ function GraphCanvas(container, options) {
     self._metrics.layoutProgress = 0;
     self._metrics.layoutAlgorithm = '';
     self._metrics.layoutEta = 0;
+    // T11.6: Arrange document mind maps after layout stabilizes
+    self._arrangeDocMindMaps();
     self.markDirty();
   });
 
@@ -822,6 +828,70 @@ GraphCanvas.prototype.destroy = function() {
   this._edgeMap = {};
   this._nodeEdges = {};
   this._eventHandlers = {};
+};
+
+// ── Document Mind-Map Arrangement (T11.6) ─────────────────────────────────
+
+/**
+ * Arrange parent-child document nodes in a horizontal mind-map layout.
+ * Called automatically after force-directed layout stabilizes.
+ */
+GraphCanvas.prototype._arrangeDocMindMaps = function() {
+  var nodes = this._nodes;
+  var edges = this._edges;
+  if (!nodes || nodes.length === 0) return;
+
+  // 1. Find all parent document nodes (have 'doc_has_child' outgoing edges)
+  var parentDocIds = {};  // parentId -> [childId, ...]
+  for (var i = 0; i < edges.length; i++) {
+    var e = edges[i];
+    if (e.label === 'doc_has_child' || e._label === 'doc_has_child') {
+      if (!parentDocIds[e.from]) parentDocIds[e.from] = [];
+      parentDocIds[e.from].push(e.to);
+    }
+  }
+
+  var parentKeys = Object.keys(parentDocIds);
+  if (parentKeys.length === 0) return;
+
+  var arranged = 0;
+  for (var pi = 0; pi < parentKeys.length; pi++) {
+    var parentId = parentKeys[pi];
+    var parentNode = this._nodeMap[parentId];
+    if (!parentNode) continue;
+
+    var childIds = parentDocIds[parentId];
+    // Filter to existing children
+    var validChildren = [];
+    for (var ci = 0; ci < childIds.length; ci++) {
+      if (this._nodeMap[childIds[ci]]) validChildren.push(childIds[ci]);
+    }
+    if (validChildren.length === 0) continue;
+
+    // 2. Compute layout: children to the right of parent, vertically centered
+    var parentR = parentNode._radius || 20;
+    var hGap = 40;  // horizontal gap from parent right edge
+    var vGap = 45;  // vertical gap between children
+    var leftEdgeX = parentNode.x + parentR + hGap;
+
+    var count = validChildren.length;
+    var totalHeight = (count - 1) * vGap;
+    var startY = parentNode.y - totalHeight / 2;
+
+    for (var j = 0; j < count; j++) {
+      var childNode = this._nodeMap[validChildren[j]];
+      if (!childNode) continue;
+      var childR = childNode._radius || 15;
+      var cx = leftEdgeX + childR;
+      var cy = startY + j * vGap;
+      this.moveNode(validChildren[j], cx, cy);
+    }
+    arranged++;
+  }
+
+  if (arranged > 0) {
+    this._emit('docMindMapsArranged', { count: arranged });
+  }
 };
 
 /**

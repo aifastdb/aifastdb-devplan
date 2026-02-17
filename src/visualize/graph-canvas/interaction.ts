@@ -248,6 +248,17 @@ InteractionManager.prototype._hitTest = function(sx, sy) {
 // ── Hover ─────────────────────────────────────────────────────────────────
 
 InteractionManager.prototype._handleHover = function(sx, sy) {
+  // T11.9: Skip hover detection for large graphs (>800 nodes) to save CPU
+  if (this._engine._nodeCount > 800) {
+    if (this._hoveredNode) {
+      this._hoveredNode._hovered = false;
+      this._engine.markDirtyNode(this._hoveredNode);
+      this._hoveredNode = null;
+      this._engine._canvas.style.cursor = 'default';
+    }
+    return;
+  }
+
   var hitNode = this._hitTest(sx, sy);
   var prevHovered = this._hoveredNode;
 

@@ -120,8 +120,11 @@ RenderPipeline.prototype._fullRender = function(ctx) {
     }
   }
 
-  // ── 6. Draw edges (only between visible nodes) ──
-  this._drawEdges(ctx, lodLevel);
+  // ── 6. Draw edges (skip during zoom/drag for performance — T11.8) ──
+  var skipEdges = engine._isZooming || (engine._interaction && engine._interaction._isDraggingCanvas);
+  if (!skipEdges) {
+    this._drawEdges(ctx, lodLevel);
+  }
 
   // ── 7. Draw nodes ──
   this._drawNodes(ctx, lodLevel);
@@ -312,21 +315,40 @@ RenderPipeline.prototype._drawEdges = function(ctx, lodLevel) {
 
     ctx.beginPath();
 
+    // Compute control point for quadratic Bezier curve (LOD >= 1)
+    var cpX = null, cpY = null;
     if (lodLevel === 0) {
       // LOD 0: straight lines only (maximum performance)
       ctx.moveTo(fromNode.x, fromNode.y);
       ctx.lineTo(toNode.x, toNode.y);
     } else {
-      // LOD 1-2: slight curve for visual separation of parallel edges
-      ctx.moveTo(fromNode.x, fromNode.y);
-      ctx.lineTo(toNode.x, toNode.y);
+      // LOD 1-2: smooth quadratic Bezier curve (T11.4)
+      var edgeDx = toNode.x - fromNode.x;
+      var edgeDy = toNode.y - fromNode.y;
+      var edgeLen = Math.sqrt(edgeDx * edgeDx + edgeDy * edgeDy);
+      if (edgeLen < 1) {
+        ctx.moveTo(fromNode.x, fromNode.y);
+        ctx.lineTo(toNode.x, toNode.y);
+      } else {
+        // Compute control point: perpendicular offset from midpoint
+        var roundness = style.roundness || 0.15;
+        var midX = (fromNode.x + toNode.x) / 2;
+        var midY = (fromNode.y + toNode.y) / 2;
+        var perpX = -edgeDy / edgeLen;
+        var perpY = edgeDx / edgeLen;
+        var offset = roundness * edgeLen * 0.15;
+        cpX = midX + perpX * offset;
+        cpY = midY + perpY * offset;
+        ctx.moveTo(fromNode.x, fromNode.y);
+        ctx.quadraticCurveTo(cpX, cpY, toNode.x, toNode.y);
+      }
     }
 
     ctx.stroke();
 
     // ── Arrow head (LOD >= 1) ──
     if (lodLevel >= 1 && style.arrows) {
-      this._drawArrowHead(ctx, fromNode, toNode, style);
+      this._drawArrowHead(ctx, fromNode, toNode, style, cpX, cpY);
     }
   }
 
@@ -334,20 +356,40 @@ RenderPipeline.prototype._drawEdges = function(ctx, lodLevel) {
   ctx.setLineDash([]);
 };
 
-RenderPipeline.prototype._drawArrowHead = function(ctx, fromNode, toNode, style) {
+RenderPipeline.prototype._drawArrowHead = function(ctx, fromNode, toNode, style, cpX, cpY) {
   var scale = this._engine._viewport.getScale();
   var arrowSize = Math.max(4, 8 / scale);
-  var dx = toNode.x - fromNode.x;
-  var dy = toNode.y - fromNode.y;
-  var len = Math.sqrt(dx * dx + dy * dy);
-  if (len < 1) return;
-
-  // Arrow at edge of target node
   var toR = toNode._radius || 10;
-  var ratio = (len - toR) / len;
-  var ax = fromNode.x + dx * ratio;
-  var ay = fromNode.y + dy * ratio;
-  var angle = Math.atan2(dy, dx);
+  var angle;
+
+  if (cpX != null && cpY != null) {
+    // T11.4: Arrow direction along Bezier curve tangent at endpoint
+    // For quadratic Bezier B(t) = (1-t)^2*P0 + 2(1-t)t*CP + t^2*P1
+    // Tangent at t=1: B'(1) = 2*(P1 - CP)
+    var tdx = toNode.x - cpX;
+    var tdy = toNode.y - cpY;
+    var tlen = Math.sqrt(tdx * tdx + tdy * tdy);
+    if (tlen < 0.1) {
+      tdx = toNode.x - fromNode.x;
+      tdy = toNode.y - fromNode.y;
+      tlen = Math.sqrt(tdx * tdx + tdy * tdy);
+    }
+    if (tlen < 0.1) return;
+    angle = Math.atan2(tdy, tdx);
+    // Arrow position: step back from toNode by toR along tangent direction
+    var ax = toNode.x - (tdx / tlen) * toR;
+    var ay = toNode.y - (tdy / tlen) * toR;
+  } else {
+    // Straight line: use direct vector
+    var dx = toNode.x - fromNode.x;
+    var dy = toNode.y - fromNode.y;
+    var len = Math.sqrt(dx * dx + dy * dy);
+    if (len < 1) return;
+    angle = Math.atan2(dy, dx);
+    var ratio = (len - toR) / len;
+    var ax = fromNode.x + dx * ratio;
+    var ay = fromNode.y + dy * ratio;
+  }
 
   ctx.fillStyle = ctx.strokeStyle;
   ctx.beginPath();
@@ -369,6 +411,7 @@ RenderPipeline.prototype._drawArrowHead = function(ctx, fromNode, toNode, style)
 RenderPipeline.prototype._drawNodes = function(ctx, lodLevel) {
   var nodes = this._visibleNodes;
   var styles = this._engine._styles;
+  var enableShadow = (lodLevel >= 2);
 
   for (var i = 0; i < nodes.length; i++) {
     var n = nodes[i];
@@ -376,14 +419,50 @@ RenderPipeline.prototype._drawNodes = function(ctx, lodLevel) {
     var r = n._radius || style.radius || 10;
     n._radius = r; // cache for hit-test
 
-    // ── Selection / hover glow ──
+    // ── Selection / hover glow (T11.3 enhanced) ──
     if (n._selected || n._hovered) {
-      ctx.globalAlpha = 0.3;
+      var glowR = r * (n._selected ? 1.15 : 1.08);
+      var glowPad = (n._selected ? 8 : 5) / this._engine._viewport.getScale();
+      // Outer glow
+      ctx.globalAlpha = n._selected ? 0.35 : 0.2;
       ctx.fillStyle = n._selected ? '#6366f1' : '#818cf8';
       ctx.beginPath();
-      ctx.arc(n.x, n.y, r + 6 / this._engine._viewport.getScale(), 0, Math.PI * 2);
+      ctx.arc(n.x, n.y, glowR + glowPad, 0, Math.PI * 2);
       ctx.fill();
+      // White border ring
+      ctx.globalAlpha = n._selected ? 0.9 : 0.6;
+      ctx.strokeStyle = '#ffffff';
+      ctx.lineWidth = (n._selected ? 2.5 : 1.5) / this._engine._viewport.getScale();
+      ctx.beginPath();
+      ctx.arc(n.x, n.y, glowR + 1 / this._engine._viewport.getScale(), 0, Math.PI * 2);
+      ctx.stroke();
       ctx.globalAlpha = 1;
+      // Apply slight scale to the rendered radius for selected nodes
+      if (n._selected) r = glowR;
+    }
+
+    // ── Shadow (LOD >= 2 only) ──
+    if (enableShadow) {
+      ctx.shadowColor = 'rgba(0,0,0,0.3)';
+      ctx.shadowBlur = 5;
+      ctx.shadowOffsetX = 0;
+      ctx.shadowOffsetY = 2;
+    }
+
+    // ── Compute box dimensions for 'box' shape (text-adaptive) ──
+    var shape = style.shape || 'circle';
+    if ((shape === 'box' || shape === 'square') && n.label && lodLevel >= 1) {
+      var boxFontSize = (style.fontSize || 12) / this._engine._viewport.getScale();
+      ctx.font = Math.max(boxFontSize, 2) + 'px -apple-system, sans-serif';
+      if (!n._textWidth || n._textWidthScale !== this._engine._viewport.getScale()) {
+        var maxChars = lodLevel >= 2 ? 30 : 15;
+        var displayLabel = n.label.length > maxChars ? n.label.substring(0, maxChars) + '\u2026' : n.label;
+        n._textWidth = ctx.measureText(displayLabel).width;
+        n._textWidthScale = this._engine._viewport.getScale();
+      }
+      var pad = 8 / this._engine._viewport.getScale();
+      n._boxW = Math.max(n._textWidth + pad * 2, r * 2);
+      n._boxH = boxFontSize + pad * 2;
     }
 
     // ── Node shape ──
@@ -391,14 +470,22 @@ RenderPipeline.prototype._drawNodes = function(ctx, lodLevel) {
     ctx.strokeStyle = style.borderColor || '#4b5563';
     ctx.lineWidth = (style.borderWidth || 1) / this._engine._viewport.getScale();
 
-    this._drawShape(ctx, n.x, n.y, r, style.shape || 'circle');
+    this._drawShape(ctx, n.x, n.y, r, shape, n);
 
     ctx.fill();
     if (lodLevel >= 1) ctx.stroke();
+
+    // ── Reset shadow ──
+    if (enableShadow) {
+      ctx.shadowColor = 'transparent';
+      ctx.shadowBlur = 0;
+      ctx.shadowOffsetX = 0;
+      ctx.shadowOffsetY = 0;
+    }
   }
 };
 
-RenderPipeline.prototype._drawShape = function(ctx, x, y, r, shape) {
+RenderPipeline.prototype._drawShape = function(ctx, x, y, r, shape, node) {
   ctx.beginPath();
 
   switch (shape) {
@@ -414,7 +501,33 @@ RenderPipeline.prototype._drawShape = function(ctx, x, y, r, shape) {
       break;
     case 'box':
     case 'square':
-      ctx.rect(x - r, y - r * 0.7, r * 2, r * 1.4);
+      // Text-adaptive rounded rectangle (T11.2)
+      if (node && node._boxW && node._boxH) {
+        var bw = node._boxW;
+        var bh = node._boxH;
+        var br = 4 / this._engine._viewport.getScale(); // border radius
+        if (ctx.roundRect) {
+          ctx.roundRect(x - bw / 2, y - bh / 2, bw, bh, br);
+        } else {
+          // Fallback for browsers without roundRect
+          var rx = x - bw / 2, ry = y - bh / 2;
+          ctx.moveTo(rx + br, ry);
+          ctx.lineTo(rx + bw - br, ry);
+          ctx.quadraticCurveTo(rx + bw, ry, rx + bw, ry + br);
+          ctx.lineTo(rx + bw, ry + bh - br);
+          ctx.quadraticCurveTo(rx + bw, ry + bh, rx + bw - br, ry + bh);
+          ctx.lineTo(rx + br, ry + bh);
+          ctx.quadraticCurveTo(rx, ry + bh, rx, ry + bh - br);
+          ctx.lineTo(rx, ry + br);
+          ctx.quadraticCurveTo(rx, ry, rx + br, ry);
+          ctx.closePath();
+        }
+        // Update node radius for hit-test (use half of the larger dimension)
+        node._radius = Math.max(bw, bh) / 2;
+      } else {
+        // Fallback: fixed-size box (LOD 0 or no label)
+        ctx.rect(x - r, y - r * 0.7, r * 2, r * 1.4);
+      }
       break;
     case 'triangle':
       ctx.moveTo(x, y - r);
@@ -469,30 +582,46 @@ RenderPipeline.prototype._drawLabels = function(ctx, lodLevel) {
     var style = n._style || styles.getNodeStyle(n);
     var fontSize = (style.fontSize || 12) / scale;
 
-    // LOD 1: only show labels for larger nodes
+    // LOD 1: only show labels for larger nodes + skip sub-task/document (T11.10)
     if (lodLevel === 1) {
       var screenSize = (n._radius || 10) * scale;
       if (screenSize < 6) continue; // too small on screen
+      var nodeType = n.type || '';
+      if (nodeType === 'sub-task' || nodeType === 'document') continue;
     }
 
     // Truncate long labels
     var label = n.label;
     var maxChars = lodLevel >= 2 ? 30 : 15;
-    if (label.length > maxChars) label = label.substring(0, maxChars) + '…';
+    if (label.length > maxChars) label = label.substring(0, maxChars) + '\u2026';
 
     ctx.font = Math.max(fontSize, 2) + 'px -apple-system, sans-serif';
-    ctx.fillStyle = style.fontColor || '#e5e7eb';
     ctx.textAlign = 'center';
     ctx.textBaseline = 'middle';
 
     var shape = style.shape || 'circle';
     if (shape === 'box' || shape === 'square') {
-      // Label inside box
+      // Label inside box (text-adaptive box already drawn in _drawNodes)
+      ctx.fillStyle = style.fontColor || '#e5e7eb';
       ctx.fillText(label, n.x, n.y);
     } else {
-      // Label below node
+      // Label below node with semi-transparent background (T11.5)
       var r = n._radius || 10;
-      ctx.fillText(label, n.x, n.y + r + fontSize * 0.8);
+      var labelY = n.y + r + fontSize * 0.8;
+      var tw = ctx.measureText(label).width;
+      var bgPadH = 3 / scale;
+      var bgPadV = 2 / scale;
+      // Draw background rectangle
+      ctx.fillStyle = 'rgba(17, 24, 39, 0.75)';
+      ctx.fillRect(
+        n.x - tw / 2 - bgPadH,
+        labelY - fontSize / 2 - bgPadV,
+        tw + bgPadH * 2,
+        fontSize + bgPadV * 2
+      );
+      // Draw label text
+      ctx.fillStyle = style.fontColor || '#e5e7eb';
+      ctx.fillText(label, n.x, labelY);
     }
   }
 };
