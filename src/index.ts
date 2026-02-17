@@ -68,6 +68,9 @@ export {
   type DevPlanGraphNode,
   type DevPlanGraphEdge,
   type DevPlanExportedGraph,
+  type DevPlanPaginatedGraph,
+  type EntityGroupSummary,
+  type EntityGroupAggregation,
   // Autopilot types
   type AutopilotConfig,
   type AutopilotAction,

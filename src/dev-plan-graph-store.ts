@@ -49,8 +49,10 @@ import type {
   RevertedTask,
   DevPlanGraphStoreConfig,
   DevPlanExportedGraph,
+  DevPlanPaginatedGraph,
   DevPlanGraphNode,
   DevPlanGraphEdge,
+  EntityGroupAggregation,
   SearchMode,
   ScoredDevPlanDoc,
   RebuildIndexResult,
@@ -1745,6 +1747,212 @@ export class DevPlanGraphStore implements IDevPlanStore {
     }
 
     return { nodes, edges };
+  }
+
+  /**
+   * 分页导出图谱数据 (Phase-9 T9.1)
+   *
+   * 利用 Rust 层 SocialGraphV2 的 exportGraphPaginated() 分页 API，
+   * 避免全量加载 + 内存切片。真正的分页下推到数据库层。
+   *
+   * @param offset 分页偏移量
+   * @param limit 每页节点数
+   * @param options 可选参数
+   * @returns 分页图谱数据
+   */
+  exportGraphPaginated(
+    offset: number,
+    limit: number,
+    options?: {
+      includeDocuments?: boolean;
+      includeModules?: boolean;
+      includeNodeDegree?: boolean;
+      entityTypes?: string[];
+    }
+  ): DevPlanPaginatedGraph {
+    const includeDocuments = options?.includeDocuments !== false;
+    const includeModules = options?.includeModules !== false;
+    const includeNodeDegree = options?.includeNodeDegree !== false;
+
+    // Build entity type filter for Rust layer
+    const entityTypes: string[] = [];
+    entityTypes.push(ET.PROJECT, ET.MAIN_TASK, ET.SUB_TASK);
+    if (includeDocuments) entityTypes.push(ET.DOC);
+    if (includeModules) entityTypes.push(ET.MODULE);
+    if (options?.entityTypes?.length) {
+      // Use user-specified filter if provided
+      entityTypes.length = 0;
+      entityTypes.push(...options.entityTypes);
+    }
+
+    try {
+      // Call Rust SocialGraphV2.exportGraphPaginated via NAPI
+      const result = (this.graph as any).exportGraphPaginated({
+        offset,
+        limit,
+        entityTypes,
+        includeNodeDegree,
+        includeEdgeMeta: false,
+      });
+
+      if (result && typeof result === 'object') {
+        const rustNodes: any[] = result.nodes || [];
+        const rustEdges: any[] = result.edges || [];
+
+        // Transform Rust GraphNode -> DevPlanGraphNode
+        // Rust GraphNode only carries `group: NodeGroup` (numeric 0/1/2) — all DevPlan
+        // entities map to Tag(2), losing type information. We must resolve entity_type
+        // via getEntity() for correct visualization (module=diamond, doc=box, etc.).
+        const currentProjectId = this.getProjectId();
+        const nodes: DevPlanGraphNode[] = [];
+        for (const n of rustNodes) {
+          const data = n.data || {};
+          // Try multiple sources for entity_type string
+          let etStr: string | undefined = n.entity_type || n.entityType
+            || data.entity_type || data.entityType;
+          // If still not found, look up the actual entity (fast hash lookup)
+          if (!etStr || typeof etStr !== 'string') {
+            try {
+              const entity = (this.graph as any).getEntity(n.id);
+              if (entity) {
+                etStr = entity.entity_type || entity.entityType;
+              }
+            } catch { /* ignore — fall through to group */ }
+          }
+          const devPlanType = this.mapGroupToDevPlanType(etStr || n.group);
+
+          // Filter out project nodes that don't belong to the current project.
+          // The Rust layer returns ALL entities matching the type filter, which may
+          // include stale project nodes from other projects (e.g. "devplan-db").
+          if (devPlanType === 'project' && n.id !== currentProjectId) {
+            continue;
+          }
+
+          nodes.push({
+            id: n.id,
+            label: n.label || n.id,
+            type: devPlanType,
+            degree: includeNodeDegree ? (n.degree ?? 0) : undefined,
+            properties: data,
+          });
+        }
+
+        // Transform Rust GraphEdge -> DevPlanGraphEdge
+        const edges: DevPlanGraphEdge[] = rustEdges.map((e: any) => ({
+          from: e.from,
+          to: e.to,
+          label: e.label || e.relation_type || '',
+        }));
+
+        return {
+          nodes,
+          edges,
+          totalNodes: result.total_nodes ?? result.totalNodes ?? nodes.length,
+          totalEdges: result.total_edges ?? result.totalEdges ?? edges.length,
+          offset: result.offset ?? offset,
+          limit: result.limit ?? limit,
+          hasMore: result.has_more ?? result.hasMore ?? false,
+        };
+      }
+    } catch {
+      // If NAPI method not available, fall back to in-memory pagination
+    }
+
+    // Fallback: full load + in-memory pagination
+    const fullGraph = this.exportGraph({
+      includeDocuments,
+      includeModules,
+      includeNodeDegree,
+      enableBackendDegreeFallback: true,
+    });
+
+    const allNodes = fullGraph.nodes;
+    const pageNodes = allNodes.slice(offset, offset + limit);
+    const pageNodeIds = new Set(pageNodes.map((n) => n.id));
+    const pageEdges = fullGraph.edges.filter(
+      (e) => pageNodeIds.has(e.from) && pageNodeIds.has(e.to)
+    );
+
+    return {
+      nodes: pageNodes,
+      edges: pageEdges,
+      totalNodes: allNodes.length,
+      totalEdges: fullGraph.edges.length,
+      offset,
+      limit,
+      hasMore: offset + limit < allNodes.length,
+    };
+  }
+
+  /**
+   * 导出紧凑二进制格式 (Phase-9 T9.3)
+   *
+   * 利用 Rust 层 CompactGraphExport 格式，返回 Buffer。
+   * 比 JSON 小 5x+，解析速度接近零。
+   *
+   * @returns Node.js Buffer 或 null (如果 NAPI 方法不可用)
+   */
+  exportGraphCompact(): Buffer | null {
+    try {
+      const buf = (this.graph as any).exportGraphCompact({
+        maxNodes: 1000000,
+        includeTags: true,
+        includeCompanies: true,
+        includeNodeDegree: true,
+        includeEdgeMeta: false,
+      });
+      if (buf && buf.length > 16) {
+        return buf;
+      }
+    } catch {
+      // NAPI method not available
+    }
+    return null;
+  }
+
+  /**
+   * 获取实体组聚合摘要 (Phase-9 T9.4)
+   *
+   * 利用 Rust 层 group_entities_summary() 返回按类型分组的统计信息。
+   * 远比加载全部实体开销小，适合低缩放级别的集群视图。
+   *
+   * @returns 聚合结果或 null (如果 NAPI 方法不可用)
+   */
+  getEntityGroupSummary(): EntityGroupAggregation | null {
+    try {
+      const result = (this.graph as any).getEntityGroupSummary();
+      if (result && typeof result === 'object') {
+        return {
+          groups: (result.groups || []).map((g: any) => ({
+            entityType: g.entity_type ?? g.entityType ?? '',
+            count: g.count ?? 0,
+            sampleIds: g.sample_ids ?? g.sampleIds ?? [],
+          })),
+          totalEntities: result.total_entities ?? result.totalEntities ?? 0,
+          totalRelations: result.total_relations ?? result.totalRelations ?? 0,
+        };
+      }
+    } catch {
+      // NAPI method not available
+    }
+    return null;
+  }
+
+  /**
+   * Map Rust NodeGroup name to DevPlan node type
+   */
+  private mapGroupToDevPlanType(group: string | number): DevPlanGraphNode['type'] {
+    // Rust NodeGroup: 0=Person, 1=Company, 2=Tag
+    // But in DevPlan context, entity_type matters more
+    // We rely on the entity's entity_type property
+    if (typeof group === 'string') {
+      if (group.includes('project')) return 'project';
+      if (group.includes('main-task') || group.includes('main_task')) return 'main-task';
+      if (group.includes('sub-task') || group.includes('sub_task')) return 'sub-task';
+      if (group.includes('doc')) return 'document';
+      if (group.includes('module')) return 'module';
+    }
+    return 'sub-task'; // default fallback
   }
 
   // ==========================================================================

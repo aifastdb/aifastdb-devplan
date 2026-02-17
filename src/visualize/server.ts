@@ -21,6 +21,7 @@ import { DevPlanGraphStore } from '../dev-plan-graph-store';
 import { createDevPlan, getDefaultBasePath, resolveBasePathForProject } from '../dev-plan-factory';
 import type { IDevPlanStore } from '../dev-plan-interface';
 import { getVisualizationHTML } from './template';
+import { getGraphCanvasScript } from './graph-canvas/index';
 import {
   getAutopilotStatus,
   getAutopilotNextAction,
@@ -258,6 +259,7 @@ function readRequestBody(req: http.IncomingMessage): Promise<any> {
 
 function startServer(projectName: string, basePath: string, port: number): void {
   const htmlContent = getVisualizationHTML(projectName);
+  const graphCanvasJs = getGraphCanvasScript();
 
   const server = http.createServer(async (req, res) => {
     const url = new URL(req.url || '/', `http://localhost:${port}`);
@@ -311,8 +313,15 @@ function startServer(projectName: string, basePath: string, port: number): void 
           // 每次请求重新创建 store，确保读取最新数据
           const store = createFreshStore(projectName, basePath);
           const progress = store.getProgress();
+          // 附加模块和文档计数（分层加载模式下 graph.nodes 不含全部类型，需从此处获取真实数量）
+          const sections = store.listSections();
+          const modules = store.listModules();
           res.writeHead(200, { 'Content-Type': 'application/json; charset=utf-8' });
-          res.end(JSON.stringify(progress));
+          res.end(JSON.stringify({
+            ...progress,
+            moduleCount: modules.length,
+            docCount: sections.length,
+          }));
           break;
         }
 
@@ -917,6 +926,166 @@ function startServer(projectName: string, basePath: string, port: number): void 
             received: heartbeat,
             isAlive: hbInfo.isAlive,
           }));
+          break;
+        }
+
+        case '/api/graph/paged': {
+          // ── Phase-9 T9.2: True pagination push-down to Rust layer ──
+          // GET /api/graph/paged?offset=0&limit=5000
+          // Returns a page of { nodes, edges, totalNodes, totalEdges, hasMore }
+          // Now calls Rust SocialGraphV2.exportGraphPaginated() via NAPI
+          // instead of full-loading + in-memory slicing.
+          const pagedStore = createFreshStore(projectName, basePath);
+          const offset = parseInt(url.searchParams.get('offset') || '0', 10);
+          const limit = parseInt(url.searchParams.get('limit') || '5000', 10);
+          const includeDocuments = url.searchParams.get('includeDocuments') !== 'false';
+          const includeModules = url.searchParams.get('includeModules') !== 'false';
+          // Phase-10 T10.1: Support entityTypes query param for tiered loading
+          const entityTypesParam = url.searchParams.get('entityTypes');
+          const entityTypes = entityTypesParam ? entityTypesParam.split(',').map(t => t.trim()).filter(Boolean) : undefined;
+
+          // Use the new pagination push-down method if available
+          if ((pagedStore as any).exportGraphPaginated) {
+            try {
+              const result = (pagedStore as any).exportGraphPaginated(offset, limit, {
+                includeDocuments,
+                includeModules,
+                includeNodeDegree: true,
+                entityTypes,
+              });
+
+              res.writeHead(200, { 'Content-Type': 'application/json; charset=utf-8' });
+              res.end(JSON.stringify({
+                nodes: result.nodes,
+                edges: result.edges,
+                total: result.totalNodes,
+                totalEdges: result.totalEdges,
+                offset: result.offset,
+                limit: result.limit,
+                hasMore: result.hasMore,
+                nextOffset: Math.min(offset + limit, result.totalNodes),
+              }));
+            } catch (err: any) {
+              res.writeHead(500, { 'Content-Type': 'application/json; charset=utf-8' });
+              res.end(JSON.stringify({ error: `分页导出失败: ${err?.message || err}` }));
+            }
+          } else if (pagedStore.exportGraph) {
+            // Fallback: full load + in-memory slicing (pre-Phase-9 behavior)
+            const fullGraph = pagedStore.exportGraph({
+              includeDocuments,
+              includeModules,
+              includeNodeDegree: true,
+              enableBackendDegreeFallback: true,
+            });
+            if (!fullGraph) {
+              res.writeHead(500, { 'Content-Type': 'application/json; charset=utf-8' });
+              res.end(JSON.stringify({ error: '图数据导出失败' }));
+              break;
+            }
+
+            const allNodes: any[] = fullGraph.nodes || [];
+            const allEdges: any[] = fullGraph.edges || [];
+            const pageNodes = allNodes.slice(offset, offset + limit);
+            const pageNodeIds = new Set(pageNodes.map((n: any) => n.id));
+            const pageEdges = allEdges.filter(
+              (e: any) => pageNodeIds.has(e.from) && pageNodeIds.has(e.to)
+            );
+
+            res.writeHead(200, { 'Content-Type': 'application/json; charset=utf-8' });
+            res.end(JSON.stringify({
+              nodes: pageNodes,
+              edges: pageEdges,
+              total: allNodes.length,
+              totalEdges: allEdges.length,
+              offset,
+              limit,
+              hasMore: offset + limit < allNodes.length,
+              nextOffset: Math.min(offset + limit, allNodes.length),
+            }));
+          } else {
+            res.writeHead(400, { 'Content-Type': 'application/json; charset=utf-8' });
+            res.end(JSON.stringify({ error: '当前引擎不支持图导出' }));
+          }
+          break;
+        }
+
+        case '/api/graph/binary': {
+          // ── Phase-9 T9.3: Binary compact export endpoint ──
+          // GET /api/graph/binary
+          // Returns ArrayBuffer with compact binary format (5x smaller than JSON)
+          // Client can parse directly as TypedArray, no JSON.parse needed.
+          const binaryStore = createFreshStore(projectName, basePath);
+          if ((binaryStore as any).exportGraphCompact) {
+            try {
+              const buf = (binaryStore as any).exportGraphCompact();
+              if (buf && buf.length > 0) {
+                res.writeHead(200, {
+                  'Content-Type': 'application/octet-stream',
+                  'Content-Length': String(buf.length),
+                  'X-Node-Count': String(new DataView(buf.buffer, buf.byteOffset, buf.byteLength).getUint32(8, true)),
+                  'X-Edge-Count': String(new DataView(buf.buffer, buf.byteOffset, buf.byteLength).getUint32(12, true)),
+                });
+                res.end(buf);
+              } else {
+                // Fallback: return empty binary
+                const emptyBuf = Buffer.alloc(16);
+                emptyBuf.writeUInt32LE(0x41494647, 0); // magic
+                emptyBuf.writeUInt32LE(1, 4);           // version
+                emptyBuf.writeUInt32LE(0, 8);           // node_count
+                emptyBuf.writeUInt32LE(0, 12);          // edge_count
+                res.writeHead(200, {
+                  'Content-Type': 'application/octet-stream',
+                  'Content-Length': '16',
+                  'X-Node-Count': '0',
+                  'X-Edge-Count': '0',
+                });
+                res.end(emptyBuf);
+              }
+            } catch (err: any) {
+              res.writeHead(500, { 'Content-Type': 'application/json; charset=utf-8' });
+              res.end(JSON.stringify({ error: `二进制导出失败: ${err?.message || err}` }));
+            }
+          } else {
+            res.writeHead(400, { 'Content-Type': 'application/json; charset=utf-8' });
+            res.end(JSON.stringify({ error: '当前引擎不支持二进制导出' }));
+          }
+          break;
+        }
+
+        case '/api/graph/clusters': {
+          // ── Phase-9 T9.4: Server-side aggregation endpoint ──
+          // GET /api/graph/clusters
+          // Returns pre-aggregated entity group summaries.
+          // Ideal for low-zoom cluster views — no need to transfer all nodes.
+          const clusterStore = createFreshStore(projectName, basePath);
+          if ((clusterStore as any).getEntityGroupSummary) {
+            try {
+              const agg = (clusterStore as any).getEntityGroupSummary();
+              if (agg) {
+                res.writeHead(200, { 'Content-Type': 'application/json; charset=utf-8' });
+                res.end(JSON.stringify(agg));
+              } else {
+                res.writeHead(200, { 'Content-Type': 'application/json; charset=utf-8' });
+                res.end(JSON.stringify({ groups: [], totalEntities: 0, totalRelations: 0 }));
+              }
+            } catch (err: any) {
+              res.writeHead(500, { 'Content-Type': 'application/json; charset=utf-8' });
+              res.end(JSON.stringify({ error: `聚合查询失败: ${err?.message || err}` }));
+            }
+          } else {
+            res.writeHead(400, { 'Content-Type': 'application/json; charset=utf-8' });
+            res.end(JSON.stringify({ error: '当前引擎不支持聚合查询' }));
+          }
+          break;
+        }
+
+        case '/graph-canvas.js': {
+          // Serve the GraphCanvas engine as a JavaScript file
+          res.writeHead(200, {
+            'Content-Type': 'application/javascript; charset=utf-8',
+            'Cache-Control': 'public, max-age=3600',
+          });
+          res.end(graphCanvasJs);
           break;
         }
 

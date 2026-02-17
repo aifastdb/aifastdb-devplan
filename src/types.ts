@@ -504,6 +504,50 @@ export interface DevPlanExportedGraph {
   edges: DevPlanGraphEdge[];
 }
 
+/**
+ * DevPlan 分页图谱导出结果 (Phase-9)
+ */
+export interface DevPlanPaginatedGraph {
+  /** 当前页的节点 */
+  nodes: DevPlanGraphNode[];
+  /** 当前页节点的相关边 */
+  edges: DevPlanGraphEdge[];
+  /** 节点总数 */
+  totalNodes: number;
+  /** 边总数 */
+  totalEdges: number;
+  /** 偏移量 */
+  offset: number;
+  /** 每页大小 */
+  limit: number;
+  /** 是否还有更多数据 */
+  hasMore: boolean;
+}
+
+/**
+ * 实体组聚合摘要 (Phase-9)
+ */
+export interface EntityGroupSummary {
+  /** 实体类型名称 */
+  entityType: string;
+  /** 该类型的实体数量 */
+  count: number;
+  /** 样本 ID (最多 5 个) */
+  sampleIds: string[];
+}
+
+/**
+ * 完整聚合结果 (Phase-9)
+ */
+export interface EntityGroupAggregation {
+  /** 按类型分组的摘要列表 */
+  groups: EntityGroupSummary[];
+  /** 所有类型的总实体数 */
+  totalEntities: number;
+  /** 总关系数 */
+  totalRelations: number;
+}
+
 // ============================================================================
 // Constants
 // ============================================================================

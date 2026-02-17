@@ -75,6 +75,16 @@ export function getVisualizationHTML(projectName: string): string {
     .filter-check { display: flex; align-items: center; gap: 4px; cursor: pointer; font-size: 12px; color: #9ca3af; user-select: none; }
     .filter-check input { accent-color: #6366f1; width: 13px; height: 13px; cursor: pointer; }
     .filter-check:hover { color: #d1d5db; }
+    /* Interactive legend toggle items (merged filter + legend) */
+    .legend-item.toggle { cursor: pointer; padding: 2px 8px; border-radius: 4px; transition: opacity 0.2s, background 0.2s; user-select: none; position: relative; }
+    .legend-item.toggle:hover { background: rgba(99,102,241,0.15); color: #e5e7eb; }
+    .legend-item.toggle:not(.active) { opacity: 0.3; }
+    .legend-item.toggle:not(.active):hover { opacity: 0.5; }
+    .legend-item.toggle.loading::after { content: ' ⏳'; font-size: 10px; }
+    .legend-item.toggle.not-loaded { opacity: 0.45; border: 1px dashed rgba(99,102,241,0.35); }
+    .legend-item.toggle.not-loaded::after { content: ' ↓'; font-size: 9px; color: #60a5fa; }
+    /* Checkbox inside toggle legend items */
+    .legend-item.toggle .filter-cb { width: 14px; height: 14px; accent-color: #6366f1; cursor: pointer; margin: 0; pointer-events: none; }
 
     /* Graph — flex 自适应高度 */
     .graph-container { position: relative; flex: 1; background: #111827; min-height: 0; }
@@ -499,26 +509,28 @@ export function getVisualizationHTML(projectName: string): string {
         <button class="legend-refresh-btn" id="legendRefreshBtn" onclick="manualRefresh()" title="刷新数据 (F5)">
           <svg class="legend-refresh-icon" id="legendRefreshIcon" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><path d="M21 2v6h-6"/><path d="M3 12a9 9 0 0 1 15-6.7L21 8"/><path d="M3 22v-6h6"/><path d="M21 12a9 9 0 0 1-15 6.7L3 16"/></svg>
         </button>
+        <!-- Phase-10: Load All button (shown in tiered loading mode) -->
+        <button class="legend-refresh-btn" id="loadAllBtn" onclick="loadAllNodes()" title="加载全部节点" style="display:none;font-size:11px;padding:2px 8px;">
+          全部
+        </button>
+        <!-- Phase-10 T10.2: Overview mode toggle -->
+        <button class="legend-refresh-btn" id="overviewBtn" onclick="toggleOverviewMode()" title="概览模式 — 每种类型一个超级节点" style="font-size:11px;padding:2px 8px;">
+          概览
+        </button>
+        <!-- Phase-10: Tiered loading indicator -->
+        <span id="tieredIndicator" style="display:none;font-size:10px;color:#60a5fa;margin-left:4px;"></span>
         <div class="legend-divider"></div>
-        <!-- 筛选复选框 -->
-        <label class="filter-check"><input type="checkbox" checked data-type="module" onchange="toggleFilter('module')"> 模块</label>
-        <label class="filter-check"><input type="checkbox" checked data-type="main-task" onchange="toggleFilter('main-task')"> 主任务</label>
-        <label class="filter-check"><input type="checkbox" checked data-type="sub-task" onchange="toggleFilter('sub-task')"> 子任务</label>
-        <label class="filter-check"><input type="checkbox" checked data-type="document" onchange="toggleFilter('document')"> 文档</label>
+        <!-- 节点类型筛选（复选框 + 图例） -->
+        <div class="legend-item toggle active" data-type="module" onclick="toggleFilter('module')" title="点击切换模块显隐"><input type="checkbox" class="filter-cb" id="cb-module" checked><div class="legend-icon diamond"></div> 模块</div>
+        <div class="legend-item toggle active" data-type="main-task" onclick="toggleFilter('main-task')" title="点击切换主任务显隐"><input type="checkbox" class="filter-cb" id="cb-main-task" checked><div class="legend-icon circle"></div> 主任务</div>
+        <div class="legend-item toggle active" data-type="sub-task" onclick="toggleFilter('sub-task')" title="点击切换子任务显隐"><input type="checkbox" class="filter-cb" id="cb-sub-task" checked><div class="legend-icon dot"></div> 子任务</div>
+        <div class="legend-item toggle active" data-type="document" onclick="toggleFilter('document')" title="点击切换文档显隐"><input type="checkbox" class="filter-cb" id="cb-document" checked><div class="legend-icon square"></div> 文档</div>
         <div class="legend-divider"></div>
-        <!-- 图例 -->
-        <div class="legend-item"><div class="legend-icon star"></div> 项目</div>
-        <div class="legend-item"><div class="legend-icon diamond"></div> 模块</div>
-        <div class="legend-item"><div class="legend-icon circle"></div> 主任务</div>
-        <div class="legend-item"><div class="legend-icon dot"></div> 子任务</div>
-        <div class="legend-item"><div class="legend-icon square"></div> 文档</div>
-        <div class="legend-divider"></div>
+        <!-- 边类型图例 -->
         <div class="legend-item"><div class="legend-line solid"></div> 主任务</div>
         <div class="legend-item"><div class="legend-line thin"></div> 子任务</div>
         <div class="legend-item"><div class="legend-line dashed"></div> 文档</div>
         <div class="legend-item"><div class="legend-line dotted"></div> 模块关联</div>
-        <div class="legend-item"><div class="legend-line task-doc"></div> 任务-文档</div>
-        <div class="legend-item"><div class="legend-line doc-child"></div> 文档层级</div>
       </div>
     </div>
 
@@ -690,7 +702,104 @@ function log(msg, ok) {
   dbg.innerHTML = (ok ? '<span class="ok">✓</span> ' : '<span class="err">✗</span> ') + msg;
 }
 
-// ========== 动态加载 vis-network ==========
+// ========== 渲染引擎选择: vis-network (默认) vs GraphCanvas (高性能/实验) ==========
+// URL 参数 ?renderer=gc 可切换到 GraphCanvas 高性能引擎; 默认使用 vis-network
+var RENDERER_ENGINE = 'vis'; // 'vis' (默认) | 'graphcanvas' (实验性高性能)
+(function() {
+  var params = new URLSearchParams(window.location.search);
+  var r = params.get('renderer');
+  if (r === 'graphcanvas' || r === 'gc') RENDERER_ENGINE = 'graphcanvas';
+  else if (r === 'vis') RENDERER_ENGINE = 'vis';
+})();
+var USE_GRAPH_CANVAS = false; // set after engine loads
+
+// ========== SimpleDataSet — vis.DataSet shim for GraphCanvas mode ==========
+function SimpleDataSet(items) {
+  this._data = {};
+  this._ids = [];
+  if (items) {
+    for (var i = 0; i < items.length; i++) {
+      var item = items[i];
+      this._data[item.id] = item;
+      this._ids.push(item.id);
+    }
+  }
+}
+SimpleDataSet.prototype.get = function(id) {
+  if (id === undefined || id === null) {
+    // Return all items as array
+    var result = [];
+    for (var i = 0; i < this._ids.length; i++) result.push(this._data[this._ids[i]]);
+    return result;
+  }
+  return this._data[id] || null;
+};
+SimpleDataSet.prototype.getIds = function() {
+  return this._ids.slice();
+};
+SimpleDataSet.prototype.forEach = function(callback) {
+  for (var i = 0; i < this._ids.length; i++) {
+    callback(this._data[this._ids[i]], this._ids[i]);
+  }
+};
+SimpleDataSet.prototype.update = function(itemOrArray) {
+  var items = Array.isArray(itemOrArray) ? itemOrArray : [itemOrArray];
+  for (var i = 0; i < items.length; i++) {
+    var item = items[i];
+    if (this._data[item.id]) {
+      for (var key in item) {
+        if (item.hasOwnProperty(key)) this._data[item.id][key] = item[key];
+      }
+    }
+  }
+};
+SimpleDataSet.prototype.add = function(itemOrArray) {
+  var items = Array.isArray(itemOrArray) ? itemOrArray : [itemOrArray];
+  for (var i = 0; i < items.length; i++) {
+    var item = items[i];
+    this._data[item.id] = item;
+    if (this._ids.indexOf(item.id) === -1) this._ids.push(item.id);
+  }
+};
+SimpleDataSet.prototype.remove = function(idOrArray) {
+  var ids = Array.isArray(idOrArray) ? idOrArray : [idOrArray];
+  for (var i = 0; i < ids.length; i++) {
+    var id = typeof ids[i] === 'object' ? ids[i].id : ids[i];
+    delete this._data[id];
+    var idx = this._ids.indexOf(id);
+    if (idx >= 0) this._ids.splice(idx, 1);
+  }
+};
+// ========== 动态加载渲染引擎 ==========
+function loadRenderEngine() {
+  if (RENDERER_ENGINE === 'graphcanvas') {
+    // 仅当明确请求时才使用 GraphCanvas 引擎 (?renderer=gc)
+    log('正在加载 GraphCanvas 高性能渲染引擎 (?renderer=gc)...', true);
+    var s = document.createElement('script');
+    s.src = '/graph-canvas.js';
+    s.onload = function() {
+      if (typeof GraphCanvas !== 'undefined' && typeof DevPlanGraph !== 'undefined') {
+        log('GraphCanvas 引擎加载成功 ✓', true);
+        USE_GRAPH_CANVAS = true;
+        startApp();
+      } else {
+        log('GraphCanvas 加载但对象不完整, 回退到 vis-network', false);
+        loadVisNetwork(0);
+      }
+    };
+    s.onerror = function() {
+      log('GraphCanvas 加载失败, 回退到 vis-network', false);
+      loadVisNetwork(0);
+    };
+    document.head.appendChild(s);
+    return;
+  }
+
+  // 默认: 使用 vis-network 渲染器（成熟稳定、形状丰富）
+  log('使用 vis-network 渲染器 (默认)', true);
+  loadVisNetwork(0);
+}
+
 var VIS_URLS = [
   'https://unpkg.com/vis-network@9.1.9/standalone/umd/vis-network.min.js',
   'https://cdn.jsdelivr.net/npm/vis-network@9.1.9/standalone/umd/vis-network.min.js',
@@ -700,16 +809,17 @@ var VIS_URLS = [
 function loadVisNetwork(index) {
   if (index >= VIS_URLS.length) {
     log('所有 CDN 均加载失败，请检查网络连接', false);
-    document.getElementById('loading').innerHTML = '<div style="text-align:center"><div style="font-size:48px;margin-bottom:16px;">⚠️</div><p style="color:#f87171;">vis-network 库加载失败</p><p style="color:#9ca3af;margin-top:8px;font-size:13px;">所有 CDN 源均不可用，请检查网络连接</p><button class="refresh-btn" onclick="location.reload()" style="margin-top:12px;">刷新页面</button></div>';
+    document.getElementById('loading').innerHTML = '<div style="text-align:center"><div style="font-size:48px;margin-bottom:16px;">⚠️</div><p style="color:#f87171;">渲染引擎加载失败</p><p style="color:#9ca3af;margin-top:8px;font-size:13px;">GraphCanvas 和 vis-network CDN 均不可用</p><button class="refresh-btn" onclick="location.reload()" style="margin-top:12px;">刷新页面</button></div>';
     return;
   }
   var url = VIS_URLS[index];
-  log('尝试加载 CDN #' + (index+1) + ': ' + url.split('/')[2], true);
+  log('尝试加载 vis-network CDN #' + (index+1) + ': ' + url.split('/')[2], true);
   var s = document.createElement('script');
   s.src = url;
   s.onload = function() {
     if (typeof vis !== 'undefined' && vis.Network && vis.DataSet) {
       log('vis-network 加载成功 (CDN #' + (index+1) + ')', true);
+      USE_GRAPH_CANVAS = false;
       startApp();
     } else {
       log('CDN #' + (index+1) + ' 加载但 vis 对象不完整, 尝试下一个', false);
@@ -733,6 +843,21 @@ var hiddenTypes = {};
 var ctrlPressed = false;
 var INCLUDE_NODE_DEGREE = true;
 var ENABLE_BACKEND_DEGREE_FALLBACK = true;
+
+// ── Phase-10: Tiered loading state ──
+// L0: project, module  |  L1: main-task  |  L2: sub-task  |  L3: document
+var TIER_L0L1_TYPES = ['devplan-project', 'devplan-module', 'devplan-main-task'];
+var TIER_L2_TYPES = ['devplan-sub-task'];
+var TIER_L3_TYPES = ['devplan-document'];
+var tieredLoadState = {
+  l0l1Loaded: false,     // L0+L1 core nodes loaded
+  l2Loaded: false,       // L2 sub-tasks loaded
+  l3Loaded: false,       // L3 documents loaded
+  expandedPhases: {},    // phase-X -> true: which main-tasks have been expanded
+  totalNodes: 0,         // total node count from server
+};
+// Phase-10 T10.3: Track if network instance should be reused
+var networkReusable = false;
 
 // ========== 边高亮：选中节点时关联边变色，取消选中时恢复灰色 ==========
 function highlightConnectedEdges(nodeId) {
@@ -1242,9 +1367,22 @@ function edgeStyle(edge) {
 }
 
 // ========== Data Loading ==========
+// ── Phase-8C: Chunked loading configuration ──
+var CHUNK_SIZE = 5000;       // nodes per page
+var CHUNK_THRESHOLD = 3000;  // use chunked loading if total > this
+
 function loadData() {
   document.getElementById('loading').style.display = 'flex';
   log('正在获取图谱数据...', true);
+
+  // 默认全量加载所有节点（模块 + 文档 + 子任务 + 主任务 + 项目）
+  // 确保打开页面时就能看到完整的图谱数据
+  if (!USE_GRAPH_CANVAS) {
+    loadDataFull();
+    return;
+  }
+
+  // GraphCanvas path: full load
   var graphApiUrl = '/api/graph?includeNodeDegree=' + (INCLUDE_NODE_DEGREE ? 'true' : 'false') +
     '&enableBackendDegreeFallback=' + (ENABLE_BACKEND_DEGREE_FALLBACK ? 'true' : 'false');
 
@@ -1258,21 +1396,647 @@ function loadData() {
     allEdges = graphRes.edges || [];
     log('数据获取成功: ' + allNodes.length + ' 节点, ' + allEdges.length + ' 边', true);
     renderStats(progressRes, graphRes);
+
+    // Phase-8C: If data is large and GraphCanvas is active, use chunked loading
+    if (USE_GRAPH_CANVAS && allNodes.length > CHUNK_THRESHOLD) {
+      renderGraphChunked();
+    } else {
     renderGraph();
+    }
   }).catch(function(err) {
     log('数据获取失败: ' + err.message, false);
     document.getElementById('loading').innerHTML = '<div style="text-align:center"><div style="font-size:48px;margin-bottom:16px;">⚠️</div><p style="color:#f87171;">数据加载失败: ' + err.message + '</p><button class="refresh-btn" onclick="loadData()" style="margin-top:12px;">重试</button></div>';
   });
 }
 
+/**
+ * Phase-10 T10.1: Tiered loading for vis-network.
+ * First loads L0+L1 (project, module, main-task) → fast first screen.
+ * Sub-tasks and documents loaded on demand via double-click or filter toggle.
+ */
+function loadDataTiered() {
+  log('分层加载: 首屏仅加载核心节点 (project/module/main-task)...', true);
+  tieredLoadState = { l0l1Loaded: false, l2Loaded: false, l3Loaded: false, expandedPhases: {}, totalNodes: 0 };
+  networkReusable = false;
+
+  // Fetch L0+L1 nodes + progress in parallel
+  var pagedUrl = '/api/graph/paged?offset=0&limit=500' +
+    '&entityTypes=' + TIER_L0L1_TYPES.join(',') +
+    '&includeDocuments=false&includeModules=true';
+
+  Promise.all([
+    fetch(pagedUrl).then(function(r) { return r.json(); }),
+    fetch('/api/progress').then(function(r) { return r.json(); })
+  ]).then(function(results) {
+    var graphRes = results[0];
+    var progressRes = results[1];
+    allNodes = graphRes.nodes || [];
+    allEdges = graphRes.edges || [];
+    tieredLoadState.l0l1Loaded = true;
+    tieredLoadState.totalNodes = graphRes.total || allNodes.length;
+
+    log('首屏数据: ' + allNodes.length + ' 核心节点, ' + allEdges.length + ' 边 (总计 ' + tieredLoadState.totalNodes + ')', true);
+    renderStats(progressRes, graphRes);
+    renderGraph();
+    updateTieredIndicator();
+    // 分层模式: 子任务和文档尚未加载，在图例上给出视觉提示
+    markUnloadedTypeLegends();
+  }).catch(function(err) {
+    log('分层加载失败: ' + err.message + ', 回退全量加载', false);
+    // Fallback: full load
+    loadDataFull();
+  });
+}
+
+/** Phase-10: Full load fallback (same as original loadData for vis-network) */
+function loadDataFull() {
+  var graphApiUrl = '/api/graph?includeNodeDegree=' + (INCLUDE_NODE_DEGREE ? 'true' : 'false') +
+    '&enableBackendDegreeFallback=' + (ENABLE_BACKEND_DEGREE_FALLBACK ? 'true' : 'false');
+  Promise.all([
+    fetch(graphApiUrl).then(function(r) { return r.json(); }),
+    fetch('/api/progress').then(function(r) { return r.json(); })
+  ]).then(function(results) {
+    var graphRes = results[0];
+    var progressRes = results[1];
+    allNodes = graphRes.nodes || [];
+    allEdges = graphRes.edges || [];
+    tieredLoadState.l0l1Loaded = true;
+    tieredLoadState.l2Loaded = true;
+    tieredLoadState.l3Loaded = true;
+    tieredLoadState.totalNodes = allNodes.length;
+    networkReusable = false; // Force full rebuild
+    // 全量加载完成：清除所有隐藏状态 + 未加载标记，同步图例为全部激活
+    hiddenTypes = {};
+    clearUnloadedTypeLegends();
+    syncLegendToggleState();
+    log('全量数据: ' + allNodes.length + ' 节点, ' + allEdges.length + ' 边', true);
+    renderStats(progressRes, graphRes);
+    renderGraph();
+    updateTieredIndicator();
+  }).catch(function(err) {
+    log('数据获取失败: ' + err.message, false);
+    document.getElementById('loading').innerHTML = '<div style="text-align:center"><div style="font-size:48px;margin-bottom:16px;">⚠️</div><p style="color:#f87171;">数据加载失败: ' + err.message + '</p><button class="refresh-btn" onclick="loadData()" style="margin-top:12px;">重试</button></div>';
+  });
+}
+
+/**
+ * Phase-10 T10.1+T10.5: Load sub-tasks for a specific main-task (on demand).
+ * Called when user double-clicks a main-task node to expand it.
+ */
+function loadSubTasksForPhase(phaseTaskId) {
+  if (tieredLoadState.expandedPhases[phaseTaskId]) {
+    // Already expanded → collapse (remove sub-task nodes)
+    collapsePhaseSubTasks(phaseTaskId);
+    return;
+  }
+  log('加载子任务: ' + phaseTaskId + '...', true);
+
+  // Fetch sub-tasks: use full paged API with entity type filter
+  var pagedUrl = '/api/graph/paged?offset=0&limit=2000' +
+    '&entityTypes=' + TIER_L2_TYPES.concat(TIER_L3_TYPES).join(',');
+
+  fetch(pagedUrl).then(function(r) { return r.json(); }).then(function(result) {
+    var newNodes = result.nodes || [];
+    var newEdges = result.edges || [];
+
+    // Filter to only sub-tasks/docs connected to this phase
+    var phaseNodeIds = {};
+    phaseNodeIds[phaseTaskId] = true;
+    // Find edges from this phase to sub-tasks
+    var childIds = {};
+    for (var i = 0; i < newEdges.length; i++) {
+      if (newEdges[i].from === phaseTaskId) {
+        childIds[newEdges[i].to] = true;
+      }
+    }
+    // Also get docs linked to this phase
+    for (var i = 0; i < newEdges.length; i++) {
+      if (childIds[newEdges[i].from]) {
+        childIds[newEdges[i].to] = true;
+      }
+    }
+
+    var addedNodes = [];
+    var addedEdges = [];
+    var existingIds = {};
+    for (var i = 0; i < allNodes.length; i++) existingIds[allNodes[i].id] = true;
+
+    for (var i = 0; i < newNodes.length; i++) {
+      var n = newNodes[i];
+      if (childIds[n.id] && !existingIds[n.id]) {
+        allNodes.push(n);
+        addedNodes.push(n);
+        existingIds[n.id] = true;
+      }
+    }
+    for (var i = 0; i < newEdges.length; i++) {
+      var e = newEdges[i];
+      if (existingIds[e.from] && existingIds[e.to]) {
+        // Check if edge already exists
+        var edgeExists = false;
+        for (var j = 0; j < allEdges.length; j++) {
+          if (allEdges[j].from === e.from && allEdges[j].to === e.to) { edgeExists = true; break; }
+        }
+        if (!edgeExists) {
+          allEdges.push(e);
+          addedEdges.push(e);
+        }
+      }
+    }
+
+    tieredLoadState.expandedPhases[phaseTaskId] = true;
+    log('已展开 ' + phaseTaskId + ': +' + addedNodes.length + ' 节点, +' + addedEdges.length + ' 边', true);
+
+    // Phase-10 T10.3: Incremental update instead of full rebuild
+    if (networkReusable && nodesDataSet && edgesDataSet && network) {
+      incrementalAddNodes(addedNodes, addedEdges);
+    } else {
+      renderGraph();
+    }
+    updateTieredIndicator();
+  }).catch(function(err) {
+    log('加载子任务失败: ' + err.message, false);
+  });
+}
+
+/**
+ * Phase-10 T10.5: Collapse sub-tasks of a phase (remove from graph).
+ */
+function collapsePhaseSubTasks(phaseTaskId) {
+  var removeIds = {};
+  // Find sub-task/document nodes that were added for this phase
+  for (var i = 0; i < allEdges.length; i++) {
+    if (allEdges[i].from === phaseTaskId) {
+      var targetType = getNodeTypeById(allEdges[i].to);
+      if (targetType === 'sub-task' || targetType === 'document') {
+        removeIds[allEdges[i].to] = true;
+      }
+    }
+  }
+  // Also remove documents connected to removed sub-tasks
+  for (var i = 0; i < allEdges.length; i++) {
+    if (removeIds[allEdges[i].from]) {
+      var targetType = getNodeTypeById(allEdges[i].to);
+      if (targetType === 'document') {
+        removeIds[allEdges[i].to] = true;
+      }
+    }
+  }
+
+  // Remove from allNodes/allEdges
+  allNodes = allNodes.filter(function(n) { return !removeIds[n.id]; });
+  allEdges = allEdges.filter(function(e) { return !removeIds[e.from] && !removeIds[e.to]; });
+
+  delete tieredLoadState.expandedPhases[phaseTaskId];
+  log('已收起 ' + phaseTaskId + ': 移除 ' + Object.keys(removeIds).length + ' 节点', true);
+
+  // Phase-10 T10.3: Incremental remove
+  if (networkReusable && nodesDataSet && edgesDataSet && network) {
+    incrementalRemoveNodes(Object.keys(removeIds));
+  } else {
+    renderGraph();
+  }
+  updateTieredIndicator();
+}
+
+/** Phase-10: Helper to get node type by ID from allNodes */
+function getNodeTypeById(nodeId) {
+  for (var i = 0; i < allNodes.length; i++) {
+    if (allNodes[i].id === nodeId) return allNodes[i].type;
+  }
+  return '';
+}
+
+/**
+ * Phase-10 T10.3: Incrementally add styled nodes/edges to DataSet (no rebuild).
+ */
+function incrementalAddNodes(rawNodes, rawEdges) {
+  if (!nodesDataSet || !edgesDataSet) return;
+  var addedVisNodes = [];
+  for (var i = 0; i < rawNodes.length; i++) {
+    var n = rawNodes[i];
+    if (hiddenTypes[n.type]) continue;
+    var deg = getNodeDegree(n);
+    var s = nodeStyle(n, deg);
+    addedVisNodes.push({
+      id: n.id, label: n.label, _origLabel: n.label,
+      title: n.label + ' (连接: ' + deg + ')',
+      shape: s.shape, size: s.size, color: s.color, font: s.font,
+      borderWidth: s.borderWidth, _type: n.type,
+      _props: n.properties || {},
+    });
+  }
+  var addedVisEdges = [];
+  var existingNodeIds = {};
+  var currentIds = nodesDataSet.getIds();
+  for (var i = 0; i < currentIds.length; i++) existingNodeIds[currentIds[i]] = true;
+  for (var i = 0; i < addedVisNodes.length; i++) existingNodeIds[addedVisNodes[i].id] = true;
+
+  for (var i = 0; i < rawEdges.length; i++) {
+    var e = rawEdges[i];
+    if (!existingNodeIds[e.from] || !existingNodeIds[e.to]) continue;
+    var es = edgeStyle(e);
+    addedVisEdges.push({
+      id: 'e_inc_' + Date.now() + '_' + i, from: e.from, to: e.to,
+      width: es.width, _origWidth: es.width,
+      color: es.color, dashes: es.dashes, arrows: es.arrows,
+      _label: e.label, _highlightColor: es._highlightColor || '#9ca3af',
+    });
+  }
+
+  if (addedVisNodes.length > 0) nodesDataSet.add(addedVisNodes);
+  if (addedVisEdges.length > 0) edgesDataSet.add(addedVisEdges);
+
+  // Brief physics to settle new nodes, then stop
+  if (network && addedVisNodes.length > 0) {
+    network.setOptions({ physics: { enabled: true, stabilization: { enabled: false } } });
+    setTimeout(function() {
+      if (network) network.setOptions({ physics: { enabled: false } });
+    }, 1500);
+  }
+  log('增量添加: +' + addedVisNodes.length + ' 节点, +' + addedVisEdges.length + ' 边', true);
+}
+
+/**
+ * Phase-10 T10.3: Incrementally remove nodes/edges from DataSet (no rebuild).
+ */
+function incrementalRemoveNodes(nodeIds) {
+  if (!nodesDataSet || !edgesDataSet) return;
+  // Remove edges first
+  var removeEdgeIds = [];
+  var removeSet = {};
+  for (var i = 0; i < nodeIds.length; i++) removeSet[nodeIds[i]] = true;
+  edgesDataSet.forEach(function(edge) {
+    if (removeSet[edge.from] || removeSet[edge.to]) {
+      removeEdgeIds.push(edge.id);
+    }
+  });
+  if (removeEdgeIds.length > 0) edgesDataSet.remove(removeEdgeIds);
+  if (nodeIds.length > 0) nodesDataSet.remove(nodeIds);
+  log('增量移除: -' + nodeIds.length + ' 节点, -' + removeEdgeIds.length + ' 边', true);
+}
+
+/**
+ * Phase-10 T10.2+T10.1: Load all nodes (switch from tiered to full mode).
+ */
+function loadAllNodes() {
+  var btn = document.getElementById('loadAllBtn');
+  if (btn) btn.textContent = '加载中...';
+  log('加载全部节点...', true);
+
+  loadDataFull();
+}
+
+/** Phase-10: Update tiered loading indicator in the UI */
+function updateTieredIndicator() {
+  var indicator = document.getElementById('tieredIndicator');
+  var loadAllBtn = document.getElementById('loadAllBtn');
+  if (!indicator || !loadAllBtn) return;
+
+  if (!USE_GRAPH_CANVAS && tieredLoadState.l0l1Loaded && !tieredLoadState.l2Loaded) {
+    // Tiered mode active
+    var expandedCount = Object.keys(tieredLoadState.expandedPhases).length;
+    indicator.style.display = 'inline';
+    indicator.textContent = '分层 ' + allNodes.length + '/' + tieredLoadState.totalNodes;
+    if (expandedCount > 0) {
+      indicator.textContent += ' (展开' + expandedCount + ')';
+    }
+    loadAllBtn.style.display = 'inline-flex';
+    loadAllBtn.textContent = '全部';
+  } else {
+    indicator.style.display = 'none';
+    loadAllBtn.style.display = 'none';
+  }
+}
+
+/**
+ * Phase-10 T10.2: Overview mode — show one super-node per entity type.
+ * Uses /api/graph/clusters for aggregated data.
+ */
+var overviewModeActive = false;
+var overviewSavedState = null; // { allNodes, allEdges, nodesDataSet, edgesDataSet }
+
+function toggleOverviewMode() {
+  var btn = document.getElementById('overviewBtn');
+  if (overviewModeActive) {
+    // Exit overview → restore saved state
+    exitOverviewMode();
+    if (btn) btn.textContent = '概览';
+    if (btn) btn.style.color = '';
+    return;
+  }
+  // Enter overview
+  if (btn) btn.textContent = '退出概览';
+  if (btn) btn.style.color = '#f59e0b';
+  enterOverviewMode();
+}
+
+function enterOverviewMode() {
+  log('概览模式: 获取聚合数据...', true);
+  // Save current state
+  overviewSavedState = { allNodes: allNodes, allEdges: allEdges };
+
+  fetch('/api/graph/clusters').then(function(r) { return r.json(); }).then(function(data) {
+    if (!data || !data.groups) {
+      log('聚合数据为空, 保持当前视图', false);
+      return;
+    }
+
+    overviewModeActive = true;
+
+    // Build super-nodes: one per entity type group
+    var groups = data.groups;
+    var typeNames = { 'devplan-project': '项目', 'devplan-module': '模块', 'devplan-main-task': '主任务', 'devplan-sub-task': '子任务', 'devplan-document': '文档' };
+    var typeColors = { 'devplan-project': '#f59e0b', 'devplan-module': '#059669', 'devplan-main-task': '#3b82f6', 'devplan-sub-task': '#8b5cf6', 'devplan-document': '#2563eb' };
+    var typeShapes = { 'devplan-project': 'star', 'devplan-module': 'diamond', 'devplan-main-task': 'dot', 'devplan-sub-task': 'dot', 'devplan-document': 'box' };
+
+    var overviewNodes = [];
+    var typeIds = Object.keys(groups);
+    for (var i = 0; i < typeIds.length; i++) {
+      var typeId = typeIds[i];
+      var g = groups[typeId];
+      var count = g.count || 0;
+      if (count === 0) continue;
+      var displayName = typeNames[typeId] || typeId;
+      var color = typeColors[typeId] || '#6b7280';
+      overviewNodes.push({
+        id: 'overview_' + typeId,
+        label: displayName + '\\n(' + count + ')',
+        _origLabel: displayName,
+        title: displayName + ': ' + count + ' 个节点\\n点击展开此类型',
+        shape: typeShapes[typeId] || 'dot',
+        size: Math.min(20 + Math.sqrt(count) * 3, 60),
+        color: { background: color, border: color, highlight: { background: color, border: '#fff' } },
+        font: { size: 14, color: '#e5e7eb' },
+        borderWidth: 3,
+        _type: typeId,
+        _props: { status: 'active', count: count, sampleIds: g.sample_ids || [] },
+      });
+    }
+
+    // Edges: connect project to modules, modules to main-tasks, etc.
+    var overviewEdges = [];
+    var edgeIdx = 0;
+    if (groups['devplan-project'] && groups['devplan-module']) {
+      overviewEdges.push({ id: 'oe' + (edgeIdx++), from: 'overview_devplan-project', to: 'overview_devplan-module', width: 2, color: { color: '#4b5563' }, arrows: { to: { enabled: true, scaleFactor: 0.5 } } });
+    }
+    if (groups['devplan-module'] && groups['devplan-main-task']) {
+      overviewEdges.push({ id: 'oe' + (edgeIdx++), from: 'overview_devplan-module', to: 'overview_devplan-main-task', width: 2, color: { color: '#4b5563' }, arrows: { to: { enabled: true, scaleFactor: 0.5 } } });
+    }
+    if (groups['devplan-main-task'] && groups['devplan-sub-task']) {
+      overviewEdges.push({ id: 'oe' + (edgeIdx++), from: 'overview_devplan-main-task', to: 'overview_devplan-sub-task', width: 1.5, color: { color: '#4b5563' }, arrows: { to: { enabled: true, scaleFactor: 0.4 } } });
+    }
+    if (groups['devplan-main-task'] && groups['devplan-document']) {
+      overviewEdges.push({ id: 'oe' + (edgeIdx++), from: 'overview_devplan-main-task', to: 'overview_devplan-document', width: 1, color: { color: '#4b5563' }, dashes: [5, 5], arrows: { to: { enabled: true, scaleFactor: 0.4 } } });
+    }
+
+    log('概览模式: ' + overviewNodes.length + ' 类型节点', true);
+
+    // Replace the current graph
+    allNodes = [];
+    allEdges = [];
+    if (nodesDataSet) {
+      var allIds = nodesDataSet.getIds();
+      if (allIds.length > 0) nodesDataSet.remove(allIds);
+      nodesDataSet.add(overviewNodes);
+    }
+    if (edgesDataSet) {
+      var allEIds = edgesDataSet.getIds();
+      if (allEIds.length > 0) edgesDataSet.remove(allEIds);
+      edgesDataSet.add(overviewEdges);
+    }
+
+    // Brief physics to arrange
+    if (network) {
+      network.setOptions({
+        physics: { enabled: true, solver: 'forceAtlas2Based',
+          forceAtlas2Based: { gravitationalConstant: -50, centralGravity: 0.05, springLength: 200, springConstant: 0.08, damping: 0.5 },
+          stabilization: { enabled: true, iterations: 50, updateInterval: 10 }
+        }
+      });
+    }
+  }).catch(function(err) {
+    log('概览模式失败: ' + err.message, false);
+    overviewModeActive = false;
+    var btn = document.getElementById('overviewBtn');
+    if (btn) { btn.textContent = '概览'; btn.style.color = ''; }
+  });
+}
+
+function exitOverviewMode() {
+  overviewModeActive = false;
+  if (overviewSavedState) {
+    allNodes = overviewSavedState.allNodes;
+    allEdges = overviewSavedState.allEdges;
+    overviewSavedState = null;
+  }
+  // Force full rebuild to restore normal view
+  networkReusable = false;
+  renderGraph();
+  updateTieredIndicator();
+  log('已退出概览模式', true);
+}
+
+/**
+ * Phase-8C T8C.3+T8C.4: Chunked progressive rendering for large datasets.
+ * Renders the first CHUNK_SIZE nodes immediately, then loads remaining chunks
+ * in the background using addNodes/addEdges incremental API.
+ */
+function renderGraphChunked() {
+  try {
+    var container = document.getElementById('graph');
+    var rect = container.getBoundingClientRect();
+    if (rect.height < 50) {
+      container.style.height = (window.innerHeight - 140) + 'px';
+    }
+
+    // Sort nodes: center-priority (closest to centroid first)
+    var cx = 0, cy = 0;
+    for (var i = 0; i < allNodes.length; i++) {
+      cx += (allNodes[i].x || 0);
+      cy += (allNodes[i].y || 0);
+    }
+    if (allNodes.length > 0) { cx /= allNodes.length; cy /= allNodes.length; }
+    var sortedNodes = allNodes.slice().sort(function(a, b) {
+      var da = Math.pow(((a.x||0) - cx), 2) + Math.pow(((a.y||0) - cy), 2);
+      var db = Math.pow(((b.x||0) - cx), 2) + Math.pow(((b.y||0) - cy), 2);
+      return da - db;
+    });
+
+    // First chunk
+    var firstChunkNodes = sortedNodes.slice(0, CHUNK_SIZE);
+    var firstChunkIds = {};
+    for (var i = 0; i < firstChunkNodes.length; i++) firstChunkIds[firstChunkNodes[i].id] = true;
+    var firstChunkEdges = [];
+    for (var i = 0; i < allEdges.length; i++) {
+      if (firstChunkIds[allEdges[i].from] && firstChunkIds[allEdges[i].to]) {
+        firstChunkEdges.push(allEdges[i]);
+      }
+    }
+
+    // Prepare first chunk visible nodes/edges (same transform as renderGraph)
+    var visibleNodes = [];
+    for (var i = 0; i < firstChunkNodes.length; i++) {
+      var n = firstChunkNodes[i];
+      if (hiddenTypes[n.type]) continue;
+      if (isNodeCollapsedByParent(n.id)) continue;
+      var deg = getNodeDegree(n);
+      var s = nodeStyle(n, deg);
+      visibleNodes.push({
+        id: n.id, label: n.label, _origLabel: n.label,
+        title: n.label + ' (连接: ' + deg + ')',
+        shape: s.shape, size: s.size, color: s.color, font: s.font,
+        borderWidth: s.borderWidth, _type: n.type,
+        _props: n.properties || {}, _isParentDoc: isParentDocNode(n),
+      });
+    }
+    var visibleIds = {};
+    for (var i = 0; i < visibleNodes.length; i++) visibleIds[visibleNodes[i].id] = true;
+    var visibleEdges = [];
+    for (var i = 0; i < firstChunkEdges.length; i++) {
+      var e = firstChunkEdges[i];
+      if (!visibleIds[e.from] || !visibleIds[e.to]) continue;
+      var es = edgeStyle(e);
+      visibleEdges.push({
+        id: 'e' + i, from: e.from, to: e.to,
+        width: es.width, _origWidth: es.width,
+        color: es.color, dashes: es.dashes, arrows: es.arrows,
+        _label: e.label, _highlightColor: es._highlightColor || '#9ca3af',
+      });
+    }
+
+    log('分块加载: 首批 ' + visibleNodes.length + '/' + allNodes.length + ' 节点', true);
+
+    if (network) { network.destroy(); network = null; }
+
+    // Create network with first chunk
+    nodesDataSet = new SimpleDataSet(visibleNodes);
+    edgesDataSet = new SimpleDataSet(visibleEdges);
+
+    var networkOptions = {
+      nodes: { borderWidth: 2, shadow: { enabled: true, color: 'rgba(0,0,0,0.3)', size: 5, x: 0, y: 2 } },
+      edges: { smooth: { enabled: true, type: 'continuous', roundness: 0.5 }, shadow: false },
+      physics: { enabled: true, solver: 'forceAtlas2Based',
+        forceAtlas2Based: { gravitationalConstant: -80, centralGravity: 0.015, springLength: 150, springConstant: 0.05, damping: 0.4, avoidOverlap: 0.8 },
+        stabilization: { enabled: true, iterations: 200, updateInterval: 25 }
+      },
+      interaction: { hover: true, tooltipDelay: 100, navigationButtons: false, keyboard: false, zoomView: true, dragView: true },
+      layout: { improvedLayout: false, hierarchical: false }
+    };
+
+    network = new DevPlanGraph(container, { nodes: visibleNodes, edges: visibleEdges }, networkOptions);
+
+    // Show loading indicator with progress
+    document.getElementById('loading').style.display = 'none';
+    log('首批数据已渲染，后台加载剩余 ' + (sortedNodes.length - CHUNK_SIZE) + ' 节点...', true);
+
+    // ── Progressive background loading ──
+    var loadedNodeIds = Object.assign({}, firstChunkIds);
+    var chunkIndex = 1;
+    var totalChunks = Math.ceil(sortedNodes.length / CHUNK_SIZE);
+
+    function loadNextChunk() {
+      var start = chunkIndex * CHUNK_SIZE;
+      var end = Math.min(start + CHUNK_SIZE, sortedNodes.length);
+      if (start >= sortedNodes.length) {
+        log('✅ 全部数据加载完成: ' + allNodes.length + ' 节点, ' + allEdges.length + ' 边', true);
+        return;
+      }
+
+      var chunkNodes = [];
+      for (var i = start; i < end; i++) {
+        var n = sortedNodes[i];
+        if (hiddenTypes[n.type]) continue;
+        if (isNodeCollapsedByParent(n.id)) continue;
+        var deg = getNodeDegree(n);
+        var s = nodeStyle(n, deg);
+        chunkNodes.push({
+          id: n.id, label: n.label, _origLabel: n.label,
+          title: n.label, shape: s.shape, size: s.size,
+          color: s.color, font: s.font, borderWidth: s.borderWidth,
+          _type: n.type, _props: n.properties || {},
+          x: n.x || 0, y: n.y || 0,
+        });
+        loadedNodeIds[n.id] = true;
+      }
+
+      // Edges for this chunk (both endpoints must be loaded)
+      var chunkEdges = [];
+      for (var i = 0; i < allEdges.length; i++) {
+        var e = allEdges[i];
+        if (loadedNodeIds[e.from] && loadedNodeIds[e.to]) {
+          var es = edgeStyle(e);
+          chunkEdges.push({
+            id: 'ec' + chunkIndex + '_' + i, from: e.from, to: e.to,
+            width: es.width, _origWidth: es.width,
+            color: es.color, dashes: es.dashes, arrows: es.arrows,
+            _label: e.label, _highlightColor: es._highlightColor || '#9ca3af',
+          });
+        }
+      }
+
+      // Use incremental API (Phase-8C T8C.5)
+      if (network && network._gc) {
+        network._gc.addNodes(chunkNodes);
+        network._gc.addEdges(chunkEdges);
+      }
+
+      chunkIndex++;
+      var pct = Math.min(100, Math.round(chunkIndex / totalChunks * 100));
+      log('加载进度: ' + pct + '% (' + (chunkIndex * CHUNK_SIZE) + '/' + sortedNodes.length + ')', true);
+
+      // Schedule next chunk (yield to main thread for rendering)
+      if (chunkIndex < totalChunks) {
+        setTimeout(loadNextChunk, 50);
+      } else {
+        log('✅ 全部数据加载完成: ' + Object.keys(loadedNodeIds).length + ' 节点', true);
+      }
+    }
+
+    // Start loading remaining chunks after first render stabilizes
+    network.on('stabilizationIterationsDone', function() {
+      network.setOptions({ physics: { enabled: false } });
+      log('首批渲染稳定，开始后台增量加载...', true);
+      setTimeout(loadNextChunk, 100);
+    });
+
+    // Wire up click handler (same as renderGraph)
+    network.on('click', function(params) {
+      if (params.pointer && params.pointer.canvas) {
+        var hitNodeId = hitTestDocToggleBtn(params.pointer.canvas.x, params.pointer.canvas.y);
+        if (hitNodeId) { toggleDocNodeExpand(hitNodeId); return; }
+      }
+      if (params.nodes.length > 0) {
+        panelHistory = [];
+        currentPanelNodeId = null;
+        highlightConnectedEdges(params.nodes[0]);
+        showPanel(params.nodes[0]);
+      } else {
+        resetAllEdgeColors();
+        closePanel();
+      }
+    });
+
+  } catch (e) {
+    log('分块渲染失败: ' + e.message, false);
+    log('回退到标准渲染模式', true);
+    renderGraph();
+  }
+}
+
 function renderStats(progress, graph) {
   var bar = document.getElementById('statsBar');
   var pct = progress.overallPercent || 0;
-  var moduleCount = 0;
-  var docCount = 0;
-  for (var i = 0; i < graph.nodes.length; i++) {
+  // 优先使用 /api/progress 返回的真实计数（分层加载时 graph.nodes 不含全部类型）
+  var moduleCount = progress.moduleCount;
+  var docCount = progress.docCount;
+  if (moduleCount == null || docCount == null) {
+    moduleCount = moduleCount || 0;
+    docCount = docCount || 0;
+    for (var i = 0; i < (graph.nodes || []).length; i++) {
     if (graph.nodes[i].type === 'module') moduleCount++;
     if (graph.nodes[i].type === 'document') docCount++;
+    }
   }
   bar.innerHTML =
     '<div class="stat clickable" onclick="showStatsModal(\\x27module\\x27)" title="查看所有模块"><span class="num amber">' + moduleCount + '</span> 模块</div>' +
@@ -1316,7 +2080,13 @@ function renderGraph() {
           label = DOC_BTN_PAD + label;
         }
       }
-      visibleNodes.push({ id: n.id, label: label, _origLabel: n.label, title: n.label + ' (连接: ' + deg + ')', shape: s.shape, size: s.size, color: s.color, font: s.font, borderWidth: s.borderWidth, _type: n.type, _props: n.properties || {}, _isParentDoc: isParentDoc });
+      // Phase-10 T10.5: Add double-click hint for main-task nodes in tiered mode
+      var tooltip = n.label + ' (连接: ' + deg + ')';
+      if (n.type === 'main-task' && !USE_GRAPH_CANVAS && tieredLoadState.l0l1Loaded && !tieredLoadState.l2Loaded) {
+        var phaseId = (n.properties || {}).taskId || n.id;
+        tooltip += tieredLoadState.expandedPhases[phaseId] ? '\\n双击收起子任务' : '\\n双击展开子任务';
+      }
+      visibleNodes.push({ id: n.id, label: label, _origLabel: n.label, title: tooltip, shape: s.shape, size: s.size, color: s.color, font: s.font, borderWidth: s.borderWidth, _type: n.type, _props: n.properties || {}, _isParentDoc: isParentDoc });
     }
 
     var visibleIds = {};
@@ -1332,24 +2102,48 @@ function renderGraph() {
 
     log('可见节点: ' + visibleNodes.length + ', 可见边: ' + visibleEdges.length, true);
 
+    if (USE_GRAPH_CANVAS) {
+      nodesDataSet = new SimpleDataSet(visibleNodes);
+      edgesDataSet = new SimpleDataSet(visibleEdges);
+    } else {
     nodesDataSet = new vis.DataSet(visibleNodes);
     edgesDataSet = new vis.DataSet(visibleEdges);
+    }
 
     if (network) {
       network.destroy();
       network = null;
     }
 
-    network = new vis.Network(container, { nodes: nodesDataSet, edges: edgesDataSet }, {
-      nodes: {
-        borderWidth: 2,
-        shadow: { enabled: true, color: 'rgba(0,0,0,0.3)', size: 5, x: 0, y: 2 }
-      },
-      edges: {
-        smooth: { enabled: true, type: 'continuous', roundness: 0.5 },
-        shadow: false
-      },
-      physics: {
+    // ── Phase-10 T10.4: Adaptive physics config based on node count ──
+    var nodeCount = visibleNodes.length;
+    var physicsConfig;
+    if (nodeCount > 2000) {
+      // Very large graph: disable physics, use preset positions
+      physicsConfig = {
+        enabled: false,
+        stabilization: { enabled: false }
+      };
+      log('物理引擎: 已禁用 (节点 ' + nodeCount + ' > 2000)', true);
+    } else if (nodeCount > 800) {
+      // Large graph (800-2000): aggressive damping + fewer iterations
+      physicsConfig = {
+        enabled: true,
+        solver: 'forceAtlas2Based',
+        forceAtlas2Based: {
+          gravitationalConstant: -60,
+          centralGravity: 0.02,
+          springLength: 120,
+          springConstant: 0.06,
+          damping: 0.5,
+          avoidOverlap: 0.8
+        },
+        stabilization: { enabled: true, iterations: 80, updateInterval: 20 }
+      };
+      log('物理引擎: 大图模式 iterations=80 (节点 ' + nodeCount + ')', true);
+    } else if (nodeCount > 200) {
+      // Medium graph: reduced iterations + improvedLayout
+      physicsConfig = {
         enabled: true,
         solver: 'forceAtlas2Based',
         forceAtlas2Based: {
@@ -1360,8 +2154,36 @@ function renderGraph() {
           damping: 0.4,
           avoidOverlap: 0.8
         },
-        stabilization: { enabled: true, iterations: 200, updateInterval: 25 }
+        stabilization: { enabled: true, iterations: 120, updateInterval: 25 }
+      };
+      log('物理引擎: 中等模式 iterations=120 (节点 ' + nodeCount + ')', true);
+    } else {
+      // Small graph: standard config
+      physicsConfig = {
+        enabled: true,
+        solver: 'forceAtlas2Based',
+        forceAtlas2Based: {
+          gravitationalConstant: -80,
+          centralGravity: 0.015,
+          springLength: 150,
+          springConstant: 0.05,
+          damping: 0.4,
+          avoidOverlap: 0.8
+        },
+        stabilization: { enabled: true, iterations: 150, updateInterval: 25 }
+      };
+    }
+
+    var networkOptions = {
+      nodes: {
+        borderWidth: 2,
+        shadow: { enabled: true, color: 'rgba(0,0,0,0.3)', size: 5, x: 0, y: 2 }
       },
+      edges: {
+        smooth: { enabled: true, type: 'continuous', roundness: 0.5 },
+        shadow: false
+      },
+      physics: physicsConfig,
       interaction: {
         hover: true,
         tooltipDelay: 100,
@@ -1371,12 +2193,34 @@ function renderGraph() {
         dragView: true
       },
       layout: {
-        improvedLayout: false,
+        improvedLayout: (nodeCount > 200 && nodeCount <= 2000),
         hierarchical: false
       }
-    });
+    };
 
+    if (USE_GRAPH_CANVAS) {
+      network = new DevPlanGraph(container,
+        { nodes: visibleNodes, edges: visibleEdges },
+        networkOptions
+      );
+    } else {
+      network = new vis.Network(container,
+        { nodes: nodesDataSet, edges: edgesDataSet },
+        networkOptions
+      );
+    }
+
+    // Phase-10 T10.3: Mark network as reusable for incremental updates
+    networkReusable = true;
+
+    // Phase-10 T10.4: When physics is disabled (large graph), immediately show result
+    if (!physicsConfig.enabled) {
+      document.getElementById('loading').style.display = 'none';
+      log('图谱渲染完成 (无物理引擎)! ' + visibleNodes.length + ' 节点, ' + visibleEdges.length + ' 边', true);
+      network.fit({ animation: { duration: 500, easingFunction: 'easeInOutQuad' } });
+    } else {
     log('Network 实例已创建, 等待物理稳定化...', true);
+    }
 
     network.on('stabilizationIterationsDone', function() {
       network.setOptions({ physics: { enabled: false } });
@@ -1385,6 +2229,18 @@ function renderGraph() {
       // 稳定后将父文档-子文档按思维导图方式整齐排列
       arrangeAllDocMindMaps();
       network.fit({ animation: { duration: 800, easingFunction: 'easeInOutQuad' } });
+    });
+
+    // ── Phase-10 T10.5: Double-click to expand/collapse sub-tasks ──
+    network.on('doubleClick', function(params) {
+      if (params.nodes.length > 0) {
+        var clickedId = params.nodes[0];
+        var clickedNode = nodesDataSet.get(clickedId);
+        if (clickedNode && clickedNode._type === 'main-task') {
+          var taskId = (clickedNode._props || {}).taskId || clickedId;
+          loadSubTasksForPhase(taskId);
+        }
+      }
     });
 
     network.on('click', function(params) {
@@ -2057,14 +2913,268 @@ function inlineFormat(text) {
 }
 
 // ========== Filters ==========
+/** 保存筛选隐藏时各节点的 (x, y) 位置，重新显示时恢复 */
+var savedFilterPositions = {};
+
 function toggleFilter(type) {
-  var cb = document.querySelector('.filter-check input[data-type="' + type + '"]');
-  if (cb && !cb.checked) {
+  var el = document.querySelector('.legend-item.toggle[data-type="' + type + '"]');
+  var cb = document.getElementById('cb-' + type);
+  if (!el) return;
+
+  var isCurrentlyActive = el.classList.contains('active');
+
+  if (isCurrentlyActive) {
+    // ── 分层模式: 该类型尚未加载 → 首次点击触发按需加载 ──
+    if (!USE_GRAPH_CANVAS && tieredLoadState.l0l1Loaded) {
+      if (type === 'sub-task' && !tieredLoadState.l2Loaded) {
+        loadTierDataByType('sub-task');
+        return;
+      }
+      if (type === 'document' && !tieredLoadState.l3Loaded) {
+        loadTierDataByType('document');
+        return;
+      }
+    }
+    // ── 正常隐藏此类型 ──
+    el.classList.remove('active');
+    if (cb) cb.checked = false;
     hiddenTypes[type] = true;
   } else {
+    // ── 显示此类型 ──
+    el.classList.add('active');
+    if (cb) cb.checked = true;
     delete hiddenTypes[type];
+
+    // 分层模式: 如果该类型数据尚未加载，触发按需加载
+    if (!USE_GRAPH_CANVAS && tieredLoadState.l0l1Loaded) {
+      if (type === 'sub-task' && !tieredLoadState.l2Loaded) {
+        loadTierDataByType('sub-task');
+        return;
+      }
+      if (type === 'document' && !tieredLoadState.l3Loaded) {
+        loadTierDataByType('document');
+        return;
+      }
+    }
   }
+
+  // Phase-10 T10.3: Incremental filter toggle — add/remove from DataSet
+  if (networkReusable && nodesDataSet && edgesDataSet && network && !USE_GRAPH_CANVAS) {
+    if (isCurrentlyActive) {
+      // ── 隐藏: 保存位置 → 移除节点 ──
+      var removeNodeIds = [];
+      nodesDataSet.forEach(function(n) {
+        if (n._type === type) removeNodeIds.push(n.id);
+      });
+      if (removeNodeIds.length > 0) {
+        // 保存当前位置，以便重新勾选时恢复
+        var positions = network.getPositions(removeNodeIds);
+        for (var k in positions) {
+          savedFilterPositions[k] = positions[k];
+        }
+        // Remove edges connected to these nodes first
+        var removeEdgeIds = [];
+        var removeSet = {};
+        for (var i = 0; i < removeNodeIds.length; i++) removeSet[removeNodeIds[i]] = true;
+        edgesDataSet.forEach(function(edge) {
+          if (removeSet[edge.from] || removeSet[edge.to]) removeEdgeIds.push(edge.id);
+        });
+        if (removeEdgeIds.length > 0) edgesDataSet.remove(removeEdgeIds);
+        nodesDataSet.remove(removeNodeIds);
+        log('类型筛选: 隐藏 ' + type + ' (-' + removeNodeIds.length + ' 节点, 位置已保存)', true);
+      }
+    } else {
+      // ── 显示: 恢复节点到之前保存的位置 ──
+      var addNodes = [];
+      var addEdges = [];
+      var currentIds = {};
+      nodesDataSet.forEach(function(n) { currentIds[n.id] = true; });
+
+      var restoredCount = 0;
+      for (var i = 0; i < allNodes.length; i++) {
+        var n = allNodes[i];
+        if (n.type === type && !currentIds[n.id]) {
+          var deg = getNodeDegree(n);
+          var s = nodeStyle(n, deg);
+          var nodeData = {
+            id: n.id, label: n.label, _origLabel: n.label,
+            title: n.label + ' (连接: ' + deg + ')',
+            shape: s.shape, size: s.size, color: s.color, font: s.font,
+            borderWidth: s.borderWidth, _type: n.type,
+            _props: n.properties || {},
+          };
+          // 恢复之前保存的位置
+          if (savedFilterPositions[n.id]) {
+            nodeData.x = savedFilterPositions[n.id].x;
+            nodeData.y = savedFilterPositions[n.id].y;
+            delete savedFilterPositions[n.id];
+            restoredCount++;
+          }
+          addNodes.push(nodeData);
+          currentIds[n.id] = true;
+        }
+      }
+      // Re-add edges for newly visible nodes
+      for (var i = 0; i < allEdges.length; i++) {
+        var e = allEdges[i];
+        if (currentIds[e.from] && currentIds[e.to]) {
+          var existing = edgesDataSet.get('e' + i);
+          if (!existing) {
+            var es = edgeStyle(e);
+            addEdges.push({
+              id: 'e' + i, from: e.from, to: e.to,
+              width: es.width, _origWidth: es.width,
+              color: es.color, dashes: es.dashes, arrows: es.arrows,
+              _label: e.label, _highlightColor: es._highlightColor || '#9ca3af',
+            });
+          }
+        }
+      }
+      if (addNodes.length > 0) nodesDataSet.add(addNodes);
+      if (addEdges.length > 0) edgesDataSet.add(addEdges);
+      log('类型筛选: 显示 ' + type + ' (+' + addNodes.length + ' 节点, ' + restoredCount + ' 位置已恢复)', true);
+
+      // 仅对没有保存位置的新节点短暂开启物理引擎
+      var unpositioned = addNodes.length - restoredCount;
+      if (unpositioned > 0 && unpositioned < 200) {
+        network.setOptions({ physics: { enabled: true, stabilization: { enabled: false } } });
+        setTimeout(function() {
+          if (network) network.setOptions({ physics: { enabled: false } });
+        }, 1500);
+      }
+    }
+    return;
+  }
+
+  // Fallback: full rebuild
   renderGraph();
+}
+
+/**
+ * 分层模式: 按类型按需加载数据（子任务 / 文档）。
+ * 当用户点击底部图例激活某类型时，如果该类型尚未加载，触发此函数。
+ */
+function loadTierDataByType(type) {
+  var entityTypeMap = { 'sub-task': 'devplan-sub-task', 'document': 'devplan-document' };
+  var entityType = entityTypeMap[type];
+  if (!entityType) return;
+
+  var el = document.querySelector('.legend-item.toggle[data-type="' + type + '"]');
+  if (el) el.classList.add('loading');
+
+  log('按需加载: ' + type + '...', true);
+  var url = '/api/graph/paged?offset=0&limit=5000&entityTypes=' + entityType +
+    '&includeDocuments=' + (type === 'document' ? 'true' : 'false') +
+    '&includeModules=false';
+
+  fetch(url).then(function(r) { return r.json(); }).then(function(result) {
+    var newNodes = result.nodes || [];
+    var newEdges = result.edges || [];
+
+    // 合并到 allNodes/allEdges（去重）
+    var existingIds = {};
+    for (var i = 0; i < allNodes.length; i++) existingIds[allNodes[i].id] = true;
+
+    var addedNodes = [];
+    var addedEdges = [];
+    for (var i = 0; i < newNodes.length; i++) {
+      if (!existingIds[newNodes[i].id]) {
+        allNodes.push(newNodes[i]);
+        addedNodes.push(newNodes[i]);
+        existingIds[newNodes[i].id] = true;
+      }
+    }
+    // 也检查服务器返回的新边
+    var existingEdgeSet = {};
+    for (var i = 0; i < allEdges.length; i++) {
+      existingEdgeSet[allEdges[i].from + '->' + allEdges[i].to] = true;
+    }
+    for (var i = 0; i < newEdges.length; i++) {
+      var e = newEdges[i];
+      var edgeKey = e.from + '->' + e.to;
+      if (!existingEdgeSet[edgeKey] && existingIds[e.from] && existingIds[e.to]) {
+        allEdges.push(e);
+        addedEdges.push(e);
+        existingEdgeSet[edgeKey] = true;
+      }
+    }
+
+    if (type === 'sub-task') tieredLoadState.l2Loaded = true;
+    if (type === 'document') tieredLoadState.l3Loaded = true;
+
+    if (el) {
+      el.classList.remove('loading');
+      el.classList.remove('not-loaded');
+      el.title = '点击切换' + type + '显隐';
+    }
+    log('按需加载完成: +' + addedNodes.length + ' ' + type + ' 节点, +' + addedEdges.length + ' 边', true);
+
+    // 增量添加到图谱
+    if (networkReusable && nodesDataSet && edgesDataSet && network) {
+      incrementalAddNodes(addedNodes, addedEdges);
+    } else {
+      renderGraph();
+    }
+    updateTieredIndicator();
+  }).catch(function(err) {
+    if (el) el.classList.remove('loading');
+    log('按需加载失败: ' + err.message, false);
+  });
+}
+
+/**
+ * 同步图例 toggle 状态与当前 hiddenTypes（页面初始化 / 分层加载后调用）。
+ */
+function syncLegendToggleState() {
+  var types = ['module', 'main-task', 'sub-task', 'document'];
+  for (var i = 0; i < types.length; i++) {
+    var el = document.querySelector('.legend-item.toggle[data-type="' + types[i] + '"]');
+    var cb = document.getElementById('cb-' + types[i]);
+    if (!el) continue;
+    if (hiddenTypes[types[i]]) {
+      el.classList.remove('active');
+      if (cb) cb.checked = false;
+    } else {
+      el.classList.add('active');
+      if (cb) cb.checked = true;
+    }
+  }
+}
+
+/**
+ * 分层模式: 标记尚未加载的节点类型（子任务 / 文档）在图例中显示"未加载"视觉提示。
+ * 用户点击后会触发按需加载。
+ */
+function markUnloadedTypeLegends() {
+  var subEl = document.querySelector('.legend-item.toggle[data-type="sub-task"]');
+  var docEl = document.querySelector('.legend-item.toggle[data-type="document"]');
+  if (subEl && !tieredLoadState.l2Loaded) {
+    subEl.classList.add('not-loaded');
+    subEl.title = '点击加载子任务';
+  }
+  if (docEl && !tieredLoadState.l3Loaded) {
+    docEl.classList.add('not-loaded');
+    docEl.title = '点击加载文档';
+  }
+}
+
+/**
+ * 全量加载后: 清除所有"未加载"标记，确保所有 toggle 为 active 状态。
+ */
+function clearUnloadedTypeLegends() {
+  var els = document.querySelectorAll('.legend-item.toggle.not-loaded');
+  for (var i = 0; i < els.length; i++) {
+    els[i].classList.remove('not-loaded');
+  }
+  // 确保所有 toggle 为 active
+  var toggles = document.querySelectorAll('.legend-item.toggle');
+  for (var i = 0; i < toggles.length; i++) {
+    if (!toggles[i].classList.contains('active')) {
+      toggles[i].classList.add('active');
+    }
+    var tp = toggles[i].getAttribute('data-type');
+    if (tp) toggles[i].title = '点击切换' + tp + '显隐';
+  }
 }
 
 // ========== Stats Modal ==========
@@ -2319,8 +3429,20 @@ function manualRefresh() {
 
 /** 静默刷新：只更新数据，不重建图谱（避免布局跳动）。onDone 回调在请求完成后触发。 */
 function silentRefresh(onDone) {
-  var graphApiUrl = '/api/graph?includeNodeDegree=' + (INCLUDE_NODE_DEGREE ? 'true' : 'false') +
+  // Phase-10: If in tiered mode, refresh only what's loaded
+  var graphApiUrl;
+  if (!USE_GRAPH_CANVAS && tieredLoadState.l0l1Loaded && !tieredLoadState.l2Loaded) {
+    // Only refresh L0+L1 nodes (tiered mode — not all loaded yet)
+    var loadedTypes = TIER_L0L1_TYPES.slice();
+    // Add types for expanded phases
+    if (Object.keys(tieredLoadState.expandedPhases).length > 0) {
+      loadedTypes = loadedTypes.concat(TIER_L2_TYPES).concat(TIER_L3_TYPES);
+    }
+    graphApiUrl = '/api/graph/paged?offset=0&limit=5000&entityTypes=' + loadedTypes.join(',');
+  } else {
+    graphApiUrl = '/api/graph?includeNodeDegree=' + (INCLUDE_NODE_DEGREE ? 'true' : 'false') +
     '&enableBackendDegreeFallback=' + (ENABLE_BACKEND_DEGREE_FALLBACK ? 'true' : 'false');
+  }
   Promise.all([
     fetch(graphApiUrl).then(function(r) { return r.json(); }),
     fetch('/api/progress').then(function(r) { return r.json(); })
@@ -2424,7 +3546,11 @@ function updateNodeStyles() {
 
 // ========== App Start ==========
 function startApp() {
+  if (USE_GRAPH_CANVAS) {
+    log('GraphCanvas 引擎就绪, 开始加载数据...', true);
+  } else {
   log('vis-network 就绪, 开始加载数据...', true);
+  }
   loadData();
 }
 
@@ -3179,8 +4305,8 @@ function phaseItem(task, status, icon) {
   return h;
 }
 
-// ========== Init: 动态加载 vis-network ==========
-loadVisNetwork(0);
+// ========== Init: 动态加载渲染引擎 ==========
+loadRenderEngine();
 </script>
 </body>
 </html>`;
