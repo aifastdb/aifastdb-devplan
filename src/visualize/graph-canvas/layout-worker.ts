@@ -39,7 +39,8 @@ function LayoutEngine(engine) {
     batchSize: 10,        // iterations per message
     idealEdgeLength: 120,
     theta: 0.8,           // Barnes-Hut approximation parameter
-    earlyTerminationThreshold: 0.5, // stop when energy below this
+    earlyTerminationThreshold: 0.3, // stop when energy below this (lowered for better convergence)
+    avoidOverlap: 0.8,    // overlap avoidance strength (0=off, 1=full)
   };
 }
 
@@ -61,17 +62,21 @@ LayoutEngine.prototype.start = function(options) {
   var edges = engine._edges;
 
   // Auto-select algorithm based on node count
-  var useBarnesHut = nodes.length > 1000;
+  var useBarnesHut = nodes.length > 500; // Lower threshold: BH is better for 500+ nodes
   opts.useBarnesHut = useBarnesHut;
 
-  // Adapt max iterations for large graphs
-  if (nodes.length > 5000) {
-    opts.maxIterations = Math.min(opts.maxIterations, 150);
-    opts.batchSize = 5;
-  } else if (nodes.length > 10000) {
-    opts.maxIterations = Math.min(opts.maxIterations, 80);
+  // Adapt max iterations based on graph size
+  if (nodes.length > 10000) {
+    opts.maxIterations = Math.min(opts.maxIterations, 100);
     opts.batchSize = 3;
+  } else if (nodes.length > 5000) {
+    opts.maxIterations = Math.min(opts.maxIterations, 200);
+    opts.batchSize = 5;
+  } else if (nodes.length > 2000) {
+    opts.maxIterations = Math.min(opts.maxIterations, 300);
+    opts.batchSize = 8;
   }
+  // For medium graphs (<2000), keep higher iteration count for quality
   this._maxIterations = opts.maxIterations;
 
   // Prepare node/edge data for worker
@@ -391,7 +396,8 @@ LayoutEngine.prototype._getWorkerCode = function() {
       var damping = options.damping || 0.4;
       var theta = options.theta || 0.8;
       var useBarnesHut = options.useBarnesHut || false;
-      var earlyTermThreshold = options.earlyTerminationThreshold || 0.5;
+      var earlyTermThreshold = options.earlyTerminationThreshold || 0.3;
+      var avoidOverlap = options.avoidOverlap || 0.8;
       var algorithm = useBarnesHut ? 'barnes-hut' : 'fruchterman-reingold';
 
       // Track energy for early termination
@@ -461,6 +467,36 @@ LayoutEngine.prototype._getWorkerCode = function() {
           for (var i = 0; i < nodes.length; i++) {
             nodes[i].fx -= nodes[i].x * gravity;
             nodes[i].fy -= nodes[i].y * gravity;
+          }
+
+          // ── Overlap avoidance ──
+          // For Barnes-Hut mode, only check within local neighborhood (using spatial hash)
+          if (avoidOverlap > 0) {
+            if (!useBarnesHut || nodes.length < 2000) {
+              // O(n²) check — acceptable for <2000 nodes
+              for (var i = 0; i < nodes.length; i++) {
+                var ri = (nodes[i].radius || 10);
+                for (var j = i + 1; j < nodes.length; j++) {
+                  var rj = (nodes[j].radius || 10);
+                  var minDist = (ri + rj) * avoidOverlap * 1.5;
+                  var odx = nodes[j].x - nodes[i].x;
+                  var ody = nodes[j].y - nodes[i].y;
+                  var oDist = Math.sqrt(odx * odx + ody * ody);
+                  if (oDist < minDist && oDist > 0.1) {
+                    var pushForce = (minDist - oDist) * 0.3 * temperature;
+                    var opx = (odx / oDist) * pushForce;
+                    var opy = (ody / oDist) * pushForce;
+                    nodes[i].fx -= opx;
+                    nodes[i].fy -= opy;
+                    nodes[j].fx += opx;
+                    nodes[j].fy += opy;
+                  }
+                }
+              }
+            } else {
+              // For very large graphs, skip full O(n²) overlap check
+              // The repulsion force from Barnes-Hut already separates nodes reasonably
+            }
           }
 
           // ── Apply forces with damping and temperature ──

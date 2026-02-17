@@ -25,6 +25,7 @@ import type {
   MainTask,
   SubTask,
   Module,
+  Prompt,
   DevPlanSection,
   TaskStatus,
 } from './types';
@@ -45,6 +46,7 @@ export interface MigrateResult {
     documents: number;
     mainTasks: number;
     subTasks: number;
+    prompts: number;
   };
   /** 备份路径（如果启用） */
   backupPath?: string;
@@ -86,7 +88,7 @@ export function migrateEngine(
   const dryRun = options?.dryRun || false;
 
   const errors: string[] = [];
-  const stats = { modules: 0, documents: 0, mainTasks: 0, subTasks: 0 };
+  const stats = { modules: 0, documents: 0, mainTasks: 0, subTasks: 0, prompts: 0 };
 
   // 检测当前引擎
   const currentEngine = detectCurrentEngine(projectName, base);
@@ -167,6 +169,16 @@ export function migrateEngine(
     } catch (e) {
       errors.push(`Failed to read sub-tasks for ${mt.taskId}: ${e instanceof Error ? e.message : String(e)}`);
     }
+  }
+
+  // 读取 Prompt 日志
+  let prompts: Prompt[] = [];
+  try {
+    prompts = source.listPrompts();
+    stats.prompts = prompts.length;
+  } catch (e) {
+    // listPrompts 失败不中断迁移（旧引擎可能不支持）
+    errors.push(`Failed to read prompts: ${e instanceof Error ? e.message : String(e)}`);
   }
 
   if (dryRun) {
@@ -294,6 +306,21 @@ export function migrateEngine(
     }
   }
 
+  // 写入 Prompt 日志
+  for (const p of prompts) {
+    try {
+      target.savePrompt({
+        projectName,
+        content: p.content,
+        summary: p.summary,
+        relatedTaskId: p.relatedTaskId,
+        tags: p.tags,
+      });
+    } catch (e) {
+      errors.push(`Failed to migrate prompt "${p.id}": ${e instanceof Error ? e.message : String(e)}`);
+    }
+  }
+
   // 同步确保数据落盘
   try {
     target.sync();
@@ -374,13 +401,14 @@ function createStoreInstance(
     if (engine === 'graph') {
       return new DevPlanGraphStore(projectName, {
         graphPath: path.join(basePath, projectName, 'graph-data'),
-        shardCount: 4,
+        shardCount: 5,
       });
     } else {
       return new DevPlanDocumentStore(projectName, {
         documentPath: path.join(basePath, projectName, 'documents.jsonl'),
         taskPath: path.join(basePath, projectName, 'tasks.jsonl'),
         modulePath: path.join(basePath, projectName, 'modules.jsonl'),
+        promptPath: path.join(basePath, projectName, 'prompts.jsonl'),
       });
     }
   } catch {

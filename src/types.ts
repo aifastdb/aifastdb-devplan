@@ -130,6 +130,8 @@ export interface MainTaskInput {
   relatedSections?: string[];
   /** 关联的功能模块 ID */
   moduleId?: string;
+  /** 关联的 Prompt ID 列表 */
+  relatedPromptIds?: string[];
   /** 排序序号（数值越小越靠前，不填则自动追加到末尾） */
   order?: number;
 }
@@ -156,6 +158,8 @@ export interface MainTask {
   relatedSections?: string[];
   /** 关联的功能模块 ID */
   moduleId?: string;
+  /** 关联的 Prompt ID 列表 */
+  relatedPromptIds?: string[];
   /** 子任务总数 */
   totalSubtasks: number;
   /** 已完成子任务数 */
@@ -399,6 +403,8 @@ export interface DevPlanStoreConfig {
   taskPath: string;
   /** 功能模块存储路径 */
   modulePath: string;
+  /** Prompt 日志存储路径 */
+  promptPath: string;
   /** Git 操作的工作目录（多项目路由时指向项目根目录，默认 process.cwd()） */
   gitCwd?: string;
 }
@@ -475,7 +481,7 @@ export interface DevPlanGraphNode {
   /** 节点名称 */
   label: string;
   /** 节点类型 */
-  type: 'project' | 'main-task' | 'sub-task' | 'document' | 'module';
+  type: 'project' | 'main-task' | 'sub-task' | 'document' | 'module' | 'prompt';
   /** 节点度数（连接边数量），由后端导出时计算 */
   degree?: number;
   /** 节点属性 */
@@ -630,6 +636,48 @@ export interface ExecutorHeartbeat {
   status: 'active' | 'paused' | 'stopped';
   lastScreenState?: string;
   timestamp: number;
+}
+
+// ============================================================================
+// Prompt Types (用户 Prompt 日志)
+// ============================================================================
+
+/**
+ * Prompt 输入
+ */
+export interface PromptInput {
+  /** 项目名称 */
+  projectName: string;
+  /** 用户输入的原始 prompt 内容 */
+  content: string;
+  /** AI 生成的摘要（可选，简要描述做了什么） */
+  summary?: string;
+  /** 关联的主任务 ID（可选） */
+  relatedTaskId?: string;
+  /** 自定义标签（可选） */
+  tags?: string[];
+}
+
+/**
+ * 存储的 Prompt
+ */
+export interface Prompt {
+  /** 文档 ID (图引擎实体 ID) */
+  id: string;
+  /** 项目名称 */
+  projectName: string;
+  /** 自增序号（当天内序号） */
+  promptIndex: number;
+  /** 用户输入的原始 prompt 内容 */
+  content: string;
+  /** AI 生成的摘要 */
+  summary?: string;
+  /** 关联的主任务 ID */
+  relatedTaskId?: string;
+  /** 自定义标签 */
+  tags?: string[];
+  /** 创建时间 */
+  createdAt: number;
 }
 
 /** Autopilot 配置的默认值 */

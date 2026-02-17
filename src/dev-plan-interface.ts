@@ -28,6 +28,8 @@ import type {
   SearchMode,
   ScoredDevPlanDoc,
   RebuildIndexResult,
+  PromptInput,
+  Prompt,
 } from './types';
 
 // ============================================================================
@@ -215,6 +217,35 @@ export interface IDevPlanStore {
    * 获取模块详情 — 包含关联的任务和文档
    */
   getModuleDetail(moduleId: string): ModuleDetail | null;
+
+  // ==========================================================================
+  // Prompt Operations (用户 Prompt 日志)
+  // ==========================================================================
+
+  /**
+   * 保存一条 Prompt
+   *
+   * 自动分配 promptIndex (当天内自增序号)。
+   * 如果指定了 relatedTaskId，自动建立 task_has_prompt 关系。
+   */
+  savePrompt(input: PromptInput): Prompt;
+
+  /**
+   * 列出 Prompt（支持按日期、关联任务过滤）
+   */
+  listPrompts(filter?: {
+    /** 按日期过滤 (格式 YYYY-MM-DD) */
+    date?: string;
+    /** 按关联主任务 ID 过滤 */
+    relatedTaskId?: string;
+    /** 最大返回条数 */
+    limit?: number;
+  }): Prompt[];
+
+  /**
+   * 获取主任务关联的所有 Prompt
+   */
+  getTaskRelatedPrompts?(taskId: string): Prompt[];
 
   // ==========================================================================
   // Utility

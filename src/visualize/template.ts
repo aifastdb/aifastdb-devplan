@@ -152,6 +152,9 @@ export function getVisualizationHTML(projectName: string): string {
     .legend { background: #1f2937; border-top: 1px solid #374151; padding: 6px 24px; display: flex; flex-wrap: wrap; align-items: center; justify-content: center; gap: 10px 20px; font-size: 12px; color: #9ca3af; }
     .legend-filters { display: flex; align-items: center; gap: 8px; }
     .legend-divider { width: 1px; height: 18px; background: #374151; }
+    .legend-engine-badge { display: flex; align-items: center; gap: 5px; font-size: 11px; color: #6b7280; padding: 2px 8px; border-radius: 4px; background: rgba(99,102,241,0.08); border: 1px solid #1e293b; white-space: nowrap; cursor: pointer; transition: all 0.2s; }
+    .legend-engine-badge:hover { border-color: #4b5563; color: #a5b4fc; background: rgba(99,102,241,0.15); }
+    .legend-engine-badge .engine-name { font-weight: 600; color: #818cf8; }
     .legend-refresh-btn { display: flex; align-items: center; justify-content: center; background: none; border: 1px solid #374151; border-radius: 4px; padding: 3px 6px; cursor: pointer; color: #9ca3af; transition: color 0.2s, border-color 0.2s, background 0.2s; }
     .legend-refresh-btn:hover { color: #60a5fa; border-color: #60a5fa; background: rgba(96,165,250,0.08); }
     .legend-refresh-btn:active { color: #3b82f6; }
@@ -207,6 +210,57 @@ export function getVisualizationHTML(projectName: string): string {
     .page-view { display: none; }
     .page-view.active { display: flex; flex-direction: column; flex: 1; min-height: 0; }
     .page-graph.active { display: flex; flex-direction: column; flex: 1; min-height: 0; }
+
+    /* Settings Page */
+    .settings-page { padding: 32px 40px; overflow-y: auto; background: #111827; flex: 1; max-width: 720px; }
+    .settings-page h2 { font-size: 22px; font-weight: 700; color: #f3f4f6; margin-bottom: 4px; }
+    .settings-page .settings-subtitle { font-size: 13px; color: #6b7280; margin-bottom: 28px; }
+    .settings-section { margin-bottom: 32px; }
+    .settings-section-title { font-size: 14px; font-weight: 600; color: #d1d5db; margin-bottom: 14px; padding-bottom: 8px; border-bottom: 1px solid #1e293b; display: flex; align-items: center; gap: 8px; }
+    .settings-option-group { display: flex; flex-direction: column; gap: 10px; }
+    .settings-radio-card { display: flex; align-items: flex-start; gap: 12px; padding: 14px 16px; border-radius: 10px; border: 2px solid #1e293b; background: #0f172a; cursor: pointer; transition: all 0.2s; }
+    .settings-radio-card:hover { border-color: #374151; background: #1e293b; }
+    .settings-radio-card.selected { border-color: #6366f1; background: rgba(99,102,241,0.08); }
+    .settings-radio-card input[type="radio"] { margin-top: 3px; accent-color: #6366f1; flex-shrink: 0; width: 16px; height: 16px; cursor: pointer; }
+    .settings-radio-card .radio-content { flex: 1; min-width: 0; }
+    .settings-radio-card .radio-label { font-size: 14px; font-weight: 600; color: #e5e7eb; display: flex; align-items: center; gap: 8px; }
+    .settings-radio-card .radio-label .default-badge { font-size: 10px; padding: 1px 6px; border-radius: 4px; background: #374151; color: #9ca3af; font-weight: 500; }
+    .settings-radio-card .radio-desc { font-size: 12px; color: #6b7280; margin-top: 4px; line-height: 1.5; }
+    .settings-radio-card.selected .radio-label { color: #a5b4fc; }
+    .settings-radio-card.selected .radio-desc { color: #818cf8; }
+    .settings-saved-toast { position: fixed; bottom: 24px; right: 24px; background: #059669; color: #fff; padding: 10px 20px; border-radius: 8px; font-size: 13px; font-weight: 500; box-shadow: 0 4px 16px rgba(0,0,0,0.4); z-index: 100; opacity: 0; transform: translateY(10px); transition: all 0.3s ease; pointer-events: none; }
+    .settings-saved-toast.show { opacity: 1; transform: translateY(0); }
+    /* 3D Settings Panel */
+    .settings-3d-panel { margin-top: 16px; padding: 16px; border-radius: 10px; border: 1px solid #1e293b; background: #0f172a; }
+    .settings-3d-panel.collapsed .s3d-body { display: none; }
+    .s3d-header { display: flex; align-items: center; justify-content: space-between; cursor: pointer; user-select: none; padding: 4px 0; }
+    .s3d-header-title { font-size: 13px; font-weight: 600; color: #c7d2fe; display: flex; align-items: center; gap: 6px; }
+    .s3d-header-arrow { font-size: 11px; color: #6b7280; transition: transform 0.2s; }
+    .settings-3d-panel.collapsed .s3d-header-arrow { transform: rotate(-90deg); }
+    .s3d-body { margin-top: 14px; display: flex; flex-direction: column; gap: 14px; }
+    .s3d-group { display: flex; flex-direction: column; gap: 10px; }
+    .s3d-group-title { font-size: 12px; font-weight: 600; color: #94a3b8; margin-bottom: 2px; text-transform: uppercase; letter-spacing: 0.5px; }
+    .s3d-row { display: flex; align-items: center; gap: 10px; }
+    .s3d-label { font-size: 12px; color: #9ca3af; min-width: 80px; flex-shrink: 0; }
+    .s3d-slider { flex: 1; -webkit-appearance: none; appearance: none; height: 4px; border-radius: 2px; background: #374151; outline: none; cursor: pointer; }
+    .s3d-slider::-webkit-slider-thumb { -webkit-appearance: none; width: 14px; height: 14px; border-radius: 50%; background: #6366f1; cursor: pointer; border: 2px solid #1e1b4b; }
+    .s3d-slider::-moz-range-thumb { width: 14px; height: 14px; border-radius: 50%; background: #6366f1; cursor: pointer; border: 2px solid #1e1b4b; }
+    .s3d-value { font-size: 11px; color: #6366f1; font-weight: 600; min-width: 36px; text-align: right; font-family: monospace; }
+    .s3d-color-row { display: flex; align-items: center; gap: 10px; }
+    .s3d-color-label { font-size: 12px; color: #9ca3af; flex: 1; display: flex; align-items: center; gap: 6px; }
+    .s3d-color-label .s3d-dot { width: 10px; height: 10px; border-radius: 3px; flex-shrink: 0; }
+    .s3d-color-input { width: 32px; height: 24px; border: 1px solid #374151; border-radius: 4px; background: transparent; cursor: pointer; padding: 0; }
+    .s3d-color-hex { font-size: 11px; color: #6b7280; font-family: monospace; min-width: 60px; }
+    .s3d-toggle-row { display: flex; align-items: center; justify-content: space-between; }
+    .s3d-toggle-label { font-size: 12px; color: #9ca3af; }
+    .s3d-toggle { position: relative; width: 36px; height: 20px; cursor: pointer; }
+    .s3d-toggle input { opacity: 0; width: 0; height: 0; }
+    .s3d-toggle-slider { position: absolute; top: 0; left: 0; right: 0; bottom: 0; background: #374151; border-radius: 10px; transition: 0.2s; }
+    .s3d-toggle-slider:before { content: ''; position: absolute; height: 14px; width: 14px; left: 3px; bottom: 3px; background: #fff; border-radius: 50%; transition: 0.2s; }
+    .s3d-toggle input:checked + .s3d-toggle-slider { background: #6366f1; }
+    .s3d-toggle input:checked + .s3d-toggle-slider:before { transform: translateX(16px); }
+    .s3d-reset-btn { margin-top: 8px; padding: 6px 14px; border: 1px solid #374151; border-radius: 6px; background: transparent; color: #9ca3af; font-size: 11px; cursor: pointer; transition: all 0.2s; align-self: flex-start; }
+    .s3d-reset-btn:hover { background: #1e293b; color: #e5e7eb; border-color: #4b5563; }
 
     /* Stats Dashboard */
     .stats-page { padding: 24px; overflow-y: auto; background: #111827; flex: 1; }
@@ -460,11 +514,10 @@ export function getVisualizationHTML(projectName: string): string {
       </div>
     </div>
     <div class="sidebar-footer">
-      <div class="nav-item disabled" data-page="settings" onclick="navTo('settings')">
+      <div class="nav-item" data-page="settings" onclick="navTo('settings')">
         <span class="nav-item-icon">⚙️</span>
         <span class="nav-item-text">项目设置</span>
-        <span class="nav-item-badge">即将推出</span>
-        <span class="nav-tooltip">项目设置 (即将推出)</span>
+        <span class="nav-tooltip">项目设置</span>
       </div>
     </div>
   </div>
@@ -505,6 +558,11 @@ export function getVisualizationHTML(projectName: string): string {
 
       <!-- Legend + Filters (merged) -->
       <div class="legend">
+        <!-- 加载引擎标识 -->
+        <div class="legend-engine-badge" id="engineBadge" onclick="navTo('settings')" title="点击前往项目设置切换加载引擎">
+          ⚡ 加载引擎: <span class="engine-name" id="engineNameLabel">vis-network</span>
+        </div>
+        <div class="legend-divider"></div>
         <!-- 刷新按钮 -->
         <button class="legend-refresh-btn" id="legendRefreshBtn" onclick="manualRefresh()" title="刷新数据 (F5)">
           <svg class="legend-refresh-icon" id="legendRefreshIcon" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><path d="M21 2v6h-6"/><path d="M3 12a9 9 0 0 1 15-6.7L21 8"/><path d="M3 22v-6h6"/><path d="M21 12a9 9 0 0 1-15 6.7L3 16"/></svg>
@@ -610,8 +668,208 @@ export function getVisualizationHTML(projectName: string): string {
       </div>
     </div>
 
+    <!-- ===== PAGE: Settings ===== -->
+    <div class="page-view" id="pageSettings">
+      <div class="settings-page">
+        <h2>⚙️ 项目设置</h2>
+        <p class="settings-subtitle">配置 ${projectName} 项目的可视化与交互选项</p>
+
+        <div class="settings-section">
+          <div class="settings-section-title">🖥️ 加载引擎</div>
+          <div class="settings-option-group" id="rendererOptions">
+            <label class="settings-radio-card selected" data-value="vis" onclick="selectRenderer('vis')">
+              <input type="radio" name="renderer" value="vis" checked>
+              <div class="radio-content">
+                <div class="radio-label">vis-network <span class="default-badge">默认</span></div>
+                <div class="radio-desc">基于 vis.js 的成熟图可视化库。使用 Canvas 2D 渲染，内置物理引擎力导向布局，支持节点拖拽、缩放、选中高亮等完整交互。适合中小规模图谱（< 2000 节点），生态成熟、兼容性好。</div>
+              </div>
+            </label>
+            <label class="settings-radio-card" data-value="3d" onclick="selectRenderer('3d')">
+              <input type="radio" name="renderer" value="3d">
+              <div class="radio-content">
+                <div class="radio-label">3D Force Graph <span style="font-size:10px;padding:1px 6px;border-radius:4px;background:linear-gradient(135deg,#7c3aed,#3b82f6);color:#e0e7ff;font-weight:500;">Three.js</span></div>
+                <div class="radio-desc">基于 Three.js + d3-force-3d 的 3D 球体可视化引擎。节点在三维空间中浮动、旋转、缩放，整体呈球形分布。支持 WebGL 硬件加速渲染、轨道控制器旋转视角、节点拖拽固定、流动粒子特效。适合沉浸式图谱探索。</div>
+              </div>
+            </label>
+          </div>
+        </div>
+
+        <!-- 通用图谱显示设置 (适用于所有引擎) -->
+        <div class="settings-section">
+          <div class="settings-section-title">🔗 图谱显示</div>
+          <div class="settings-3d-panel">
+            <div class="s3d-body" style="margin-top:0;">
+              <div class="s3d-group">
+                <div class="s3d-toggle-row">
+                  <span class="s3d-toggle-label">显示主节点连线 <span style="font-size:10px;color:#6b7280;margin-left:4px;">(项目节点 ↔ 周围节点的连线)</span></span>
+                  <label class="s3d-toggle"><input type="checkbox" id="settingShowProjectEdges" onchange="updateGraphSetting('showProjectEdges',this.checked)"><span class="s3d-toggle-slider"></span></label>
+                </div>
+              </div>
+            </div>
+          </div>
+        </div>
+
+        <!-- 3D Force Graph 自定义设置 (仅 3D 引擎时显示) -->
+        <div class="settings-section" id="settings3dSection" style="display:none;">
+          <div class="settings-section-title">🎛️ 3D Force Graph 参数</div>
+
+          <!-- 力导向物理参数 -->
+          <div class="settings-3d-panel" id="s3dPhysics">
+            <div class="s3d-header" onclick="toggle3DPanel('s3dPhysics')">
+              <div class="s3d-header-title">⚡ 力导向物理参数</div>
+              <span class="s3d-header-arrow">▼</span>
+            </div>
+            <div class="s3d-body">
+              <div class="s3d-group">
+                <div class="s3d-row">
+                  <span class="s3d-label">中心引力</span>
+                  <input type="range" class="s3d-slider" id="s3dGravity" min="0.01" max="0.30" step="0.01" value="0.05" oninput="update3DSetting('gravity',this.value)">
+                  <span class="s3d-value" id="s3dGravityVal">0.05</span>
+                </div>
+                <div class="s3d-row">
+                  <span class="s3d-label">排斥力</span>
+                  <input type="range" class="s3d-slider" id="s3dRepulsion" min="-300" max="-5" step="5" value="-30" oninput="update3DSetting('repulsion',this.value)">
+                  <span class="s3d-value" id="s3dRepulsionVal">-30</span>
+                </div>
+                <div class="s3d-row">
+                  <span class="s3d-label">连接距离</span>
+                  <input type="range" class="s3d-slider" id="s3dLinkDist" min="10" max="120" step="5" value="40" oninput="update3DSetting('linkDistance',this.value)">
+                  <span class="s3d-value" id="s3dLinkDistVal">40</span>
+                </div>
+                <div class="s3d-row">
+                  <span class="s3d-label">速度衰减</span>
+                  <input type="range" class="s3d-slider" id="s3dVelocityDecay" min="0.1" max="0.8" step="0.05" value="0.30" oninput="update3DSetting('velocityDecay',this.value)">
+                  <span class="s3d-value" id="s3dVelocityDecayVal">0.30</span>
+                </div>
+                <div class="s3d-row">
+                  <span class="s3d-label">Alpha衰减</span>
+                  <input type="range" class="s3d-slider" id="s3dAlphaDecay" min="0.005" max="0.05" step="0.005" value="0.020" oninput="update3DSetting('alphaDecay',this.value)">
+                  <span class="s3d-value" id="s3dAlphaDecayVal">0.020</span>
+                </div>
+              </div>
+            </div>
+          </div>
+
+          <!-- 节点颜色 -->
+          <div class="settings-3d-panel" id="s3dColors">
+            <div class="s3d-header" onclick="toggle3DPanel('s3dColors')">
+              <div class="s3d-header-title">🎨 节点颜色</div>
+              <span class="s3d-header-arrow">▼</span>
+            </div>
+            <div class="s3d-body">
+              <div class="s3d-group">
+                <div class="s3d-color-row">
+                  <span class="s3d-color-label"><span class="s3d-dot" style="background:#fbbf24;border-radius:50%;"></span> 项目</span>
+                  <input type="color" class="s3d-color-input" id="s3dColorProject" value="#fbbf24" oninput="update3DColor('project',this.value)">
+                  <span class="s3d-color-hex" id="s3dColorProjectHex">#fbbf24</span>
+                </div>
+                <div class="s3d-color-row">
+                  <span class="s3d-color-label"><span class="s3d-dot" style="background:#ff6600;"></span> 模块</span>
+                  <input type="color" class="s3d-color-input" id="s3dColorModule" value="#ff6600" oninput="update3DColor('module',this.value)">
+                  <span class="s3d-color-hex" id="s3dColorModuleHex">#ff6600</span>
+                </div>
+                <div class="s3d-color-row">
+                  <span class="s3d-color-label"><span class="s3d-dot" style="background:#15803d;border-radius:50%;"></span> 主任务</span>
+                  <input type="color" class="s3d-color-input" id="s3dColorMainTask" value="#15803d" oninput="update3DColor('main-task',this.value)">
+                  <span class="s3d-color-hex" id="s3dColorMainTaskHex">#15803d</span>
+                </div>
+                <div class="s3d-color-row">
+                  <span class="s3d-color-label"><span class="s3d-dot" style="background:#22c55e;border-radius:50%;"></span> 子任务</span>
+                  <input type="color" class="s3d-color-input" id="s3dColorSubTask" value="#22c55e" oninput="update3DColor('sub-task',this.value)">
+                  <span class="s3d-color-hex" id="s3dColorSubTaskHex">#22c55e</span>
+                </div>
+                <div class="s3d-color-row">
+                  <span class="s3d-color-label"><span class="s3d-dot" style="background:#38bdf8;"></span> 文档</span>
+                  <input type="color" class="s3d-color-input" id="s3dColorDocument" value="#38bdf8" oninput="update3DColor('document',this.value)">
+                  <span class="s3d-color-hex" id="s3dColorDocumentHex">#38bdf8</span>
+                </div>
+              </div>
+            </div>
+          </div>
+
+          <!-- 节点大小 -->
+          <div class="settings-3d-panel" id="s3dSizes">
+            <div class="s3d-header" onclick="toggle3DPanel('s3dSizes')">
+              <div class="s3d-header-title">📐 节点大小</div>
+              <span class="s3d-header-arrow">▼</span>
+            </div>
+            <div class="s3d-body">
+              <div class="s3d-group">
+                <div class="s3d-row">
+                  <span class="s3d-label">项目</span>
+                  <input type="range" class="s3d-slider" id="s3dSizeProject" min="10" max="80" step="5" value="40" oninput="update3DSetting('sizeProject',this.value)">
+                  <span class="s3d-value" id="s3dSizeProjectVal">40</span>
+                </div>
+                <div class="s3d-row">
+                  <span class="s3d-label">模块</span>
+                  <input type="range" class="s3d-slider" id="s3dSizeModule" min="5" max="40" step="1" value="18" oninput="update3DSetting('sizeModule',this.value)">
+                  <span class="s3d-value" id="s3dSizeModuleVal">18</span>
+                </div>
+                <div class="s3d-row">
+                  <span class="s3d-label">主任务</span>
+                  <input type="range" class="s3d-slider" id="s3dSizeMainTask" min="3" max="25" step="1" value="10" oninput="update3DSetting('sizeMainTask',this.value)">
+                  <span class="s3d-value" id="s3dSizeMainTaskVal">10</span>
+                </div>
+                <div class="s3d-row">
+                  <span class="s3d-label">子任务</span>
+                  <input type="range" class="s3d-slider" id="s3dSizeSubTask" min="1" max="15" step="1" value="3" oninput="update3DSetting('sizeSubTask',this.value)">
+                  <span class="s3d-value" id="s3dSizeSubTaskVal">3</span>
+                </div>
+                <div class="s3d-row">
+                  <span class="s3d-label">文档</span>
+                  <input type="range" class="s3d-slider" id="s3dSizeDocument" min="1" max="15" step="1" value="4" oninput="update3DSetting('sizeDocument',this.value)">
+                  <span class="s3d-value" id="s3dSizeDocumentVal">4</span>
+                </div>
+              </div>
+            </div>
+          </div>
+
+          <!-- 视觉效果 -->
+          <div class="settings-3d-panel" id="s3dVisual">
+            <div class="s3d-header" onclick="toggle3DPanel('s3dVisual')">
+              <div class="s3d-header-title">✨ 视觉效果</div>
+              <span class="s3d-header-arrow">▼</span>
+            </div>
+            <div class="s3d-body">
+              <div class="s3d-group">
+                <div class="s3d-toggle-row">
+                  <span class="s3d-toggle-label">流动粒子特效</span>
+                  <label class="s3d-toggle"><input type="checkbox" id="s3dParticles" checked onchange="update3DSetting('particles',this.checked)"><span class="s3d-toggle-slider"></span></label>
+                </div>
+                <div class="s3d-toggle-row">
+                  <span class="s3d-toggle-label">方向箭头</span>
+                  <label class="s3d-toggle"><input type="checkbox" id="s3dArrows" onchange="update3DSetting('arrows',this.checked)"><span class="s3d-toggle-slider"></span></label>
+                </div>
+                <div class="s3d-row">
+                  <span class="s3d-label">节点透明度</span>
+                  <input type="range" class="s3d-slider" id="s3dNodeOpacity" min="0.3" max="1.0" step="0.05" value="0.92" oninput="update3DSetting('nodeOpacity',this.value)">
+                  <span class="s3d-value" id="s3dNodeOpacityVal">0.92</span>
+                </div>
+                <div class="s3d-row">
+                  <span class="s3d-label">边透明度</span>
+                  <input type="range" class="s3d-slider" id="s3dLinkOpacity" min="0.05" max="1.0" step="0.05" value="0.25" oninput="update3DSetting('linkOpacity',this.value)">
+                  <span class="s3d-value" id="s3dLinkOpacityVal">0.25</span>
+                </div>
+                <div class="s3d-color-row">
+                  <span class="s3d-color-label">背景色</span>
+                  <input type="color" class="s3d-color-input" id="s3dBgColor" value="#0a0e1a" oninput="update3DSetting('bgColor',this.value);document.getElementById('s3dBgColorHex').textContent=this.value;">
+                  <span class="s3d-color-hex" id="s3dBgColorHex">#0a0e1a</span>
+                </div>
+              </div>
+            </div>
+          </div>
+
+          <button class="s3d-reset-btn" onclick="reset3DSettings()">↩ 恢复默认设置</button>
+        </div>
+
+      </div>
+    </div>
+
   </div>
 </div>
+
+<!-- Settings Toast -->
+<div class="settings-saved-toast" id="settingsSavedToast">✅ 引擎修改成功，正在重新加载页面...</div>
 
 <!-- Stats Modal -->
 <div class="stats-modal-overlay" id="statsModalOverlay">
@@ -649,7 +907,7 @@ function updateStatsModalPosition() {
 }
 
 var currentPage = 'graph';
-var pageMap = { graph: 'pageGraph', stats: 'pageStats', docs: 'pageDocs' };
+var pageMap = { graph: 'pageGraph', stats: 'pageStats', docs: 'pageDocs', settings: 'pageSettings' };
 
 function navTo(page) {
   // 仅支持已实现的页面
@@ -695,6 +953,270 @@ function navTo(page) {
   } catch(e) {}
 })();
 
+// ========== Settings Page ==========
+function selectRenderer(value) {
+  // Skip if already the current engine
+  if (value === RENDERER_ENGINE) return;
+
+  var cards = document.querySelectorAll('#rendererOptions .settings-radio-card');
+  for (var i = 0; i < cards.length; i++) {
+    var card = cards[i];
+    var radio = card.querySelector('input[type="radio"]');
+    if (card.getAttribute('data-value') === value) {
+      card.classList.add('selected');
+      if (radio) radio.checked = true;
+    } else {
+      card.classList.remove('selected');
+      if (radio) radio.checked = false;
+    }
+  }
+  // Persist to localStorage
+  try { localStorage.setItem('devplan_renderer_engine', value); } catch(e) {}
+  // Show/hide 3D settings section
+  var sec = document.getElementById('settings3dSection');
+  if (sec) sec.style.display = (value === '3d') ? 'block' : 'none';
+  // Show toast then auto-reload
+  var engineLabel = value === '3d' ? '3D Force Graph' : 'vis-network';
+  showSettingsToast('✅ 引擎已切换为 ' + engineLabel + '，正在重新加载...');
+  // Auto-reload after a short delay so user can see the toast
+  setTimeout(function() { location.reload(); }, 1200);
+}
+
+function showSettingsToast(message) {
+  var toast = document.getElementById('settingsSavedToast');
+  if (!toast) return;
+  if (message) toast.textContent = message;
+  toast.classList.add('show');
+  clearTimeout(toast._timer);
+  toast._timer = setTimeout(function() { toast.classList.remove('show'); }, 3000);
+}
+
+// Initialize settings page state on load
+(function() {
+  try {
+    var saved = localStorage.getItem('devplan_renderer_engine');
+    // 兼容旧值 graphcanvas → 3d
+    if (saved === 'graphcanvas') saved = '3d';
+    if (saved === '3d' || saved === 'vis') {
+      // Sync radio cards to saved value
+      var cards = document.querySelectorAll('#rendererOptions .settings-radio-card');
+      for (var i = 0; i < cards.length; i++) {
+        var card = cards[i];
+        var radio = card.querySelector('input[type="radio"]');
+        if (card.getAttribute('data-value') === saved) {
+          card.classList.add('selected');
+          if (radio) radio.checked = true;
+        } else {
+          card.classList.remove('selected');
+          if (radio) radio.checked = false;
+        }
+      }
+    }
+  } catch(e) {}
+})();
+
+// ========== 通用图谱显示设置 ==========
+var GRAPH_SETTINGS_KEY = 'devplan_graph_settings';
+var GRAPH_SETTINGS_DEFAULTS = {
+  showProjectEdges: false  // 默认隐藏主节点连线
+};
+
+function getGraphSettings() {
+  var settings = {};
+  for (var k in GRAPH_SETTINGS_DEFAULTS) settings[k] = GRAPH_SETTINGS_DEFAULTS[k];
+  try {
+    var saved = localStorage.getItem(GRAPH_SETTINGS_KEY);
+    if (saved) {
+      var parsed = JSON.parse(saved);
+      for (var k in parsed) {
+        if (GRAPH_SETTINGS_DEFAULTS.hasOwnProperty(k)) settings[k] = parsed[k];
+      }
+    }
+  } catch(e) {}
+  return settings;
+}
+
+function saveGraphSettings(settings) {
+  try { localStorage.setItem(GRAPH_SETTINGS_KEY, JSON.stringify(settings)); } catch(e) {}
+}
+
+function updateGraphSetting(key, value) {
+  var settings = getGraphSettings();
+  if (typeof GRAPH_SETTINGS_DEFAULTS[key] === 'boolean') value = !!value;
+  settings[key] = value;
+  saveGraphSettings(settings);
+  showSettingsToast('✅ 显示设置已保存，刷新图谱页面生效');
+}
+
+// Initialize general graph settings UI
+(function() {
+  var s = getGraphSettings();
+  var el = document.getElementById('settingShowProjectEdges');
+  if (el) el.checked = !!s.showProjectEdges;
+})();
+
+// ========== 3D Force Graph 自定义设置 ==========
+var S3D_DEFAULTS = {
+  gravity: 0.05,
+  repulsion: -30,
+  linkDistance: 40,
+  velocityDecay: 0.30,
+  alphaDecay: 0.020,
+  colorProject: '#fbbf24',
+  colorModule: '#ff6600',
+  colorMainTask: '#15803d',
+  colorSubTask: '#22c55e',
+  colorDocument: '#38bdf8',
+  sizeProject: 40,
+  sizeModule: 18,
+  sizeMainTask: 10,
+  sizeSubTask: 3,
+  sizeDocument: 4,
+  particles: true,
+  arrows: false,
+  nodeOpacity: 0.92,
+  linkOpacity: 0.25,
+  bgColor: '#0a0e1a'
+};
+var S3D_KEY = 'devplan_3d_settings';
+
+function get3DSettings() {
+  var settings = {};
+  for (var k in S3D_DEFAULTS) settings[k] = S3D_DEFAULTS[k];
+  try {
+    var saved = localStorage.getItem(S3D_KEY);
+    if (saved) {
+      var parsed = JSON.parse(saved);
+      for (var k in parsed) {
+        if (S3D_DEFAULTS.hasOwnProperty(k)) settings[k] = parsed[k];
+      }
+    }
+  } catch(e) {}
+  return settings;
+}
+
+function save3DSettings(settings) {
+  try { localStorage.setItem(S3D_KEY, JSON.stringify(settings)); } catch(e) {}
+}
+
+function update3DSetting(key, value) {
+  var settings = get3DSettings();
+  // Parse numeric values
+  if (typeof S3D_DEFAULTS[key] === 'number') {
+    value = parseFloat(value);
+  } else if (typeof S3D_DEFAULTS[key] === 'boolean') {
+    value = !!value;
+  }
+  settings[key] = value;
+  save3DSettings(settings);
+  // Update the display value
+  var valEl = document.getElementById('s3d' + key.charAt(0).toUpperCase() + key.slice(1) + 'Val');
+  if (valEl) {
+    if (typeof value === 'number') valEl.textContent = value.toFixed ? (Number.isInteger(value) ? value : value.toFixed(key === 'alphaDecay' ? 3 : 2)) : value;
+    else valEl.textContent = value;
+  }
+  showSettingsToast('✅ 3D 参数已保存，刷新图谱页面生效');
+}
+
+function update3DColor(nodeType, colorValue) {
+  var keyMap = { 'project': 'colorProject', 'module': 'colorModule', 'main-task': 'colorMainTask', 'sub-task': 'colorSubTask', 'document': 'colorDocument' };
+  var key = keyMap[nodeType];
+  if (!key) return;
+  var settings = get3DSettings();
+  settings[key] = colorValue;
+  save3DSettings(settings);
+  // Update hex display
+  var hexMap = { 'project': 's3dColorProjectHex', 'module': 's3dColorModuleHex', 'main-task': 's3dColorMainTaskHex', 'sub-task': 's3dColorSubTaskHex', 'document': 's3dColorDocumentHex' };
+  var hexEl = document.getElementById(hexMap[nodeType]);
+  if (hexEl) hexEl.textContent = colorValue;
+  // Update dot color
+  var dotMap = { 'project': 's3dColorProject', 'module': 's3dColorModule', 'main-task': 's3dColorMainTask', 'sub-task': 's3dColorSubTask', 'document': 's3dColorDocument' };
+  var input = document.getElementById(dotMap[nodeType]);
+  if (input) {
+    var dot = input.parentElement.querySelector('.s3d-dot');
+    if (dot) dot.style.background = colorValue;
+  }
+  showSettingsToast('✅ 节点颜色已保存，刷新图谱页面生效');
+}
+
+function reset3DSettings() {
+  try { localStorage.removeItem(S3D_KEY); } catch(e) {}
+  init3DSettingsUI();
+  showSettingsToast('↩ 已恢复 3D 默认设置，刷新图谱页面生效');
+}
+
+function toggle3DPanel(panelId) {
+  var panel = document.getElementById(panelId);
+  if (panel) panel.classList.toggle('collapsed');
+}
+
+function init3DSettingsUI() {
+  var s = get3DSettings();
+  // Show/hide 3D section based on engine
+  var sec = document.getElementById('settings3dSection');
+  if (sec) {
+    var engine = 'vis';
+    try { engine = localStorage.getItem('devplan_renderer_engine') || 'vis'; } catch(e) {}
+    if (engine === 'graphcanvas') engine = '3d';
+    sec.style.display = (engine === '3d') ? 'block' : 'none';
+  }
+
+  // Physics
+  var sliderMap = {
+    's3dGravity': { key: 'gravity', fmt: 2 },
+    's3dRepulsion': { key: 'repulsion', fmt: 0 },
+    's3dLinkDist': { key: 'linkDistance', fmt: 0 },
+    's3dVelocityDecay': { key: 'velocityDecay', fmt: 2 },
+    's3dAlphaDecay': { key: 'alphaDecay', fmt: 3 },
+    's3dSizeProject': { key: 'sizeProject', fmt: 0 },
+    's3dSizeModule': { key: 'sizeModule', fmt: 0 },
+    's3dSizeMainTask': { key: 'sizeMainTask', fmt: 0 },
+    's3dSizeSubTask': { key: 'sizeSubTask', fmt: 0 },
+    's3dSizeDocument': { key: 'sizeDocument', fmt: 0 },
+    's3dNodeOpacity': { key: 'nodeOpacity', fmt: 2 },
+    's3dLinkOpacity': { key: 'linkOpacity', fmt: 2 }
+  };
+  for (var id in sliderMap) {
+    var el = document.getElementById(id);
+    var valEl = document.getElementById(id + 'Val');
+    var cfg = sliderMap[id];
+    var v = s[cfg.key];
+    if (el) el.value = v;
+    if (valEl) valEl.textContent = cfg.fmt > 0 ? parseFloat(v).toFixed(cfg.fmt) : Math.round(v);
+  }
+
+  // Colors
+  var colorMap = {
+    's3dColorProject': 'colorProject',
+    's3dColorModule': 'colorModule',
+    's3dColorMainTask': 'colorMainTask',
+    's3dColorSubTask': 'colorSubTask',
+    's3dColorDocument': 'colorDocument',
+    's3dBgColor': 'bgColor'
+  };
+  for (var id in colorMap) {
+    var el = document.getElementById(id);
+    var hexEl = document.getElementById(id + 'Hex');
+    var v = s[colorMap[id]];
+    if (el) el.value = v;
+    if (hexEl) hexEl.textContent = v;
+    if (el) {
+      var dot = el.parentElement.querySelector('.s3d-dot');
+      if (dot) dot.style.background = v;
+    }
+  }
+
+  // Toggles
+  var toggleMap = { 's3dParticles': 'particles', 's3dArrows': 'arrows' };
+  for (var id in toggleMap) {
+    var el = document.getElementById(id);
+    if (el) el.checked = !!s[toggleMap[id]];
+  }
+}
+
+// Initialize 3D settings UI on page load
+init3DSettingsUI();
+
 // ========== Debug ==========
 var dbg = document.getElementById('debug');
 function log(msg, ok) {
@@ -702,19 +1224,32 @@ function log(msg, ok) {
   dbg.innerHTML = (ok ? '<span class="ok">✓</span> ' : '<span class="err">✗</span> ') + msg;
 }
 
-// ========== 渲染引擎选择: GraphCanvas (默认) vs vis-network (兼容) ==========
-// URL 参数 ?renderer=vis 可切回 vis-network 传统引擎; 默认使用 GraphCanvas 高性能引擎
-// Phase-11 完成: 视觉效果已完整移植，GraphCanvas 现为默认引擎
-var RENDERER_ENGINE = 'graphcanvas'; // 'graphcanvas' (默认, 高性能) | 'vis' (兼容)
+// ========== 渲染引擎选择: vis-network (默认) vs 3D Force Graph ==========
+// 优先级: URL 参数 > localStorage (项目设置页) > 默认值 (vis)
+var RENDERER_ENGINE = 'vis'; // 'vis' (默认) | '3d' (3D 球体可视化)
 (function() {
+  // 1. 先从 localStorage 读取用户在项目设置页的选择
+  try {
+    var saved = localStorage.getItem('devplan_renderer_engine');
+    if (saved === '3d' || saved === 'vis') RENDERER_ENGINE = saved;
+    // 兼容旧值 graphcanvas → 自动迁移为 3d
+    if (saved === 'graphcanvas') { RENDERER_ENGINE = '3d'; try { localStorage.setItem('devplan_renderer_engine', '3d'); } catch(e2) {} }
+  } catch(e) {}
+  // 2. URL 参数优先级最高（覆盖 localStorage）
   var params = new URLSearchParams(window.location.search);
   var r = params.get('renderer');
-  if (r === 'graphcanvas' || r === 'gc') RENDERER_ENGINE = 'graphcanvas';
+  if (r === '3d' || r === '3d-force' || r === 'graphcanvas' || r === 'gc') RENDERER_ENGINE = '3d';
   else if (r === 'vis') RENDERER_ENGINE = 'vis';
 })();
-var USE_GRAPH_CANVAS = false; // set after engine loads
+var USE_3D = false; // set after 3d-force-graph engine loads
 
-// ========== SimpleDataSet — vis.DataSet shim for GraphCanvas mode ==========
+// Update engine badge label
+(function() {
+  var label = document.getElementById('engineNameLabel');
+  if (label) label.textContent = RENDERER_ENGINE === '3d' ? '3D Force Graph' : 'vis-network';
+})();
+
+// ========== SimpleDataSet — vis.DataSet shim for non-vis-network modes ==========
 function SimpleDataSet(items) {
   this._data = {};
   this._ids = [];
@@ -773,26 +1308,9 @@ SimpleDataSet.prototype.remove = function(idOrArray) {
 };
 // ========== 动态加载渲染引擎 ==========
 function loadRenderEngine() {
-  if (RENDERER_ENGINE === 'graphcanvas') {
-    // 仅当明确请求时才使用 GraphCanvas 引擎 (?renderer=gc)
-    log('正在加载 GraphCanvas 高性能渲染引擎 (?renderer=gc)...', true);
-    var s = document.createElement('script');
-    s.src = '/graph-canvas.js';
-    s.onload = function() {
-      if (typeof GraphCanvas !== 'undefined' && typeof DevPlanGraph !== 'undefined') {
-        log('GraphCanvas 引擎加载成功 ✓', true);
-        USE_GRAPH_CANVAS = true;
-        startApp();
-      } else {
-        log('GraphCanvas 加载但对象不完整, 回退到 vis-network', false);
-        loadVisNetwork(0);
-      }
-    };
-    s.onerror = function() {
-      log('GraphCanvas 加载失败, 回退到 vis-network', false);
-      loadVisNetwork(0);
-    };
-    document.head.appendChild(s);
+  if (RENDERER_ENGINE === '3d') {
+    log('正在加载 3D Force Graph 引擎 (Three.js + d3-force-3d)...', true);
+    load3DForceGraph(0);
     return;
   }
 
@@ -801,6 +1319,81 @@ function loadRenderEngine() {
   loadVisNetwork(0);
 }
 
+// ── Three.js CDN URLs (必须在 3d-force-graph 之前加载) ──
+var THREE_JS_URLS = [
+  'https://unpkg.com/three@0.160.0/build/three.min.js',
+  'https://cdn.jsdelivr.net/npm/three@0.160.0/build/three.min.js',
+  'https://cdnjs.cloudflare.com/ajax/libs/three.js/0.160.0/three.min.js'
+];
+
+// ── 3D Force Graph CDN URLs ──
+var THREE_D_URLS = [
+  'https://unpkg.com/3d-force-graph@1/dist/3d-force-graph.min.js',
+  'https://cdn.jsdelivr.net/npm/3d-force-graph@1/dist/3d-force-graph.min.js'
+];
+
+function load3DForceGraph(index) {
+  // Step 1: 先加载 Three.js (3d-force-graph 依赖 window.THREE)
+  log('Step 1/2: 加载 Three.js...', true);
+  loadThreeJS(0);
+}
+
+function loadThreeJS(index) {
+  if (index >= THREE_JS_URLS.length) {
+    log('Three.js CDN 均加载失败, 回退到 vis-network', false);
+    loadVisNetwork(0);
+    return;
+  }
+  var url = THREE_JS_URLS[index];
+  log('尝试加载 Three.js CDN #' + (index+1) + ': ' + url.split('/')[2], true);
+  var s = document.createElement('script');
+  s.src = url;
+  s.onload = function() {
+    if (typeof THREE !== 'undefined') {
+      log('Three.js 加载成功 ✓ (r' + (THREE.REVISION || '?') + ')', true);
+      // Step 2: 加载 3d-force-graph
+      log('Step 2/2: 加载 3D Force Graph...', true);
+      loadForceGraph3D(0);
+    } else {
+      log('Three.js CDN #' + (index+1) + ' 加载但 THREE 不存在, 尝试下一个', false);
+      loadThreeJS(index + 1);
+    }
+  };
+  s.onerror = function() {
+    log('Three.js CDN #' + (index+1) + ' 加载失败, 尝试下一个', false);
+    loadThreeJS(index + 1);
+  };
+  document.head.appendChild(s);
+}
+
+function loadForceGraph3D(index) {
+  if (index >= THREE_D_URLS.length) {
+    log('3D Force Graph CDN 均加载失败, 回退到 vis-network', false);
+    loadVisNetwork(0);
+    return;
+  }
+  var url = THREE_D_URLS[index];
+  log('尝试加载 3D Force Graph CDN #' + (index+1) + ': ' + url.split('/')[2], true);
+  var s = document.createElement('script');
+  s.src = url;
+  s.onload = function() {
+    if (typeof ForceGraph3D !== 'undefined') {
+      log('3D Force Graph 引擎加载成功 ✓ (Three.js WebGL)', true);
+      USE_3D = true;
+      startApp();
+    } else {
+      log('3D CDN #' + (index+1) + ' 加载但 ForceGraph3D 不存在, 尝试下一个', false);
+      loadForceGraph3D(index + 1);
+    }
+  };
+  s.onerror = function() {
+    log('3D CDN #' + (index+1) + ' 加载失败, 尝试下一个', false);
+    loadForceGraph3D(index + 1);
+  };
+  document.head.appendChild(s);
+}
+
+// ── vis-network CDN URLs ──
 var VIS_URLS = [
   'https://unpkg.com/vis-network@9.1.9/standalone/umd/vis-network.min.js',
   'https://cdn.jsdelivr.net/npm/vis-network@9.1.9/standalone/umd/vis-network.min.js',
@@ -810,7 +1403,7 @@ var VIS_URLS = [
 function loadVisNetwork(index) {
   if (index >= VIS_URLS.length) {
     log('所有 CDN 均加载失败，请检查网络连接', false);
-    document.getElementById('loading').innerHTML = '<div style="text-align:center"><div style="font-size:48px;margin-bottom:16px;">⚠️</div><p style="color:#f87171;">渲染引擎加载失败</p><p style="color:#9ca3af;margin-top:8px;font-size:13px;">GraphCanvas 和 vis-network CDN 均不可用</p><button class="refresh-btn" onclick="location.reload()" style="margin-top:12px;">刷新页面</button></div>';
+    document.getElementById('loading').innerHTML = '<div style="text-align:center"><div style="font-size:48px;margin-bottom:16px;">⚠️</div><p style="color:#f87171;">渲染引擎加载失败</p><p style="color:#9ca3af;margin-top:8px;font-size:13px;">所有 CDN 均不可用</p><button class="refresh-btn" onclick="location.reload()" style="margin-top:12px;">刷新页面</button></div>';
     return;
   }
   var url = VIS_URLS[index];
@@ -820,7 +1413,7 @@ function loadVisNetwork(index) {
   s.onload = function() {
     if (typeof vis !== 'undefined' && vis.Network && vis.DataSet) {
       log('vis-network 加载成功 (CDN #' + (index+1) + ')', true);
-      USE_GRAPH_CANVAS = false;
+      USE_3D = false;
       startApp();
     } else {
       log('CDN #' + (index+1) + ' 加载但 vis 对象不完整, 尝试下一个', false);
@@ -1361,6 +1954,7 @@ function edgeStyle(edge) {
   if (label === 'has_main_task') return { width: 2, color: { color: EDGE_GRAY, highlight: '#93c5fd', hover: '#93c5fd' }, dashes: false, arrows: { to: { enabled: true, scaleFactor: 0.6 } }, _highlightColor: '#93c5fd' };
   if (label === 'has_sub_task') return { width: 1, color: { color: EDGE_GRAY, highlight: '#818cf8', hover: '#818cf8' }, dashes: false, arrows: { to: { enabled: true, scaleFactor: 0.4 } }, _highlightColor: '#818cf8' };
   if (label === 'has_document') return { width: 1, color: { color: EDGE_GRAY, highlight: '#60a5fa', hover: '#60a5fa' }, dashes: [5, 5], arrows: { to: { enabled: true, scaleFactor: 0.4 } }, _highlightColor: '#60a5fa' };
+  if (label === 'has_module') return { width: 1.5, color: { color: EDGE_GRAY, highlight: '#34d399', hover: '#34d399' }, dashes: [3, 3], arrows: { to: { enabled: true, scaleFactor: 0.5 } }, _highlightColor: '#34d399' };
   if (label === 'module_has_task') return { width: 1.5, color: { color: EDGE_GRAY, highlight: '#34d399', hover: '#34d399' }, dashes: [2, 4], arrows: { to: { enabled: true, scaleFactor: 0.5 } }, _highlightColor: '#34d399' };
   if (label === 'task_has_doc') return { width: 1.5, color: { color: EDGE_GRAY, highlight: '#f59e0b', hover: '#f59e0b' }, dashes: [4, 3], arrows: { to: { enabled: true, scaleFactor: 0.5 } }, _highlightColor: '#f59e0b' };
   if (label === 'doc_has_child') return { width: 1.5, color: { color: EDGE_GRAY, highlight: '#c084fc', hover: '#c084fc' }, dashes: [6, 3], arrows: { to: { enabled: true, scaleFactor: 0.5 } }, _highlightColor: '#c084fc' };
@@ -1376,38 +1970,8 @@ function loadData() {
   document.getElementById('loading').style.display = 'flex';
   log('正在获取图谱数据...', true);
 
-  // 默认全量加载所有节点（模块 + 文档 + 子任务 + 主任务 + 项目）
-  // 确保打开页面时就能看到完整的图谱数据
-  if (!USE_GRAPH_CANVAS) {
-    loadDataFull();
-    return;
-  }
-
-  // GraphCanvas path: full load
-  var graphApiUrl = '/api/graph?includeNodeDegree=' + (INCLUDE_NODE_DEGREE ? 'true' : 'false') +
-    '&enableBackendDegreeFallback=' + (ENABLE_BACKEND_DEGREE_FALLBACK ? 'true' : 'false');
-
-  Promise.all([
-    fetch(graphApiUrl).then(function(r) { return r.json(); }),
-    fetch('/api/progress').then(function(r) { return r.json(); })
-  ]).then(function(results) {
-    var graphRes = results[0];
-    var progressRes = results[1];
-    allNodes = graphRes.nodes || [];
-    allEdges = graphRes.edges || [];
-    log('数据获取成功: ' + allNodes.length + ' 节点, ' + allEdges.length + ' 边', true);
-    renderStats(progressRes, graphRes);
-
-    // Phase-8C: If data is large and GraphCanvas is active, use chunked loading
-    if (USE_GRAPH_CANVAS && allNodes.length > CHUNK_THRESHOLD) {
-      renderGraphChunked();
-    } else {
-    renderGraph();
-    }
-  }).catch(function(err) {
-    log('数据获取失败: ' + err.message, false);
-    document.getElementById('loading').innerHTML = '<div style="text-align:center"><div style="font-size:48px;margin-bottom:16px;">⚠️</div><p style="color:#f87171;">数据加载失败: ' + err.message + '</p><button class="refresh-btn" onclick="loadData()" style="margin-top:12px;">重试</button></div>';
-  });
+  // 统一使用全量加载（vis-network 和 3D Force Graph 均适用）
+  loadDataFull();
 }
 
 /**
@@ -1694,7 +2258,7 @@ function updateTieredIndicator() {
   var loadAllBtn = document.getElementById('loadAllBtn');
   if (!indicator || !loadAllBtn) return;
 
-  if (!USE_GRAPH_CANVAS && tieredLoadState.l0l1Loaded && !tieredLoadState.l2Loaded) {
+  if (!USE_3D && tieredLoadState.l0l1Loaded && !tieredLoadState.l2Loaded) {
     // Tiered mode active
     var expandedCount = Object.keys(tieredLoadState.expandedPhases).length;
     indicator.style.display = 'inline';
@@ -1892,17 +2456,25 @@ function renderGraphChunked() {
       });
     }
     var visibleIds = {};
-    for (var i = 0; i < visibleNodes.length; i++) visibleIds[visibleNodes[i].id] = true;
+    var _chunkProjectIds = {};
+    for (var i = 0; i < visibleNodes.length; i++) {
+      visibleIds[visibleNodes[i].id] = true;
+      if (visibleNodes[i]._type === 'project') _chunkProjectIds[visibleNodes[i].id] = true;
+    }
+    var _chunkGraphSettings = getGraphSettings();
+    var _chunkHideProjectEdges = !_chunkGraphSettings.showProjectEdges;
     var visibleEdges = [];
     for (var i = 0; i < firstChunkEdges.length; i++) {
       var e = firstChunkEdges[i];
       if (!visibleIds[e.from] || !visibleIds[e.to]) continue;
+      var _chunkIsProjectEdge = _chunkHideProjectEdges && (_chunkProjectIds[e.from] || _chunkProjectIds[e.to]);
       var es = edgeStyle(e);
       visibleEdges.push({
         id: 'e' + i, from: e.from, to: e.to,
         width: es.width, _origWidth: es.width,
         color: es.color, dashes: es.dashes, arrows: es.arrows,
         _label: e.label, _highlightColor: es._highlightColor || '#9ca3af',
+        _projectEdgeHidden: !!_chunkIsProjectEdge, hidden: !!_chunkIsProjectEdge,
       });
     }
 
@@ -1959,6 +2531,7 @@ function renderGraphChunked() {
           x: n.x || 0, y: n.y || 0,
         });
         loadedNodeIds[n.id] = true;
+        if (n.type === 'project') _chunkProjectIds[n.id] = true;
       }
 
       // Edges for this chunk (both endpoints must be loaded)
@@ -1966,12 +2539,14 @@ function renderGraphChunked() {
       for (var i = 0; i < allEdges.length; i++) {
         var e = allEdges[i];
         if (loadedNodeIds[e.from] && loadedNodeIds[e.to]) {
+          var _chkIsProjectEdge = _chunkHideProjectEdges && (_chunkProjectIds[e.from] || _chunkProjectIds[e.to]);
           var es = edgeStyle(e);
           chunkEdges.push({
             id: 'ec' + chunkIndex + '_' + i, from: e.from, to: e.to,
             width: es.width, _origWidth: es.width,
             color: es.color, dashes: es.dashes, arrows: es.arrows,
             _label: e.label, _highlightColor: es._highlightColor || '#9ca3af',
+            _projectEdgeHidden: !!_chkIsProjectEdge, hidden: !!_chkIsProjectEdge,
           });
         }
       }
@@ -2048,6 +2623,604 @@ function renderStats(progress, graph) {
     '<div class="stat"><div class="progress-bar"><div class="progress-fill" style="width:' + pct + '%"></div></div><span>' + pct + '%</span></div>';
 }
 
+// ========== 3D Force Graph Rendering ==========
+// 从自定义设置中加载颜色和大小 (用户可在项目设置页修改)
+function load3DColorsFromSettings() {
+  var s = get3DSettings();
+  return {
+    'project':   s.colorProject,
+    'module':    s.colorModule,
+    'main-task': s.colorMainTask,
+    'sub-task':  s.colorSubTask,
+    'document':  s.colorDocument
+  };
+}
+function load3DSizesFromSettings() {
+  var s = get3DSettings();
+  return {
+    'project':   s.sizeProject,
+    'module':    s.sizeModule,
+    'main-task': s.sizeMainTask,
+    'sub-task':  s.sizeSubTask,
+    'document':  s.sizeDocument
+  };
+}
+var NODE_3D_COLORS = load3DColorsFromSettings();
+var NODE_3D_SIZES = load3DSizesFromSettings();
+// 状态 → 颜色覆盖 (主任务/子任务)
+var STATUS_3D_COLORS = {
+  'completed':   '#22c55e',
+  'in_progress': '#f59e0b',
+  'pending':     null,  // 使用默认类型色
+  'cancelled':   '#6b7280'
+};
+
+function get3DNodeColor(node) {
+  var t = node._type || 'sub-task';
+  // 任务类型根据状态着色
+  if (t === 'main-task' || t === 'sub-task') {
+    var status = (node._props || {}).status || 'pending';
+    var sc = STATUS_3D_COLORS[status];
+    if (sc) return sc;
+  }
+  return NODE_3D_COLORS[t] || '#6b7280';
+}
+
+function get3DLinkColor(link) {
+  var label = link._label || '';
+  if (label === 'has_main_task') return 'rgba(147,197,253,0.18)';
+  if (label === 'has_sub_task')  return 'rgba(129,140,248,0.12)';
+  if (label === 'has_document')  return 'rgba(96,165,250,0.10)';
+  if (label === 'has_module')    return 'rgba(52,211,153,0.18)';
+  if (label === 'module_has_task') return 'rgba(52,211,153,0.15)';
+  if (label === 'doc_has_child') return 'rgba(192,132,252,0.12)';
+  return 'rgba(75,85,99,0.10)';
+}
+
+/** 创建发光纹理 (radial gradient → 用于 Sprite 的光晕效果) */
+function createGlowTexture(color, size) {
+  var canvas = document.createElement('canvas');
+  canvas.width = size || 64;
+  canvas.height = size || 64;
+  var ctx = canvas.getContext('2d');
+  var cx = canvas.width / 2, cy = canvas.height / 2, r = canvas.width / 2;
+  var gradient = ctx.createRadialGradient(cx, cy, 0, cx, cy, r);
+  gradient.addColorStop(0, color || 'rgba(255,255,255,0.8)');
+  gradient.addColorStop(0.15, color ? colorWithAlpha(color, 0.5) : 'rgba(255,255,255,0.5)');
+  gradient.addColorStop(0.4, color ? colorWithAlpha(color, 0.15) : 'rgba(255,255,255,0.15)');
+  gradient.addColorStop(1, 'rgba(0,0,0,0)');
+  ctx.fillStyle = gradient;
+  ctx.fillRect(0, 0, canvas.width, canvas.height);
+  return canvas;
+}
+
+/** 从 hex/rgb 颜色生成带 alpha 的 rgba 字符串 */
+function colorWithAlpha(hex, alpha) {
+  if (hex.startsWith('rgba')) return hex; // 已经是 rgba
+  // hex → rgb
+  var r = 0, g = 0, b = 0;
+  if (hex.startsWith('#')) {
+    if (hex.length === 4) {
+      r = parseInt(hex[1]+hex[1], 16); g = parseInt(hex[2]+hex[2], 16); b = parseInt(hex[3]+hex[3], 16);
+    } else {
+      r = parseInt(hex.slice(1,3), 16); g = parseInt(hex.slice(3,5), 16); b = parseInt(hex.slice(5,7), 16);
+    }
+  }
+  return 'rgba(' + r + ',' + g + ',' + b + ',' + alpha + ')';
+}
+
+// 缓存 glow 纹理 (避免每个节点重复创建)
+var _glowTextureCache = {};
+
+/**
+ * 3D Force Graph 渲染器
+ * 使用 Three.js WebGL + d3-force-3d 实现 3D 球体力导向可视化
+ */
+function render3DGraph(container, visibleNodes, visibleEdges) {
+  log('正在创建 3D Force Graph (Three.js WebGL)...', true);
+
+  // 清空容器
+  container.innerHTML = '';
+
+  // ── 从自定义设置加载参数 ──
+  var _s3d = get3DSettings();
+  // 重新加载颜色和大小（确保使用最新设置）
+  NODE_3D_COLORS = load3DColorsFromSettings();
+  NODE_3D_SIZES = load3DSizesFromSettings();
+
+  // ── 高亮状态追踪 ──
+  var _3dSelectedNodeId = null;       // 当前选中节点 ID
+  var _3dHighlightLinks = new Set();  // 选中节点的关联边 Set
+  var _3dHighlightNodes = new Set();  // 选中节点 + 邻居节点 Set
+
+  // 边类型 → 高亮色映射（与 vis-network edgeStyle 对齐）
+  var LINK_HIGHLIGHT_COLORS = {
+    'has_main_task':   '#93c5fd',
+    'has_sub_task':    '#818cf8',
+    'has_document':    '#60a5fa',
+    'has_module':      '#34d399',
+    'module_has_task': '#34d399',
+    'task_has_doc':    '#f59e0b',
+    'doc_has_child':   '#c084fc'
+  };
+
+  // 转换数据格式: vis-network edges → 3d-force-graph links
+  var links3d = [];
+  for (var i = 0; i < visibleEdges.length; i++) {
+    var e = visibleEdges[i];
+    links3d.push({
+      source: e.from,
+      target: e.to,
+      _label: e._label,
+      _width: e.width || 1,
+      _color: get3DLinkColor(e),
+      _highlightColor: LINK_HIGHLIGHT_COLORS[e._label] || '#a5b4fc',
+      _projectEdgeHidden: !!e._projectEdgeHidden  // 主节点连线: 参与力模拟但不渲染
+    });
+  }
+
+  // 复制节点数据（3d-force-graph 会修改节点对象，添加 x/y/z/vx/vy/vz）
+  var nodes3d = [];
+  for (var i = 0; i < visibleNodes.length; i++) {
+    var n = visibleNodes[i];
+    nodes3d.push({
+      id: n.id,
+      label: n._origLabel || n.label,
+      _type: n._type,
+      _props: n._props || {},
+      _val: NODE_3D_SIZES[n._type] || 5,
+      _color: get3DNodeColor(n)
+    });
+  }
+
+  // 构建邻接表（用于快速查找节点的关联边和邻居节点）
+  var _3dNodeNeighbors = {};  // nodeId → Set of neighbor nodeIds
+  var _3dNodeLinks = {};      // nodeId → Set of link references
+  for (var i = 0; i < links3d.length; i++) {
+    var l = links3d[i];
+    var srcId = typeof l.source === 'object' ? l.source.id : l.source;
+    var tgtId = typeof l.target === 'object' ? l.target.id : l.target;
+    if (!_3dNodeNeighbors[srcId]) _3dNodeNeighbors[srcId] = new Set();
+    if (!_3dNodeNeighbors[tgtId]) _3dNodeNeighbors[tgtId] = new Set();
+    _3dNodeNeighbors[srcId].add(tgtId);
+    _3dNodeNeighbors[tgtId].add(srcId);
+    if (!_3dNodeLinks[srcId]) _3dNodeLinks[srcId] = new Set();
+    if (!_3dNodeLinks[tgtId]) _3dNodeLinks[tgtId] = new Set();
+    _3dNodeLinks[srcId].add(l);
+    _3dNodeLinks[tgtId].add(l);
+  }
+
+  /** 更新高亮集合 */
+  function update3DHighlight(nodeId) {
+    _3dHighlightLinks.clear();
+    _3dHighlightNodes.clear();
+    _3dSelectedNodeId = nodeId;
+
+    if (nodeId) {
+      _3dHighlightNodes.add(nodeId);
+      // 添加所有邻居节点
+      var neighbors = _3dNodeNeighbors[nodeId];
+      if (neighbors) neighbors.forEach(function(nId) { _3dHighlightNodes.add(nId); });
+      // 添加所有关联边
+      var links = _3dNodeLinks[nodeId];
+      if (links) links.forEach(function(link) { _3dHighlightLinks.add(link); });
+    }
+  }
+
+  var rect = container.getBoundingClientRect();
+
+  // 创建 3D 图实例
+  var graph3d = ForceGraph3D({ controlType: 'orbit' })(container)
+    .width(rect.width)
+    .height(rect.height)
+    .backgroundColor(_s3d.bgColor)
+    .showNavInfo(false)
+    // ── 节点样式 ──
+    .nodeLabel(function(n) {
+      var status = (n._props || {}).status || '';
+      var statusBadge = '';
+      if (status === 'completed') statusBadge = '<span style="color:#22c55e;font-size:10px;">✓ 已完成</span>';
+      else if (status === 'in_progress') statusBadge = '<span style="color:#f59e0b;font-size:10px;">● 进行中</span>';
+      return '<div style="background:rgba(15,23,42,0.92);color:#e2e8f0;padding:6px 10px;border-radius:6px;font-size:12px;border:1px solid rgba(99,102,241,0.3);backdrop-filter:blur(4px);max-width:280px;">'
+        + '<div style="font-weight:600;margin-bottom:2px;">' + (n.label || n.id) + '</div>'
+        + (statusBadge ? '<div>' + statusBadge + '</div>' : '')
+        + '<div style="color:#94a3b8;font-size:10px;">' + (n._type || '') + '</div>'
+        + '</div>';
+    })
+    .nodeColor(function(n) {
+      // 有选中节点时: 选中节点+邻居正常颜色，其他节点变暗
+      if (_3dSelectedNodeId) {
+        if (_3dHighlightNodes.has(n.id)) return n._color;
+        return 'rgba(60,60,80,0.4)'; // 未关联节点变暗
+      }
+      return n._color;
+    })
+    .nodeVal(function(n) { return n._val; })
+    .nodeOpacity(_s3d.nodeOpacity)
+    .nodeResolution(16)
+    // ── 自定义节点: 几何体 + 发光光晕 Sprite (mitbunny 风格) ──
+    .nodeThreeObject(function(n) {
+      if (typeof THREE === 'undefined') return false;
+
+      var t = n._type || 'sub-task';
+      var color = n._color;
+      var isDimmed = _3dSelectedNodeId && !_3dHighlightNodes.has(n.id);
+      if (isDimmed) color = 'rgba(60,60,80,0.4)';
+
+      // ── 创建容器 Group ──
+      var group = new THREE.Group();
+
+      // ── 节点几何体 (核心实体) ──
+      var coreMesh;
+      if (t === 'module') {
+        var size = 7;
+        var geo = new THREE.BoxGeometry(size, size, size);
+        var mat = new THREE.MeshLambertMaterial({ color: color, transparent: true, opacity: _s3d.nodeOpacity, emissive: color, emissiveIntensity: 0.3 });
+        coreMesh = new THREE.Mesh(geo, mat);
+      } else if (t === 'project') {
+        var geo = new THREE.OctahedronGeometry(10);
+        var mat = new THREE.MeshLambertMaterial({ color: color, transparent: true, opacity: _s3d.nodeOpacity, emissive: color, emissiveIntensity: 0.4 });
+        coreMesh = new THREE.Mesh(geo, mat);
+      } else if (t === 'document') {
+        var geo = new THREE.BoxGeometry(5, 6, 1.5);
+        var mat = new THREE.MeshLambertMaterial({ color: color, transparent: true, opacity: _s3d.nodeOpacity * 0.92, emissive: color, emissiveIntensity: 0.25 });
+        coreMesh = new THREE.Mesh(geo, mat);
+      } else {
+        // 主任务 / 子任务 → 球体
+        var radius = t === 'main-task' ? 3.5 : 1.8;
+        var geo = new THREE.SphereGeometry(radius, 16, 12);
+        var mat = new THREE.MeshLambertMaterial({ color: color, transparent: true, opacity: _s3d.nodeOpacity, emissive: color, emissiveIntensity: 0.3 });
+        coreMesh = new THREE.Mesh(geo, mat);
+      }
+      group.add(coreMesh);
+
+      // ── 发光光晕 Sprite (Glow Aura) ──
+      if (!isDimmed) {
+        var glowSize = { 'project': 50, 'module': 30, 'main-task': 18, 'sub-task': 10, 'document': 16 }[t] || 12;
+
+        // 获取或创建缓存的 glow texture
+        var cacheKey = color + '_' + glowSize;
+        if (!_glowTextureCache[cacheKey]) {
+          var canvas = createGlowTexture(color, 128);
+          _glowTextureCache[cacheKey] = new THREE.CanvasTexture(canvas);
+        }
+        var glowTex = _glowTextureCache[cacheKey];
+
+        var spriteMat = new THREE.SpriteMaterial({
+          map: glowTex,
+          transparent: true,
+          opacity: 0.6,
+          blending: THREE.AdditiveBlending,
+          depthWrite: false
+        });
+        var sprite = new THREE.Sprite(spriteMat);
+        sprite.scale.set(glowSize, glowSize, 1);
+        group.add(sprite);
+      }
+
+      return group;
+    })
+    .nodeThreeObjectExtend(false)
+    // ── 边可见性: 主节点连线隐藏但保留力模拟 ──
+    .linkVisibility(function(l) {
+      return !l._projectEdgeHidden; // 隐藏的主节点连线不渲染，但仍参与力导向计算
+    })
+    // ── 边样式 (支持高亮) ──
+    .linkColor(function(l) {
+      if (_3dSelectedNodeId) {
+        if (_3dHighlightLinks.has(l)) return l._highlightColor; // 关联边高亮
+        return 'rgba(30,30,50,0.08)'; // 非关联边几乎隐藏
+      }
+      return l._color || 'rgba(75,85,99,0.2)';
+    })
+    .linkWidth(function(l) {
+      if (_3dSelectedNodeId && _3dHighlightLinks.has(l)) {
+        return 1.5; // 高亮边加粗
+      }
+      // 极细的蛛网风格 (mitbunny style)
+      var label = l._label || '';
+      if (label === 'has_main_task') return 0.2;
+      if (label === 'has_module') return 0.2;
+      if (label === 'module_has_task') return 0.15;
+      return 0.1;
+    })
+    .linkOpacity(function(l) {
+      if (_3dSelectedNodeId) {
+        return _3dHighlightLinks.has(l) ? 0.9 : 0.03;
+      }
+      return Math.min(_s3d.linkOpacity, 0.35); // 更透明的蛛网效果
+    })
+    .linkDirectionalArrowLength(_s3d.arrows ? 1.5 : 0)
+    .linkDirectionalArrowRelPos(1)
+    .linkDirectionalParticles(function(l) {
+      if (!_s3d.particles) return 0;
+      // 选中时: 高亮边显示流动粒子
+      if (_3dSelectedNodeId && _3dHighlightLinks.has(l)) return 2;
+      // 默认: 仅项目级连接少量粒子
+      var label = l._label || '';
+      if (label === 'has_main_task' || label === 'has_module') return 1;
+      return 0;
+    })
+    .linkDirectionalParticleWidth(function(l) {
+      if (_3dSelectedNodeId && _3dHighlightLinks.has(l)) return 1.2;
+      return 0.5;
+    })
+    .linkDirectionalParticleColor(function(l) {
+      if (_3dSelectedNodeId && _3dHighlightLinks.has(l)) return l._highlightColor;
+      return null; // 默认颜色
+    })
+    .linkDirectionalParticleSpeed(0.005)
+    // ── 力导向参数 (来自自定义设置) ──
+    .d3AlphaDecay(_s3d.alphaDecay)
+    .d3VelocityDecay(_s3d.velocityDecay)
+    // ── 交互事件 ──
+    .onNodeClick(function(node, event) {
+      // 更新高亮状态并触发重绘
+      update3DHighlight(node ? node.id : null);
+      refresh3DStyles();
+      handle3DNodeClick(node);
+    })
+    .onNodeDragEnd(function(node) {
+      // 拖拽结束后固定节点位置
+      node.fx = node.x;
+      node.fy = node.y;
+      node.fz = node.z;
+    })
+    .onBackgroundClick(function() {
+      // 点击背景: 取消选中 + 关闭面板
+      update3DHighlight(null);
+      refresh3DStyles();
+      closePanel();
+    });
+
+  /** 刷新所有视觉样式（节点颜色/形状/光晕、边颜色/宽度/粒子） */
+  function refresh3DStyles() {
+    // 清空 glow 纹理缓存，以便重新生成（高亮/暗化需要不同纹理）
+    _glowTextureCache = {};
+    graph3d.nodeColor(graph3d.nodeColor())
+           .nodeThreeObject(graph3d.nodeThreeObject()) // 刷新自定义形状 + 光晕
+           .linkColor(graph3d.linkColor())
+           .linkWidth(graph3d.linkWidth())
+           .linkOpacity(graph3d.linkOpacity())
+           .linkDirectionalParticles(graph3d.linkDirectionalParticles())
+           .linkDirectionalParticleWidth(graph3d.linkDirectionalParticleWidth())
+           .linkDirectionalParticleColor(graph3d.linkDirectionalParticleColor());
+  }
+
+  // ── 增强场景光照 (mitbunny 风格: 柔和环境光 + 点光源) ──
+  try {
+    var scene = graph3d.scene();
+    if (scene && typeof THREE !== 'undefined') {
+      // 移除默认光源，用更柔和的光照
+      var toRemove = [];
+      scene.children.forEach(function(child) {
+        if (child.isLight) toRemove.push(child);
+      });
+      toRemove.forEach(function(l) { scene.remove(l); });
+
+      // 柔和环境光（整体照亮）
+      var ambientLight = new THREE.AmbientLight(0x334466, 1.5);
+      scene.add(ambientLight);
+
+      // 暖色点光源（从上方照射，类似太阳光）
+      var pointLight1 = new THREE.PointLight(0xffffff, 0.8, 0);
+      pointLight1.position.set(200, 300, 200);
+      scene.add(pointLight1);
+
+      // 冷色辅助光（从下方，增加立体感）
+      var pointLight2 = new THREE.PointLight(0x6366f1, 0.4, 0);
+      pointLight2.position.set(-200, -200, -100);
+      scene.add(pointLight2);
+    }
+  } catch(e) { console.warn('Scene lighting setup error:', e); }
+
+  // 设置力导向参数 (来自自定义设置)
+  var _repulsion = _s3d.repulsion; // 基准排斥力 (负数)
+  graph3d.d3Force('charge').strength(function(n) {
+    // 大节点排斥力按比例放大
+    var t = n._type || 'sub-task';
+    if (t === 'project') return _repulsion * 5;      // 项目: 5x
+    if (t === 'module') return _repulsion * 2;        // 模块: 2x
+    if (t === 'main-task') return _repulsion * 1;     // 主任务: 1x (基准)
+    return _repulsion * 0.35;                         // 子任务/文档: 0.35x
+  });
+  var _linkDist = _s3d.linkDistance; // 基准连接距离
+  graph3d.d3Force('link').distance(function(l) {
+    var label = l._label || '';
+    if (label === 'has_main_task') return _linkDist * 1.25;
+    if (label === 'has_module') return _linkDist * 1.12;
+    if (label === 'has_sub_task') return _linkDist * 0.625;
+    if (label === 'module_has_task') return _linkDist * 1.0;
+    if (label === 'has_document') return _linkDist * 0.875;
+    return _linkDist * 0.75;
+  }).strength(function(l) {
+    var label = l._label || '';
+    if (label === 'has_main_task' || label === 'has_module' || label === 'module_has_task') return 0.7;
+    return 0.5;
+  });
+
+  // ── 中心引力 (来自自定义设置) ──
+  try {
+    var fg = graph3d.d3Force;
+    if (fg('x')) fg('x').strength(_s3d.gravity);
+    if (fg('y')) fg('y').strength(_s3d.gravity);
+    if (fg('z')) fg('z').strength(_s3d.gravity);
+  } catch(e) { /* 可能不支持，忽略 */ }
+
+  // 注入数据
+  graph3d.graphData({ nodes: nodes3d, links: links3d });
+
+  // ── 离群节点修正: 力导向稳定后检查并拉回远离的节点 ──
+  setTimeout(function() {
+    try {
+      var data = graph3d.graphData();
+      var ns = data.nodes;
+      if (!ns || ns.length === 0) return;
+
+      // 计算所有节点位置的质心和标准差
+      var cx = 0, cy = 0, cz = 0;
+      for (var i = 0; i < ns.length; i++) {
+        cx += (ns[i].x || 0); cy += (ns[i].y || 0); cz += (ns[i].z || 0);
+      }
+      cx /= ns.length; cy /= ns.length; cz /= ns.length;
+
+      // 计算平均距离
+      var avgDist = 0;
+      for (var i = 0; i < ns.length; i++) {
+        var dx = (ns[i].x || 0) - cx, dy = (ns[i].y || 0) - cy, dz = (ns[i].z || 0) - cz;
+        avgDist += Math.sqrt(dx*dx + dy*dy + dz*dz);
+      }
+      avgDist /= ns.length;
+
+      // 离群阈值: 超过平均距离 3 倍的节点
+      var threshold = Math.max(avgDist * 3, 200);
+      var outlierFixed = 0;
+
+      for (var i = 0; i < ns.length; i++) {
+        var n = ns[i];
+        var dx = (n.x || 0) - cx, dy = (n.y || 0) - cy, dz = (n.z || 0) - cz;
+        var dist = Math.sqrt(dx*dx + dy*dy + dz*dz);
+        if (dist > threshold) {
+          // 将离群节点拉到质心附近（阈值距离处）
+          var scale = threshold / dist;
+          n.x = cx + dx * scale * 0.5;
+          n.y = cy + dy * scale * 0.5;
+          n.z = cz + dz * scale * 0.5;
+          n.fx = n.x; n.fy = n.y; n.fz = n.z; // 固定位置
+          outlierFixed++;
+          log('离群节点修正: ' + (n.label || n.id) + ' (距离 ' + Math.round(dist) + ' → ' + Math.round(threshold * 0.5) + ')', true);
+        }
+      }
+
+      if (outlierFixed > 0) {
+        log('已修正 ' + outlierFixed + ' 个离群节点', true);
+        // 短暂释放固定，让力导向微调
+        setTimeout(function() {
+          var ns2 = graph3d.graphData().nodes;
+          for (var i = 0; i < ns2.length; i++) {
+            if (ns2[i].fx !== undefined) {
+              ns2[i].fx = undefined;
+              ns2[i].fy = undefined;
+              ns2[i].fz = undefined;
+            }
+          }
+          // 轻微 reheat 让节点自然融入
+          graph3d.d3ReheatSimulation();
+        }, 2000);
+      }
+    } catch(e) {
+      console.warn('Outlier correction error:', e);
+    }
+  }, 5000); // 5 秒后执行（等力导向基本稳定）
+
+  // 创建兼容性 network wrapper（供其他代码使用 network.fit/destroy 等）
+  network = {
+    _graph3d: graph3d,
+    _container: container,
+    destroy: function() {
+      try {
+        if (graph3d && graph3d._destructor) graph3d._destructor();
+        else if (graph3d && graph3d.scene) {
+          // 手动清理 Three.js 资源
+          var scene = graph3d.scene();
+          if (scene && scene.children) {
+            while (scene.children.length > 0) scene.remove(scene.children[0]);
+          }
+          var renderer = graph3d.renderer();
+          if (renderer) renderer.dispose();
+        }
+      } catch(e) { console.warn('3D cleanup error:', e); }
+      container.innerHTML = '';
+    },
+    fit: function(opts) {
+      try {
+        graph3d.zoomToFit(opts && opts.animation ? opts.animation.duration || 500 : 500);
+      } catch(e) {}
+    },
+    redraw: function() { /* 3D auto-renders */ },
+    setOptions: function() { /* no-op for 3D */ },
+    getPositions: function(ids) {
+      var result = {};
+      var nodes = graph3d.graphData().nodes;
+      for (var i = 0; i < nodes.length; i++) {
+        var n = nodes[i];
+        if (!ids || ids.indexOf(n.id) >= 0) {
+          result[n.id] = { x: n.x || 0, y: n.y || 0 };
+        }
+      }
+      return result;
+    },
+    moveNode: function(id, x, y) { /* no-op for 3D */ },
+    getScale: function() { return 1; },
+    on: function(event, cb) {
+      // 将 vis-network 事件映射到 3D 事件
+      if (event === 'stabilizationIterationsDone') {
+        // 3D 力导向约 3 秒后模拟稳定
+        setTimeout(function() {
+          try { cb(); } catch(e) {}
+        }, 3000);
+      }
+    },
+    off: function() {}
+  };
+
+  networkReusable = false; // 3D 模式不支持增量更新
+
+  // 隐藏加载指示器
+  document.getElementById('loading').style.display = 'none';
+  log('3D 图谱渲染完成! ' + nodes3d.length + ' 节点, ' + links3d.length + ' 边 (Three.js WebGL)', true);
+
+  // 自动聚焦视图
+  setTimeout(function() {
+    try { graph3d.zoomToFit(800); } catch(e) {}
+  }, 2000);
+
+  // 窗口大小变化时自适应
+  window.addEventListener('resize', function() {
+    var newRect = container.getBoundingClientRect();
+    if (newRect.width > 0 && newRect.height > 0) {
+      graph3d.width(newRect.width).height(newRect.height);
+    }
+  });
+}
+
+/** 处理 3D 模式下的节点点击 */
+function handle3DNodeClick(node) {
+  if (!node) return;
+  var type = node._type || 'unknown';
+  var props = node._props || {};
+  var panelTitle = document.getElementById('panelTitle');
+  var panelBody = document.getElementById('panelBody');
+  var panel = document.getElementById('detailPanel');
+  if (!panel || !panelTitle || !panelBody) return;
+
+  panelTitle.textContent = node.label || node.id;
+
+  var html = '<div style="font-size:12px;color:#9ca3af;margin-bottom:8px;">类型: ' + type + '</div>';
+
+  if (props.status) {
+    var statusLabel = { completed: '✅ 已完成', in_progress: '🔄 进行中', pending: '⏳ 待处理', cancelled: '❌ 已取消' };
+    html += '<div style="margin-bottom:8px;">' + (statusLabel[props.status] || props.status) + '</div>';
+  }
+  if (props.taskId) html += '<div style="margin-bottom:4px;color:#94a3b8;font-size:11px;">任务ID: ' + props.taskId + '</div>';
+  if (props.description) html += '<div style="margin-top:8px;padding:8px;background:#1e293b;border-radius:6px;font-size:12px;color:#cbd5e1;">' + props.description + '</div>';
+  if (props.title) html += '<div style="margin-bottom:4px;font-size:12px;color:#e2e8f0;">' + props.title + '</div>';
+  if (props.priority) html += '<div style="margin-bottom:4px;font-size:11px;color:#f59e0b;">优先级: ' + props.priority + '</div>';
+
+  panelBody.innerHTML = html;
+  panel.classList.add('open');
+
+  // 高亮效果: 聚焦到该节点
+  if (network && network._graph3d) {
+    var dist = 120;
+    network._graph3d.cameraPosition(
+      { x: node.x + dist, y: node.y + dist, z: node.z + dist },
+      { x: node.x, y: node.y, z: node.z },
+      1000
+    );
+  }
+}
+
 // ========== Graph Rendering ==========
 function renderGraph() {
   try {
@@ -2083,7 +3256,7 @@ function renderGraph() {
       }
       // Phase-10 T10.5: Add double-click hint for main-task nodes in tiered mode
       var tooltip = n.label + ' (连接: ' + deg + ')';
-      if (n.type === 'main-task' && !USE_GRAPH_CANVAS && tieredLoadState.l0l1Loaded && !tieredLoadState.l2Loaded) {
+      if (n.type === 'main-task' && !USE_3D && tieredLoadState.l0l1Loaded && !tieredLoadState.l2Loaded) {
         var phaseId = (n.properties || {}).taskId || n.id;
         tooltip += tieredLoadState.expandedPhases[phaseId] ? '\\n双击收起子任务' : '\\n双击展开子任务';
       }
@@ -2091,43 +3264,55 @@ function renderGraph() {
     }
 
     var visibleIds = {};
-    for (var i = 0; i < visibleNodes.length; i++) visibleIds[visibleNodes[i].id] = true;
+    var _projectNodeIds = {}; // 收集所有 project 类型节点 ID
+    for (var i = 0; i < visibleNodes.length; i++) {
+      visibleIds[visibleNodes[i].id] = true;
+      if (visibleNodes[i]._type === 'project') _projectNodeIds[visibleNodes[i].id] = true;
+    }
+
+    // 读取"主节点连线"设置
+    var _graphSettings = getGraphSettings();
+    var _hideProjectEdges = !_graphSettings.showProjectEdges;
 
     var visibleEdges = [];
     for (var i = 0; i < allEdges.length; i++) {
       var e = allEdges[i];
       if (!visibleIds[e.from] || !visibleIds[e.to]) continue;
+      // 主节点连线: 标记为隐藏但保留在数据中（3D 力模拟仍需要这些边）
+      var isProjectEdge = _hideProjectEdges && (_projectNodeIds[e.from] || _projectNodeIds[e.to]);
       var es = edgeStyle(e);
-      visibleEdges.push({ id: 'e' + i, from: e.from, to: e.to, width: es.width, _origWidth: es.width, color: es.color, dashes: es.dashes, arrows: es.arrows, _label: e.label, _highlightColor: es._highlightColor || '#9ca3af' });
+      visibleEdges.push({ id: 'e' + i, from: e.from, to: e.to, width: es.width, _origWidth: es.width, color: es.color, dashes: es.dashes, arrows: es.arrows, _label: e.label, _highlightColor: es._highlightColor || '#9ca3af', _projectEdgeHidden: !!isProjectEdge, hidden: !!isProjectEdge });
     }
 
     log('可见节点: ' + visibleNodes.length + ', 可见边: ' + visibleEdges.length, true);
-
-    if (USE_GRAPH_CANVAS) {
-      nodesDataSet = new SimpleDataSet(visibleNodes);
-      edgesDataSet = new SimpleDataSet(visibleEdges);
-    } else {
-    nodesDataSet = new vis.DataSet(visibleNodes);
-    edgesDataSet = new vis.DataSet(visibleEdges);
-    }
 
     if (network) {
       network.destroy();
       network = null;
     }
 
+    // ── 3D Force Graph 渲染路径 ──
+    if (USE_3D) {
+      nodesDataSet = new SimpleDataSet(visibleNodes);
+      edgesDataSet = new SimpleDataSet(visibleEdges);
+      render3DGraph(container, visibleNodes, visibleEdges);
+      return; // 3D 有独立的事件绑定和生命周期
+    }
+
+    // ── vis-network 渲染路径 ──
+    nodesDataSet = new vis.DataSet(visibleNodes);
+    edgesDataSet = new vis.DataSet(visibleEdges);
+
     // ── Phase-10 T10.4: Adaptive physics config based on node count ──
     var nodeCount = visibleNodes.length;
     var physicsConfig;
     if (nodeCount > 2000) {
-      // Very large graph: disable physics, use preset positions
       physicsConfig = {
         enabled: false,
         stabilization: { enabled: false }
       };
       log('物理引擎: 已禁用 (节点 ' + nodeCount + ' > 2000)', true);
     } else if (nodeCount > 800) {
-      // Large graph (800-2000): aggressive damping + fewer iterations
       physicsConfig = {
         enabled: true,
         solver: 'forceAtlas2Based',
@@ -2143,7 +3328,6 @@ function renderGraph() {
       };
       log('物理引擎: 大图模式 iterations=80 (节点 ' + nodeCount + ')', true);
     } else if (nodeCount > 200) {
-      // Medium graph: reduced iterations + improvedLayout
       physicsConfig = {
         enabled: true,
         solver: 'forceAtlas2Based',
@@ -2159,7 +3343,6 @@ function renderGraph() {
       };
       log('物理引擎: 中等模式 iterations=120 (节点 ' + nodeCount + ')', true);
     } else {
-      // Small graph: standard config
       physicsConfig = {
         enabled: true,
         solver: 'forceAtlas2Based',
@@ -2182,13 +3365,11 @@ function renderGraph() {
     var networkOptions = {
       nodes: {
         borderWidth: 2,
-        // 大图禁用阴影 — 每个节点少一轮 canvas 绘制
         shadow: isLargeGraph
           ? false
           : { enabled: true, color: 'rgba(0,0,0,0.3)', size: 5, x: 0, y: 2 }
       },
       edges: {
-        // 大图使用直线边 — 比曲线快 5-10x（无需计算贝塞尔曲线）
         smooth: isLargeGraph
           ? false
           : { enabled: true, type: 'continuous', roundness: 0.5 },
@@ -2196,16 +3377,14 @@ function renderGraph() {
       },
       physics: physicsConfig,
       interaction: {
-        hover: !isVeryLargeGraph,         // 超大图禁用 hover（避免每帧碰撞检测）
+        hover: !isVeryLargeGraph,
         tooltipDelay: 200,
         navigationButtons: false,
         keyboard: false,
         zoomView: true,
         dragView: true,
-        // 关键优化: 缩放/拖拽时临时隐藏边 — 消除 90% 的缩放卡顿
         hideEdgesOnDrag: isLargeGraph,
         hideEdgesOnZoom: isLargeGraph,
-        // 大图降低拖拽灵敏度
         zoomSpeed: isVeryLargeGraph ? 0.8 : 1,
       },
       layout: {
@@ -2214,17 +3393,10 @@ function renderGraph() {
       }
     };
 
-    if (USE_GRAPH_CANVAS) {
-      network = new DevPlanGraph(container,
-        { nodes: visibleNodes, edges: visibleEdges },
-        networkOptions
-      );
-    } else {
-      network = new vis.Network(container,
-        { nodes: nodesDataSet, edges: edgesDataSet },
-        networkOptions
-      );
-    }
+    network = new vis.Network(container,
+      { nodes: nodesDataSet, edges: edgesDataSet },
+      networkOptions
+    );
 
     // Phase-10 T10.3: Mark network as reusable for incremental updates
     networkReusable = true;
@@ -2973,7 +4145,7 @@ function toggleFilter(type) {
 
   if (isCurrentlyActive) {
     // ── 分层模式: 该类型尚未加载 → 首次点击触发按需加载 ──
-    if (!USE_GRAPH_CANVAS && tieredLoadState.l0l1Loaded) {
+    if (!USE_3D && tieredLoadState.l0l1Loaded) {
       if (type === 'sub-task' && !tieredLoadState.l2Loaded) {
         loadTierDataByType('sub-task');
         return;
@@ -2994,7 +4166,7 @@ function toggleFilter(type) {
     delete hiddenTypes[type];
 
     // 分层模式: 如果该类型数据尚未加载，触发按需加载
-    if (!USE_GRAPH_CANVAS && tieredLoadState.l0l1Loaded) {
+    if (!USE_3D && tieredLoadState.l0l1Loaded) {
       if (type === 'sub-task' && !tieredLoadState.l2Loaded) {
         loadTierDataByType('sub-task');
         return;
@@ -3007,7 +4179,7 @@ function toggleFilter(type) {
   }
 
   // Phase-10 T10.3: Incremental filter toggle — add/remove from DataSet
-  if (networkReusable && nodesDataSet && edgesDataSet && network && !USE_GRAPH_CANVAS) {
+  if (networkReusable && nodesDataSet && edgesDataSet && network && !USE_3D) {
     if (isCurrentlyActive) {
       // ── 隐藏: 保存位置 → 移除节点 ──
       var removeNodeIds = [];
@@ -3479,7 +4651,7 @@ function manualRefresh() {
 function silentRefresh(onDone) {
   // Phase-10: If in tiered mode, refresh only what's loaded
   var graphApiUrl;
-  if (!USE_GRAPH_CANVAS && tieredLoadState.l0l1Loaded && !tieredLoadState.l2Loaded) {
+  if (!USE_3D && tieredLoadState.l0l1Loaded && !tieredLoadState.l2Loaded) {
     // Only refresh L0+L1 nodes (tiered mode — not all loaded yet)
     var loadedTypes = TIER_L0L1_TYPES.slice();
     // Add types for expanded phases
@@ -3594,10 +4766,10 @@ function updateNodeStyles() {
 
 // ========== App Start ==========
 function startApp() {
-  if (USE_GRAPH_CANVAS) {
-    log('GraphCanvas 引擎就绪, 开始加载数据...', true);
+  if (USE_3D) {
+    log('3D Force Graph 引擎就绪 (Three.js WebGL), 开始加载数据...', true);
   } else {
-  log('vis-network 就绪, 开始加载数据...', true);
+    log('vis-network 就绪, 开始加载数据...', true);
   }
   loadData();
 }

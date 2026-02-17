@@ -64,19 +64,29 @@ function DevPlanGraph(container, data, options) {
     self._stabilized = true;
     self._gc._emit('stabilizationIterationsDone', {});
   };
+
+  // Extract physics params from vis-network-style options
+  var fa2 = (opts.physics && opts.physics.forceAtlas2Based) || {};
+  var stab = (opts.physics && opts.physics.stabilization) || {};
+
+  // GraphCanvas runs layout in a Web Worker (non-blocking), so we can
+  // afford 3x more iterations than vis-network for better convergence.
+  var visIterations = stab.iterations || 200;
+  var gcIterations = Math.max(visIterations * 3, 500);
+
+  // Stronger gravity for GraphCanvas to keep the graph compact
+  var baseGravity = fa2.centralGravity || 0.015;
+  var gcGravity = baseGravity * 1.5;
+
   this._gc._layoutEngine.start({
-    gravity: (opts.physics && opts.physics.forceAtlas2Based) ?
-      opts.physics.forceAtlas2Based.centralGravity || 0.015 : 0.015,
-    repulsion: (opts.physics && opts.physics.forceAtlas2Based) ?
-      opts.physics.forceAtlas2Based.gravitationalConstant || -80 : -80,
-    springLength: (opts.physics && opts.physics.forceAtlas2Based) ?
-      opts.physics.forceAtlas2Based.springLength || 150 : 150,
-    springConstant: (opts.physics && opts.physics.forceAtlas2Based) ?
-      opts.physics.forceAtlas2Based.springConstant || 0.05 : 0.05,
-    damping: (opts.physics && opts.physics.forceAtlas2Based) ?
-      opts.physics.forceAtlas2Based.damping || 0.4 : 0.4,
-    maxIterations: (opts.physics && opts.physics.stabilization) ?
-      opts.physics.stabilization.iterations || 200 : 200,
+    gravity: gcGravity,
+    repulsion: fa2.gravitationalConstant || -80,
+    springLength: fa2.springLength || 150,
+    springConstant: fa2.springConstant || 0.05,
+    damping: fa2.damping || 0.4,
+    maxIterations: gcIterations,
+    avoidOverlap: fa2.avoidOverlap || 0.8,
+    batchSize: 15,  // More iterations per batch for faster convergence
   });
 }
 

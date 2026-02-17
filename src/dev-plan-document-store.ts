@@ -38,6 +38,8 @@ import type {
   RevertedTask,
   DevPlanStoreConfig,
   DevPlanExportedGraph,
+  PromptInput,
+  Prompt,
 } from './types';
 
 // ============================================================================
@@ -75,11 +77,13 @@ function sectionImportance(section: DevPlanSection): number {
  * - docStore: 文档片段 (Markdown 内容)
  * - taskStore: 任务 (主任务 + 子任务层级)
  * - moduleStore: 功能模块
+ * - promptStore: Prompt 日志
  */
 export class DevPlanDocumentStore implements IDevPlanStore {
   private docStore: InstanceType<typeof EnhancedDocumentStore>;
   private taskStore: InstanceType<typeof EnhancedDocumentStore>;
   private moduleStore: InstanceType<typeof EnhancedDocumentStore>;
+  private promptStore: InstanceType<typeof EnhancedDocumentStore>;
   private projectName: string;
   /** Git 操作的工作目录（多项目路由时指向项目根目录） */
   private gitCwd: string | undefined;
@@ -97,6 +101,10 @@ export class DevPlanDocumentStore implements IDevPlanStore {
     );
     this.moduleStore = new EnhancedDocumentStore(
       config.modulePath,
+      documentStoreProductionConfig()
+    );
+    this.promptStore = new EnhancedDocumentStore(
+      config.promptPath,
       documentStoreProductionConfig()
     );
   }
@@ -1362,6 +1370,141 @@ export class DevPlanDocumentStore implements IDevPlanStore {
   }
 
   // ==========================================================================
+  // Prompt Operations (Prompt 日志)
+  // ==========================================================================
+
+  savePrompt(input: PromptInput): Prompt {
+    const now = Date.now();
+    const today = new Date(now).toISOString().slice(0, 10); // YYYY-MM-DD
+
+    // 获取当天已有 prompt 数量，分配自增序号
+    const existingToday = this.listPrompts({ date: today });
+    const promptIndex = existingToday.length + 1;
+
+    const promptData = {
+      content: input.content,
+      summary: input.summary || '',
+      relatedTaskId: input.relatedTaskId || null,
+    };
+
+    const tags = [
+      `plan:${this.projectName}`,
+      'type:prompt',
+      `date:${today}`,
+    ];
+
+    // 关联主任务 tag
+    if (input.relatedTaskId) {
+      tags.push(`task:${input.relatedTaskId}`);
+    }
+
+    // 用户自定义 tags
+    if (input.tags?.length) {
+      for (const t of input.tags) {
+        tags.push(`custom:${t}`);
+      }
+    }
+
+    const docInput: DocumentInput = {
+      content: JSON.stringify(promptData),
+      contentType: ContentType.Text,
+      tags,
+      metadata: {
+        projectName: this.projectName,
+        promptIndex,
+        date: today,
+        relatedTaskId: input.relatedTaskId || null,
+        tags: input.tags || [],
+        createdAt: now,
+      },
+      importance: 0.5,
+    };
+
+    const id = this.promptStore.put(docInput);
+    this.promptStore.flush();
+
+    return {
+      id,
+      projectName: this.projectName,
+      promptIndex,
+      content: input.content,
+      summary: input.summary,
+      relatedTaskId: input.relatedTaskId,
+      tags: input.tags || [],
+      createdAt: now,
+    };
+  }
+
+  listPrompts(filter?: { date?: string; relatedTaskId?: string; limit?: number }): Prompt[] {
+    let docs: any[];
+
+    if (filter?.relatedTaskId) {
+      // 按关联任务查询
+      docs = this.promptStore.findByTag(`task:${filter.relatedTaskId}`)
+        .filter((doc: any) =>
+          (doc.tags as string[]).includes(`plan:${this.projectName}`) &&
+          (doc.tags as string[]).includes('type:prompt')
+        );
+    } else if (filter?.date) {
+      // 按日期查询
+      docs = this.promptStore.findByTag(`date:${filter.date}`)
+        .filter((doc: any) =>
+          (doc.tags as string[]).includes(`plan:${this.projectName}`) &&
+          (doc.tags as string[]).includes('type:prompt')
+        );
+    } else {
+      // 全量查询
+      docs = this.promptStore.findByTag(`plan:${this.projectName}`)
+        .filter((doc: any) =>
+          (doc.tags as string[]).includes('type:prompt')
+        );
+    }
+
+    // 去重（保留最新）
+    const latestMap = new Map<string, any>();
+    for (const doc of docs) {
+      latestMap.set(doc.id, doc);
+    }
+
+    let prompts = Array.from(latestMap.values())
+      .map((doc: any) => this.docToPrompt(doc))
+      .sort((a, b) => b.createdAt - a.createdAt);
+
+    if (filter?.limit && filter.limit > 0) {
+      prompts = prompts.slice(0, filter.limit);
+    }
+
+    return prompts;
+  }
+
+  /**
+   * 将 DocumentStore 文档转为 Prompt 对象
+   */
+  private docToPrompt(doc: any): Prompt {
+    const meta = doc.metadata || {};
+    let data: any = {};
+    try {
+      data = JSON.parse(doc.content || '{}');
+    } catch { /* ignore */ }
+
+    // 从 tags 中提取自定义标签
+    const customTags = ((doc.tags || []) as string[])
+      .filter((t: string) => t.startsWith('custom:'))
+      .map((t: string) => t.slice(7));
+
+    return {
+      id: doc.id,
+      projectName: this.projectName,
+      promptIndex: meta.promptIndex || 0,
+      content: data.content || '',
+      summary: data.summary || undefined,
+      relatedTaskId: data.relatedTaskId || meta.relatedTaskId || undefined,
+      tags: customTags.length > 0 ? customTags : (meta.tags || []),
+      createdAt: meta.createdAt || doc.created_at || Date.now(),
+    };
+  }
+
+  // ==========================================================================
   // Utility
   // ==========================================================================
 
@@ -1372,6 +1515,7 @@ export class DevPlanDocumentStore implements IDevPlanStore {
     this.docStore.flush();
     this.taskStore.flush();
     this.moduleStore.flush();
+    this.promptStore.flush();
   }
 
   /**

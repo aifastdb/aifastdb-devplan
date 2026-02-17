@@ -56,6 +56,8 @@ import type {
   SearchMode,
   ScoredDevPlanDoc,
   RebuildIndexResult,
+  PromptInput,
+  Prompt,
 } from './types';
 
 // ============================================================================
@@ -69,6 +71,7 @@ const ET = {
   MAIN_TASK: 'devplan-main-task',
   SUB_TASK: 'devplan-sub-task',
   MODULE: 'devplan-module',
+  PROMPT: 'devplan-prompt',
 } as const;
 
 /** Relation 类型常量 */
@@ -76,10 +79,13 @@ const RT = {
   HAS_DOCUMENT: 'has_document',
   HAS_MAIN_TASK: 'has_main_task',
   HAS_SUB_TASK: 'has_sub_task',
+  HAS_MODULE: 'has_module',
   MODULE_HAS_TASK: 'module_has_task',
   MODULE_HAS_DOC: 'module_has_doc',
   TASK_HAS_DOC: 'task_has_doc',
   DOC_HAS_CHILD: 'doc_has_child',
+  TASK_HAS_PROMPT: 'task_has_prompt',
+  HAS_PROMPT: 'has_prompt',
 } as const;
 
 // ============================================================================
@@ -134,10 +140,10 @@ export class DevPlanGraphStore implements IDevPlanStore {
     // 构建 SocialGraphV2 配置
     const graphConfig: any = {
       path: config.graphPath,
-      shardCount: config.shardCount || 4,
+      shardCount: config.shardCount || 5,
       walEnabled: true,
       mode: 'balanced',
-      shardNames: ['tasks', 'relations', 'docs', 'modules'],
+      shardNames: ['tasks', 'relations', 'docs', 'modules', 'prompts'],
       // 显式路由：DevPlan 实体类型 → 对应分片
       typeShardMapping: {
         'devplan-project': 0,      // 项目根节点 → tasks shard
@@ -145,6 +151,7 @@ export class DevPlanGraphStore implements IDevPlanStore {
         'devplan-sub-task': 0,     // 子任务     → tasks shard
         'devplan-doc': 2,          // 文档片段   → docs shard
         'devplan-module': 3,       // 功能模块   → modules shard
+        'devplan-prompt': 4,       // Prompt 日志 → prompts shard
         '_default': 0,             // 未知类型   → tasks shard (fallback)
       },
       relationShardId: 1,          // 所有关系   → relations shard
@@ -397,6 +404,7 @@ export class DevPlanGraphStore implements IDevPlanStore {
       estimatedHours: p.estimatedHours || undefined,
       relatedSections: p.relatedSections || [],
       moduleId: p.moduleId || undefined,
+      relatedPromptIds: p.relatedPromptIds || [],
       totalSubtasks: p.totalSubtasks || 0,
       completedSubtasks: p.completedSubtasks || 0,
       status: p.status || 'pending',
@@ -783,6 +791,7 @@ export class DevPlanGraphStore implements IDevPlanStore {
       description: input.description || '',
       estimatedHours: input.estimatedHours || 0,
       relatedSections: input.relatedSections || [],
+      relatedPromptIds: input.relatedPromptIds || [],
       moduleId: input.moduleId || null,
       totalSubtasks: 0,
       completedSubtasks: 0,
@@ -811,6 +820,16 @@ export class DevPlanGraphStore implements IDevPlanStore {
         const docEntity = this.findDocEntityBySection(sec, sub);
         if (docEntity) {
           this.graph.putRelation(entity.id, docEntity.id, RT.TASK_HAS_DOC);
+        }
+      }
+    }
+
+    // task -> prompt 关系（通过 relatedPromptIds 建立）
+    if (input.relatedPromptIds?.length) {
+      for (const promptId of input.relatedPromptIds) {
+        const promptEntity = this.graph.getEntity(promptId);
+        if (promptEntity && promptEntity.entity_type === ET.PROMPT) {
+          this.graph.putRelation(entity.id, promptEntity.id, RT.TASK_HAS_PROMPT);
         }
       }
     }
@@ -1489,6 +1508,138 @@ export class DevPlanGraphStore implements IDevPlanStore {
   }
 
   // ==========================================================================
+  // Prompt Operations (用户 Prompt 日志)
+  // ==========================================================================
+
+  /**
+   * 保存一条 Prompt
+   *
+   * 自动分配 promptIndex (当天内自增序号)。
+   * 如果指定了 relatedTaskId，自动建立 task_has_prompt 关系。
+   */
+  savePrompt(input: PromptInput): Prompt {
+    const now = Date.now();
+    const today = new Date(now).toISOString().slice(0, 10); // YYYY-MM-DD
+
+    // 获取当天已有 prompt 数量，分配自增序号
+    const existingToday = this.listPrompts({ date: today });
+    const promptIndex = existingToday.length + 1;
+
+    // 生成简短标签作为 entity name
+    const namePreview = input.content.slice(0, 50).replace(/\n/g, ' ');
+    const entityName = `Prompt #${promptIndex} (${today})`;
+
+    const entity = this.graph.addEntity(entityName, ET.PROMPT, {
+      projectName: this.projectName,
+      promptIndex,
+      content: input.content,
+      summary: input.summary || '',
+      relatedTaskId: input.relatedTaskId || null,
+      tags: input.tags || [],
+      date: today,
+      createdAt: now,
+    });
+
+    // project -> prompt 关系
+    this.graph.putRelation(this.getProjectId(), entity.id, RT.HAS_PROMPT);
+
+    // task -> prompt 关系
+    if (input.relatedTaskId) {
+      const taskEntity = this.findEntityByProp(ET.MAIN_TASK, 'taskId', input.relatedTaskId);
+      if (taskEntity) {
+        this.graph.putRelation(taskEntity.id, entity.id, RT.TASK_HAS_PROMPT);
+
+        // 同时更新主任务的 relatedPromptIds 数组
+        const taskProps = taskEntity.properties as any;
+        const existingIds = taskProps.relatedPromptIds || [];
+        if (!existingIds.includes(entity.id)) {
+          this.graph.updateEntity(taskEntity.id, {
+            properties: {
+              ...taskProps,
+              relatedPromptIds: [...existingIds, entity.id],
+              updatedAt: now,
+            },
+          });
+        }
+      }
+    }
+
+    this.graph.flush();
+    return this.entityToPrompt(entity);
+  }
+
+  /**
+   * 列出 Prompt（支持按日期、关联任务过滤）
+   */
+  listPrompts(filter?: {
+    date?: string;
+    relatedTaskId?: string;
+    limit?: number;
+  }): Prompt[] {
+    // 如果按关联任务过滤，通过关系查询
+    if (filter?.relatedTaskId) {
+      return this.getTaskRelatedPrompts(filter.relatedTaskId);
+    }
+
+    const entities = this.findEntitiesByType(ET.PROMPT);
+    let prompts = entities
+      .filter((e) => {
+        const p = e.properties as any;
+        if (p.projectName !== this.projectName) return false;
+        if (filter?.date && p.date !== filter.date) return false;
+        return true;
+      })
+      .map((e) => this.entityToPrompt(e));
+
+    // 按 createdAt 降序排列（最新的在前）
+    prompts.sort((a, b) => b.createdAt - a.createdAt);
+
+    if (filter?.limit && filter.limit > 0) {
+      prompts = prompts.slice(0, filter.limit);
+    }
+
+    return prompts;
+  }
+
+  /**
+   * 获取主任务关联的所有 Prompt
+   */
+  getTaskRelatedPrompts(taskId: string): Prompt[] {
+    const taskEntity = this.findEntityByProp(ET.MAIN_TASK, 'taskId', taskId);
+    if (!taskEntity) return [];
+
+    const rels = this.getOutRelations(taskEntity.id, RT.TASK_HAS_PROMPT);
+    const prompts: Prompt[] = [];
+    for (const rel of rels) {
+      const promptEntity = this.graph.getEntity(rel.target);
+      if (promptEntity && promptEntity.entity_type === ET.PROMPT) {
+        prompts.push(this.entityToPrompt(promptEntity));
+      }
+    }
+
+    // 按 createdAt 升序排列
+    prompts.sort((a, b) => a.createdAt - b.createdAt);
+    return prompts;
+  }
+
+  /**
+   * Entity → Prompt 转换
+   */
+  private entityToPrompt(e: Entity): Prompt {
+    const p = e.properties as any;
+    return {
+      id: e.id,
+      projectName: this.projectName,
+      promptIndex: p.promptIndex || 0,
+      content: p.content || '',
+      summary: p.summary || undefined,
+      relatedTaskId: p.relatedTaskId || undefined,
+      tags: p.tags || [],
+      createdAt: p.createdAt || e.created_at,
+    };
+  }
+
+  // ==========================================================================
   // Utility
   // ==========================================================================
 
@@ -1632,6 +1783,37 @@ export class DevPlanGraphStore implements IDevPlanStore {
           label: RT.TASK_HAS_DOC,
         });
       }
+
+      // task -> prompt 关系
+      const taskPromptRels = this.getOutRelations(mt.id, RT.TASK_HAS_PROMPT);
+      for (const rel of taskPromptRels) {
+        edges.push({
+          from: mt.id,
+          to: rel.target,
+          label: RT.TASK_HAS_PROMPT,
+        });
+      }
+    }
+
+    // Prompt 节点
+    const prompts = this.listPrompts();
+    for (const prompt of prompts) {
+      nodes.push({
+        id: prompt.id,
+        label: `Prompt #${prompt.promptIndex}`,
+        type: 'prompt',
+        properties: {
+          promptIndex: prompt.promptIndex,
+          summary: prompt.summary || '',
+          relatedTaskId: prompt.relatedTaskId || null,
+          createdAt: prompt.createdAt,
+        },
+      });
+      edges.push({
+        from: this.getProjectId(),
+        to: prompt.id,
+        label: RT.HAS_PROMPT,
+      });
     }
 
     // 文档节点
@@ -1690,6 +1872,13 @@ export class DevPlanGraphStore implements IDevPlanStore {
             status: mod.status,
             mainTaskCount: mod.mainTaskCount,
           },
+        });
+
+        // 项目→模块 关系（确保每个模块都与项目节点相连，不会成为孤立节点）
+        edges.push({
+          from: this.getProjectId(),
+          to: mod.id,
+          label: RT.HAS_MODULE,
         });
 
         // 模块→主任务 关系

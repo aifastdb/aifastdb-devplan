@@ -270,14 +270,236 @@ GraphCanvas.prototype.setData = function(data) {
 };
 
 /**
- * Assign random initial positions for layout bootstrapping.
+ * Assign initial positions for layout bootstrapping.
+ * Uses structured hierarchical layout if typed nodes are available,
+ * otherwise falls back to Fibonacci spiral distribution.
  */
 GraphCanvas.prototype._assignRandomPositions = function() {
-  var spread = Math.sqrt(this._nodeCount) * 80;
-  for (var i = 0; i < this._nodes.length; i++) {
-    this._nodes[i].x = (Math.random() - 0.5) * spread;
-    this._nodes[i].y = (Math.random() - 0.5) * spread;
+  // Try structured layout if we have DevPlan-typed nodes
+  if (this._hasDevPlanTypes()) {
+    this._assignStructuredPositions();
+    return;
   }
+  // Fallback: Fibonacci spiral (better than pure random)
+  this._assignFibonacciPositions();
+};
+
+/**
+ * Check if nodes have DevPlan type annotations.
+ */
+GraphCanvas.prototype._hasDevPlanTypes = function() {
+  for (var i = 0; i < this._nodes.length; i++) {
+    var t = this._nodes[i].type;
+    if (t === 'project' || t === 'module' || t === 'main-task') return true;
+  }
+  return false;
+};
+
+/**
+ * Fibonacci spiral distribution — evenly spaced initial positions.
+ * Better than random for force-directed convergence.
+ */
+GraphCanvas.prototype._assignFibonacciPositions = function() {
+  var n = this._nodes.length;
+  if (n === 0) return;
+  var goldenAngle = Math.PI * (3 - Math.sqrt(5)); // ~2.39996
+  var maxRadius = Math.sqrt(n) * 40;
+  for (var i = 0; i < n; i++) {
+    var theta = goldenAngle * i;
+    var r = Math.sqrt((i + 1) / n) * maxRadius;
+    this._nodes[i].x = Math.cos(theta) * r;
+    this._nodes[i].y = Math.sin(theta) * r;
+  }
+  this._spatialIndex.buildFromNodes(this._nodes);
+  this._spatialIndex.buildEdgeIndex(this._edges, this._nodeMap);
+};
+
+/**
+ * Structured hierarchical initial layout for DevPlan graphs.
+ *
+ * Strategy:
+ * - Project node at center (0,0)
+ * - Modules in first ring (R1)
+ * - Main tasks in second ring (R2), grouped near their parent module
+ * - Sub-tasks clustered near their parent main task with small jitter
+ * - Documents clustered near their related entity
+ *
+ * This gives the force-directed layout a MUCH better starting point
+ * compared to random positions, enabling fast convergence.
+ */
+GraphCanvas.prototype._assignStructuredPositions = function() {
+  var nodes = this._nodes;
+  var edges = this._edges;
+  var nodeCount = nodes.length;
+  if (nodeCount === 0) return;
+
+  // 1. Group nodes by type
+  var byType = { 'project': [], 'module': [], 'main-task': [], 'sub-task': [], 'document': [], 'other': [] };
+  for (var i = 0; i < nodeCount; i++) {
+    var type = nodes[i].type || 'other';
+    if (byType[type]) byType[type].push(nodes[i]);
+    else byType['other'].push(nodes[i]);
+  }
+
+  // 2. Build child→parent mapping (edges go from parent → child)
+  var childToParent = {};
+  for (var i = 0; i < edges.length; i++) {
+    // First edge wins as primary parent
+    if (!childToParent[edges[i].to]) {
+      childToParent[edges[i].to] = edges[i].from;
+    }
+  }
+
+  // 3. Build parent→children mapping
+  var parentToChildren = {};
+  for (var i = 0; i < edges.length; i++) {
+    if (!parentToChildren[edges[i].from]) parentToChildren[edges[i].from] = [];
+    parentToChildren[edges[i].from].push(edges[i].to);
+  }
+
+  // 4. Adaptive ring radii based on node counts
+  var moduleCount = byType['module'].length || 1;
+  var mainTaskCount = byType['main-task'].length || 1;
+  var R1 = Math.max(200, moduleCount * 60);                       // Module ring
+  var R2 = R1 + Math.max(250, mainTaskCount * 18);                 // Main-task ring
+  var R3 = R2 + 150;                                               // Sub-task/doc zone
+
+  // 5. Place project node at center
+  for (var i = 0; i < byType['project'].length; i++) {
+    byType['project'][i].x = 0;
+    byType['project'][i].y = 0;
+  }
+
+  // 6. Place modules in first ring (evenly spaced)
+  for (var i = 0; i < byType['module'].length; i++) {
+    var angle = (2 * Math.PI * i) / byType['module'].length - Math.PI / 2;
+    byType['module'][i].x = Math.cos(angle) * R1;
+    byType['module'][i].y = Math.sin(angle) * R1;
+  }
+
+  // 7. Place main tasks in second ring, grouped by parent module
+  var mainTasks = byType['main-task'];
+  var mainByParent = {};   // parentId → [mainTaskNode, ...]
+  var ungroupedMain = [];
+  for (var i = 0; i < mainTasks.length; i++) {
+    var parent = childToParent[mainTasks[i].id];
+    if (parent && this._nodeMap[parent]) {
+      if (!mainByParent[parent]) mainByParent[parent] = [];
+      mainByParent[parent].push(mainTasks[i]);
+    } else {
+      ungroupedMain.push(mainTasks[i]);
+    }
+  }
+
+  // Place grouped main tasks in fan around their parent's angle
+  var parentKeys = Object.keys(mainByParent);
+  var globalMainIdx = 0;
+  for (var p = 0; p < parentKeys.length; p++) {
+    var parentNode = this._nodeMap[parentKeys[p]];
+    var children = mainByParent[parentKeys[p]];
+    if (!parentNode) continue;
+
+    var pAngle = Math.atan2(parentNode.y || 0.001, parentNode.x || 0.001);
+    var fanSpread = Math.min(Math.PI * 0.6, children.length * 0.12);
+
+    for (var c = 0; c < children.length; c++) {
+      var childAngle = pAngle - fanSpread / 2 + (fanSpread * c) / Math.max(children.length - 1, 1);
+      var radius = R2 + (Math.random() - 0.5) * 60;
+      children[c].x = Math.cos(childAngle) * radius;
+      children[c].y = Math.sin(childAngle) * radius;
+      globalMainIdx++;
+    }
+  }
+
+  // Place ungrouped main tasks evenly in remaining space
+  for (var i = 0; i < ungroupedMain.length; i++) {
+    var angle = (2 * Math.PI * (globalMainIdx + i)) / Math.max(mainTasks.length, 1) - Math.PI / 2;
+    ungroupedMain[i].x = Math.cos(angle) * R2;
+    ungroupedMain[i].y = Math.sin(angle) * R2;
+  }
+
+  // 8. Place sub-tasks near their parent main task
+  var subTasks = byType['sub-task'];
+  var subByParent = {};
+  var ungroupedSub = [];
+  for (var i = 0; i < subTasks.length; i++) {
+    var parent = childToParent[subTasks[i].id];
+    if (parent && this._nodeMap[parent]) {
+      if (!subByParent[parent]) subByParent[parent] = [];
+      subByParent[parent].push(subTasks[i]);
+    } else {
+      ungroupedSub.push(subTasks[i]);
+    }
+  }
+
+  // Place grouped sub-tasks in small cluster around parent
+  var subParentKeys = Object.keys(subByParent);
+  for (var sp = 0; sp < subParentKeys.length; sp++) {
+    var pNode = this._nodeMap[subParentKeys[sp]];
+    var subs = subByParent[subParentKeys[sp]];
+    if (!pNode) continue;
+
+    // Arrange in small ring around parent
+    var subRadius = Math.max(40, subs.length * 8);
+    for (var si = 0; si < subs.length; si++) {
+      var subAngle = (2 * Math.PI * si) / subs.length;
+      subs[si].x = pNode.x + Math.cos(subAngle) * subRadius;
+      subs[si].y = pNode.y + Math.sin(subAngle) * subRadius;
+    }
+  }
+
+  // Ungrouped sub-tasks in outer ring
+  for (var i = 0; i < ungroupedSub.length; i++) {
+    var angle = (2 * Math.PI * i) / Math.max(ungroupedSub.length, 1);
+    ungroupedSub[i].x = Math.cos(angle) * R3;
+    ungroupedSub[i].y = Math.sin(angle) * R3;
+  }
+
+  // 9. Place documents near their related entity
+  var docs = byType['document'];
+  var docByParent = {};
+  var ungroupedDoc = [];
+  for (var i = 0; i < docs.length; i++) {
+    var parent = childToParent[docs[i].id];
+    if (parent && this._nodeMap[parent]) {
+      if (!docByParent[parent]) docByParent[parent] = [];
+      docByParent[parent].push(docs[i]);
+    } else {
+      ungroupedDoc.push(docs[i]);
+    }
+  }
+
+  var docParentKeys = Object.keys(docByParent);
+  for (var dp = 0; dp < docParentKeys.length; dp++) {
+    var dParent = this._nodeMap[docParentKeys[dp]];
+    var docChildren = docByParent[docParentKeys[dp]];
+    if (!dParent) continue;
+
+    // Place documents in a horizontal line to the right of parent (mind-map style)
+    var vGap = 50;
+    var startY = dParent.y - ((docChildren.length - 1) * vGap) / 2;
+    for (var di = 0; di < docChildren.length; di++) {
+      docChildren[di].x = dParent.x + 120;
+      docChildren[di].y = startY + di * vGap;
+    }
+  }
+
+  // Ungrouped documents
+  for (var i = 0; i < ungroupedDoc.length; i++) {
+    var angle = (2 * Math.PI * i) / Math.max(ungroupedDoc.length, 1) + Math.PI / 6;
+    ungroupedDoc[i].x = Math.cos(angle) * (R3 + 100);
+    ungroupedDoc[i].y = Math.sin(angle) * (R3 + 100);
+  }
+
+  // 10. Place other/unknown type nodes
+  var others = byType['other'];
+  for (var i = 0; i < others.length; i++) {
+    var angle = (2 * Math.PI * i) / Math.max(others.length, 1);
+    others[i].x = Math.cos(angle) * (R3 + 200);
+    others[i].y = Math.sin(angle) * (R3 + 200);
+  }
+
+  // Rebuild spatial indices
   this._spatialIndex.buildFromNodes(this._nodes);
   this._spatialIndex.buildEdgeIndex(this._edges, this._nodeMap);
 };

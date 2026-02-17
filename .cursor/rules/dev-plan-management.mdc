@@ -68,6 +68,14 @@ devplan_list_modules(projectName: "aifastdb-devplan")
 devplan_get_module(projectName: "aifastdb-devplan", moduleId: "<模块ID>")
 ```
 
+### Prompt 日志
+```
+devplan_save_prompt(projectName: "aifastdb-devplan", content: "用户 Prompt", relatedTaskId: "phase-X")
+devplan_list_prompts(projectName: "aifastdb-devplan")
+devplan_list_prompts(projectName: "aifastdb-devplan", date: "2026-02-18")
+devplan_list_prompts(projectName: "aifastdb-devplan", relatedTaskId: "phase-1")
+```
+
 ## 开发阶段概览
 
 | 阶段 | 状态 | 说明 |

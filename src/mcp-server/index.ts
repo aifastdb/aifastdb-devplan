@@ -236,6 +236,11 @@ const TOOLS = [
           items: { type: 'string' },
           description: 'Optional: Associate with document sections (format: "section" or "section|subSection", e.g., ["overview", "technical_notes|security"])\n可选：关联文档片段（格式："section" 或 "section|subSection"）',
         },
+        relatedPromptIds: {
+          type: 'array',
+          items: { type: 'string' },
+          description: 'Optional: Associate with prompt IDs (entity IDs from devplan_save_prompt)\n可选：关联 Prompt ID 列表（来自 devplan_save_prompt 的实体 ID）',
+        },
         order: {
           type: 'number',
           description: 'Optional sort order (smaller number = higher priority). Auto-assigned if omitted.\n可选排序序号（数值越小越靠前）。不填则自动追加到末尾。',
@@ -747,6 +752,67 @@ const TOOLS = [
       required: ['projectName'],
     },
   },
+
+  // ========================================================================
+  // Prompt Logging Tools (2 个)
+  // ========================================================================
+  {
+    name: 'devplan_save_prompt',
+    description: 'Save a user prompt to the dev plan prompt log. Optionally associate it with a main task. Returns the saved prompt with auto-assigned index.\n保存用户 Prompt 到开发计划的 Prompt 日志。可选关联主任务。返回保存的 Prompt（含自动分配的序号）。',
+    inputSchema: {
+      type: 'object' as const,
+      properties: {
+        projectName: {
+          type: 'string',
+          description: `Project name (default: "${DEFAULT_PROJECT_NAME}")\n项目名称（默认："${DEFAULT_PROJECT_NAME}"）`,
+        },
+        content: {
+          type: 'string',
+          description: 'The user prompt content\n用户输入的 Prompt 内容',
+        },
+        summary: {
+          type: 'string',
+          description: 'Optional: AI-generated summary of the prompt\n可选：AI 生成的 Prompt 摘要',
+        },
+        relatedTaskId: {
+          type: 'string',
+          description: 'Optional: Main task ID to associate with (e.g., "phase-7")\n可选：关联的主任务 ID（如 "phase-7"）',
+        },
+        tags: {
+          type: 'array',
+          items: { type: 'string' },
+          description: 'Optional: Custom tags\n可选：自定义标签',
+        },
+      },
+      required: ['projectName', 'content'],
+    },
+  },
+  {
+    name: 'devplan_list_prompts',
+    description: 'List saved prompts from the dev plan prompt log. Can filter by date or related task.\n列出开发计划中保存的 Prompt 日志。可按日期或关联任务过滤。',
+    inputSchema: {
+      type: 'object' as const,
+      properties: {
+        projectName: {
+          type: 'string',
+          description: `Project name (default: "${DEFAULT_PROJECT_NAME}")\n项目名称（默认："${DEFAULT_PROJECT_NAME}"）`,
+        },
+        date: {
+          type: 'string',
+          description: 'Optional: Filter by date (format: YYYY-MM-DD)\n可选：按日期过滤（格式：YYYY-MM-DD）',
+        },
+        relatedTaskId: {
+          type: 'string',
+          description: 'Optional: Filter by related main task ID\n可选：按关联主任务 ID 过滤',
+        },
+        limit: {
+          type: 'number',
+          description: 'Optional: Maximum number of results (default: all)\n可选：最大返回条数（默认：全部）',
+        },
+      },
+      required: ['projectName'],
+    },
+  },
 ];
 
 // ============================================================================
@@ -809,6 +875,16 @@ interface ToolArgs {
   parentDoc?: string;
   /** devplan_auto_config: Autopilot 配置（部分更新） */
   config?: Partial<AutopilotConfig>;
+  /** devplan_save_prompt: Prompt 摘要 */
+  summary?: string;
+  /** devplan_save_prompt: 关联的主任务 ID */
+  relatedTaskId?: string;
+  /** devplan_save_prompt: 自定义标签 */
+  tags?: string[];
+  /** devplan_list_prompts: 按日期过滤 */
+  date?: string;
+  /** devplan_create_main_task / devplan_upsert_task: 关联 Prompt ID 列表 */
+  relatedPromptIds?: string[];
 }
 
 /**
@@ -1038,6 +1114,7 @@ async function handleToolCall(name: string, args: ToolArgs): Promise<string> {
           estimatedHours: args.estimatedHours,
           moduleId: args.moduleId,
           relatedSections: args.relatedDocSections,
+          relatedPromptIds: args.relatedPromptIds,
           order: args.order,
         });
 
@@ -1115,6 +1192,7 @@ async function handleToolCall(name: string, args: ToolArgs): Promise<string> {
               estimatedHours: args.estimatedHours,
               moduleId: args.moduleId,
               relatedSections: args.relatedDocSections,
+              relatedPromptIds: args.relatedPromptIds,
               order: args.order,
             },
             { preserveStatus, status: targetStatus }
@@ -1879,6 +1957,68 @@ async function handleToolCall(name: string, args: ToolArgs): Promise<string> {
           config: current,
         }, null, 2);
       }
+    }
+
+    // ==================================================================
+    // Prompt Logging
+    // ==================================================================
+
+    case 'devplan_save_prompt': {
+      const projectName = args.projectName!;
+      const content = args.content;
+      if (!content) {
+        throw new McpError(ErrorCode.InvalidParams, 'Missing required: content');
+      }
+
+      const plan = createDevPlan(projectName);
+      if (typeof (plan as any).savePrompt !== 'function') {
+        throw new McpError(
+          ErrorCode.InvalidRequest,
+          `Prompt logging requires "graph" engine. Project "${projectName}" uses a different engine.`
+        );
+      }
+
+      const prompt = (plan as any).savePrompt({
+        projectName,
+        content,
+        summary: args.summary,
+        relatedTaskId: args.relatedTaskId,
+        tags: args.tags,
+      });
+
+      return JSON.stringify({
+        status: 'saved',
+        prompt,
+      }, null, 2);
+    }
+
+    case 'devplan_list_prompts': {
+      const projectName = args.projectName!;
+      const plan = createDevPlan(projectName);
+
+      if (typeof (plan as any).listPrompts !== 'function') {
+        throw new McpError(
+          ErrorCode.InvalidRequest,
+          `Prompt logging requires "graph" engine. Project "${projectName}" uses a different engine.`
+        );
+      }
+
+      const prompts = (plan as any).listPrompts({
+        date: args.date,
+        relatedTaskId: args.relatedTaskId,
+        limit: args.limit,
+      });
+
+      return JSON.stringify({
+        projectName,
+        count: prompts.length,
+        filter: {
+          date: args.date || null,
+          relatedTaskId: args.relatedTaskId || null,
+          limit: args.limit || null,
+        },
+        prompts,
+      }, null, 2);
     }
 
     default:

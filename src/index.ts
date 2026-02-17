@@ -71,6 +71,9 @@ export {
   type DevPlanPaginatedGraph,
   type EntityGroupSummary,
   type EntityGroupAggregation,
+  // Prompt types
+  type PromptInput,
+  type Prompt,
   // Autopilot types
   type AutopilotConfig,
   type AutopilotAction,

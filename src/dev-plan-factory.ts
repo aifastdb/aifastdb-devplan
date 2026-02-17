@@ -376,7 +376,7 @@ export function createDevPlan(
   if (resolvedEngine === 'graph') {
     return new DevPlanGraphStore(projectName, {
       graphPath: path.join(base, projectName, 'graph-data'),
-      shardCount: 4,
+      shardCount: 5,
       enableSemanticSearch,
       embeddingDimension,
       gitCwd,
@@ -386,6 +386,7 @@ export function createDevPlan(
       documentPath: path.join(base, projectName, 'documents.jsonl'),
       taskPath: path.join(base, projectName, 'tasks.jsonl'),
       modulePath: path.join(base, projectName, 'modules.jsonl'),
+      promptPath: path.join(base, projectName, 'prompts.jsonl'),
       gitCwd,
     });
   }
