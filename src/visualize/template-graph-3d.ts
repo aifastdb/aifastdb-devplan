@@ -185,6 +185,56 @@ function render3DGraph(container, visibleNodes, visibleEdges) {
     _3dNodeLinks[tgtId].add(l);
   }
 
+  // ── 单击/双击判定状态 ──
+  var _3dClickTimer = null;
+  var _3dClickCount = 0;
+  var _3dPendingClickNode = null;
+
+  /** 双击聚焦: 计算节点及其所有关联节点的包围球, 将摄像机拉到刚好能完整显示的位置 */
+  function focus3DNodeWithNeighbors(node) {
+    // 收集目标节点 + 所有邻居节点的坐标
+    var points = [{ x: node.x || 0, y: node.y || 0, z: node.z || 0 }];
+    var neighbors = _3dNodeNeighbors[node.id];
+    if (neighbors) {
+      neighbors.forEach(function(nId) {
+        for (var i = 0; i < nodes3d.length; i++) {
+          if (nodes3d[i].id === nId) {
+            points.push({ x: nodes3d[i].x || 0, y: nodes3d[i].y || 0, z: nodes3d[i].z || 0 });
+            break;
+          }
+        }
+      });
+    }
+
+    // 计算质心
+    var cx = 0, cy = 0, cz = 0;
+    for (var i = 0; i < points.length; i++) {
+      cx += points[i].x; cy += points[i].y; cz += points[i].z;
+    }
+    cx /= points.length; cy /= points.length; cz /= points.length;
+
+    // 计算包围球半径 (到质心的最大距离)
+    var maxR = 0;
+    for (var i = 0; i < points.length; i++) {
+      var dx = points[i].x - cx, dy = points[i].y - cy, dz = points[i].z - cz;
+      var r = Math.sqrt(dx * dx + dy * dy + dz * dz);
+      if (r > maxR) maxR = r;
+    }
+
+    // 摄像机距离: 包围球半径 × 系数, 确保所有节点都在视锥内
+    // 系数 2.8 ~ 3.2 可保证 FOV ≈ 70° 时完整可见, 加 padding 余量
+    var camDist = Math.max(maxR * 3.0, 80);
+
+    // 摄像机位于质心的斜上方偏移, 提供良好的 3D 视角
+    try {
+      graph3d.cameraPosition(
+        { x: cx + camDist * 0.58, y: cy + camDist * 0.42, z: cz + camDist * 0.68 },
+        { x: cx, y: cy, z: cz },
+        1200
+      );
+    } catch(e) {}
+  }
+
   /** 更新高亮集合 */
   function update3DHighlight(nodeId) {
     _3dHighlightLinks.clear();
@@ -344,12 +394,34 @@ function render3DGraph(container, visibleNodes, visibleEdges) {
     // ── 力导向参数 (来自自定义设置) ──
     .d3AlphaDecay(_s3d.alphaDecay)
     .d3VelocityDecay(_s3d.velocityDecay)
-    // ── 交互事件 ──
+    // ── 交互事件: 单击/双击区分 ──
     .onNodeClick(function(node, event) {
-      // 更新高亮状态并触发重绘
-      update3DHighlight(node ? node.id : null);
-      refresh3DStyles();
-      handle3DNodeClick(node);
+      if (!node) return;
+      _3dPendingClickNode = node;
+      _3dClickCount++;
+      if (_3dClickCount === 1) {
+        // 第一次点击: 等待判定是否双击
+        _3dClickTimer = setTimeout(function() {
+          _3dClickCount = 0;
+          // 单击: 高亮 + 面板
+          update3DHighlight(node.id);
+          refresh3DStyles();
+          panelHistory = [];
+          currentPanelNodeId = null;
+          showPanel(node.id);
+        }, 280);
+      } else if (_3dClickCount >= 2) {
+        // 双击: 取消单击定时器
+        clearTimeout(_3dClickTimer);
+        _3dClickCount = 0;
+        // 高亮 + 面板 + 聚焦到节点及其关联节点
+        update3DHighlight(node.id);
+        refresh3DStyles();
+        panelHistory = [];
+        currentPanelNodeId = null;
+        showPanel(node.id);
+        focus3DNodeWithNeighbors(node);
+      }
     })
     .onNodeDragEnd(function(node) {
       // 拖拽结束后固定节点位置
@@ -803,6 +875,42 @@ function render3DGraph(container, visibleNodes, visibleEdges) {
     },
     moveNode: function(id, x, y) { /* no-op for 3D */ },
     getScale: function() { return 1; },
+    focus: function(nodeId, opts) {
+      // vis-network 兼容: 聚焦到指定节点（3D 版本 — 平滑移动摄像机）
+      if (!graph3d) return;
+      var nodes3dAll = graph3d.graphData().nodes;
+      var target = null;
+      for (var i = 0; i < nodes3dAll.length; i++) {
+        if (nodes3dAll[i].id === nodeId) { target = nodes3dAll[i]; break; }
+      }
+      if (!target || target.x === undefined) return;
+      var dur = (opts && opts.animation && opts.animation.duration) || 600;
+      var dist = 200; // 合理的聚焦距离
+      graph3d.cameraPosition(
+        { x: target.x, y: target.y, z: (target.z || 0) + dist },
+        { x: target.x, y: target.y, z: target.z || 0 },
+        dur
+      );
+    },
+    selectNodes: function(ids) {
+      if (ids && ids.length > 0) {
+        update3DHighlight(ids[0]);
+        refresh3DStyles();
+      } else {
+        update3DHighlight(null);
+        refresh3DStyles();
+      }
+    },
+    getConnectedEdges: function(nodeId) {
+      // 返回关联边 ID 列表（用于 highlightConnectedEdges 兼容）
+      var edgeIds = [];
+      if (_3dNodeLinks[nodeId]) {
+        _3dNodeLinks[nodeId].forEach(function(l) {
+          if (l._id) edgeIds.push(l._id);
+        });
+      }
+      return edgeIds;
+    },
     on: function(event, cb) {
       // 将 vis-network 事件映射到 3D 事件
       if (event === 'stabilizationIterationsDone') {
@@ -835,42 +943,7 @@ function render3DGraph(container, visibleNodes, visibleEdges) {
   });
 }
 
-/** 处理 3D 模式下的节点点击 */
-function handle3DNodeClick(node) {
-  if (!node) return;
-  var type = node._type || 'unknown';
-  var props = node._props || {};
-  var panelTitle = document.getElementById('panelTitle');
-  var panelBody = document.getElementById('panelBody');
-  var panel = document.getElementById('detailPanel');
-  if (!panel || !panelTitle || !panelBody) return;
-
-  panelTitle.textContent = node.label || node.id;
-
-  var html = '<div style="font-size:12px;color:#9ca3af;margin-bottom:8px;">类型: ' + type + '</div>';
-
-  if (props.status) {
-    var statusLabel = { completed: '✅ 已完成', in_progress: '🔄 进行中', pending: '⏳ 待处理', cancelled: '❌ 已取消' };
-    html += '<div style="margin-bottom:8px;">' + (statusLabel[props.status] || props.status) + '</div>';
-  }
-  if (props.taskId) html += '<div style="margin-bottom:4px;color:#94a3b8;font-size:11px;">任务ID: ' + props.taskId + '</div>';
-  if (props.description) html += '<div style="margin-top:8px;padding:8px;background:#1e293b;border-radius:6px;font-size:12px;color:#cbd5e1;">' + props.description + '</div>';
-  if (props.title) html += '<div style="margin-bottom:4px;font-size:12px;color:#e2e8f0;">' + props.title + '</div>';
-  if (props.priority) html += '<div style="margin-bottom:4px;font-size:11px;color:#f59e0b;">优先级: ' + props.priority + '</div>';
-
-  panelBody.innerHTML = html;
-  panel.classList.add('open');
-
-  // 高亮效果: 聚焦到该节点
-  if (network && network._graph3d) {
-    var dist = 120;
-    network._graph3d.cameraPosition(
-      { x: node.x + dist, y: node.y + dist, z: node.z + dist },
-      { x: node.x, y: node.y, z: node.z },
-      1000
-    );
-  }
-}
+/* handle3DNodeClick 已移除 — 3D 引擎现在使用共享的 showPanel() */
 
 `;
 }

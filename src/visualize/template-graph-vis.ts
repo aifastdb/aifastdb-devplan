@@ -9,7 +9,7 @@ export function getGraphVisScript(): string {
   return `
 // ========== 边高亮：选中节点时关联边变色，取消选中时恢复灰色 ==========
 function highlightConnectedEdges(nodeId) {
-  if (!edgesDataSet || !network) return;
+  if (!edgesDataSet || !network || typeof network.getConnectedEdges !== 'function') return;
   var connectedEdgeIds = network.getConnectedEdges(nodeId);
   var connectedSet = {};
   for (var i = 0; i < connectedEdgeIds.length; i++) connectedSet[connectedEdgeIds[i]] = true;

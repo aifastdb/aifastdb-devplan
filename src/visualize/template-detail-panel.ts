@@ -19,21 +19,26 @@ export function getDetailPanelScript(): string {
 var panelHistory = [];
 var currentPanelNodeId = null;
 
-/** 从关联链接跳转到新面板（将当前节点压入历史栈） */
+/** 从关联链接跳转到新面板（将当前节点压入历史栈）— 引擎无关 */
 function navigateToPanel(nodeId) {
   if (currentPanelNodeId) {
     panelHistory.push(currentPanelNodeId);
   }
-  network.selectNodes([nodeId]);
+  // 选中节点（兼容所有引擎: vis-network / 3D wrapper / GraphCanvas）
+  if (network && typeof network.selectNodes === 'function') {
+    network.selectNodes([nodeId]);
+  }
   highlightConnectedEdges(nodeId);
   showPanel(nodeId);
 }
 
-/** 返回上一个面板 */
+/** 返回上一个面板 — 引擎无关 */
 function panelGoBack() {
   if (panelHistory.length === 0) return;
   var prevNodeId = panelHistory.pop();
-  network.selectNodes([prevNodeId]);
+  if (network && typeof network.selectNodes === 'function') {
+    network.selectNodes([prevNodeId]);
+  }
   highlightConnectedEdges(prevNodeId);
   showPanel(prevNodeId);
 }
@@ -103,8 +108,30 @@ function getRelatedTasksForDoc(docNodeId) {
   return tasks;
 }
 
+/** 跨引擎通用: 根据 nodeId 获取节点数据 */
+function getNodeById(nodeId) {
+  // 1. 优先从 nodesDataSet (vis-network DataSet / SimpleDataSet) 获取
+  if (nodesDataSet) {
+    var dsNode = nodesDataSet.get(nodeId);
+    if (dsNode) return dsNode;
+  }
+  // 2. fallback: 从全局 allNodes 搜索并适配格式
+  for (var i = 0; i < allNodes.length; i++) {
+    if (allNodes[i].id === nodeId) {
+      var n = allNodes[i];
+      return {
+        id: n.id,
+        label: n.label || n._origLabel || '',
+        _type: n._type || n.type || '',
+        _props: n._props || n.properties || {}
+      };
+    }
+  }
+  return null;
+}
+
 function showPanel(nodeId) {
-  var node = nodesDataSet.get(nodeId);
+  var node = getNodeById(nodeId);
   if (!node) return;
   var panel = document.getElementById('panel');
   var header = document.getElementById('panelHeader');

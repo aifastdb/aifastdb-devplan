@@ -230,10 +230,17 @@ function closeStatsModal() {
 }
 
 function statsModalGoToNode(nodeId) {
-  if (network && nodesDataSet && nodesDataSet.get(nodeId)) {
-    network.selectNodes([nodeId]);
+  // 兼容所有引擎: 优先 nodesDataSet，fallback 到 getNodeById (3D 等引擎)
+  var nodeExists = (nodesDataSet && nodesDataSet.get(nodeId)) || getNodeById(nodeId);
+  if (network && nodeExists) {
+    if (typeof network.selectNodes === 'function') {
+      network.selectNodes([nodeId]);
+    }
     highlightConnectedEdges(nodeId);
-    network.focus(nodeId, { scale: 1.2, animation: { duration: 400, easingFunction: 'easeInOutQuad' } });
+    // 3D 模式下不触发摄像机聚焦 — 摄像机效果仅在画布双击节点时激发
+    if (!USE_3D && typeof network.focus === 'function') {
+      network.focus(nodeId, { scale: 1.2, animation: { duration: 400, easingFunction: 'easeInOutQuad' } });
+    }
     panelHistory = [];
     currentPanelNodeId = null;
     showPanel(nodeId);
