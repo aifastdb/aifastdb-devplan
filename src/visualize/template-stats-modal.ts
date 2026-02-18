@@ -7,11 +7,8 @@
 export function getStatsModalScript(): string {
   return `
 // ========== Stats Modal ==========
-/** 记录文档弹层中各文档的折叠状态（docKey → true 表示已展开） */
-var docModalExpandedState = {};
-
 function showStatsModal(nodeType) {
-  // 文档类型使用专用渲染
+  // 文档类型使用全局文档列表组件
   if (nodeType === 'document') {
     showDocModal();
     return;
@@ -70,159 +67,180 @@ function showStatsModal(nodeType) {
   document.getElementById('statsModalOverlay').classList.add('active');
 }
 
-/** 获取文档节点的 docKey (section|subSection) */
-function getDocNodeKey(node) {
-  var p = node.properties || {};
-  return p.section + (p.subSection ? '|' + p.subSection : '');
-}
+// ========== 全局文档列表弹层 (Phase-18: 与文档浏览页共用同一组件) ==========
 
-/** 构建文档层级树：{ node, children: [...] } */
-function buildDocTree() {
-  var docNodes = [];
-  for (var i = 0; i < allNodes.length; i++) {
-    if (allNodes[i].type === 'document') docNodes.push(allNodes[i]);
-  }
-
-  // 建立 parentDoc → children 映射
-  var childrenMap = {};  // parentDocKey → [nodes]
-  var childKeySet = {};  // 属于子文档的 nodeId 集合
-  for (var i = 0; i < docNodes.length; i++) {
-    var p = docNodes[i].properties || {};
-    if (p.parentDoc) {
-      if (!childrenMap[p.parentDoc]) childrenMap[p.parentDoc] = [];
-      childrenMap[p.parentDoc].push(docNodes[i]);
-      childKeySet[docNodes[i].id] = true;
-    }
-  }
-
-  // 按 section 分组顶级文档
-  var groups = {};
-  var groupOrder = [];
-  for (var i = 0; i < docNodes.length; i++) {
-    if (childKeySet[docNodes[i].id]) continue;
-    var sec = (docNodes[i].properties || {}).section || 'custom';
-    if (!groups[sec]) { groups[sec] = []; groupOrder.push(sec); }
-    groups[sec].push(docNodes[i]);
-  }
-
-  return { groups: groups, groupOrder: groupOrder, childrenMap: childrenMap };
-}
-
-/** 显示文档弹层（左侧列表） */
+/** 显示文档弹层 — 复用文档浏览页的 UI 样式和搜索功能 */
 function showDocModal() {
-  var docNodes = [];
-  for (var i = 0; i < allNodes.length; i++) {
-    if (allNodes[i].type === 'document') docNodes.push(allNodes[i]);
-  }
+  document.getElementById('statsModalTitle').textContent = '📄 文档库';
+  document.getElementById('statsModalCount').textContent = '';
 
-  document.getElementById('statsModalTitle').textContent = '📄 文档列表';
-  document.getElementById('statsModalCount').textContent = '(' + docNodes.length + ')';
+  // 在 modal body 中渲染搜索栏 + 文档列表容器（复用文档浏览页 CSS 类名）
+  var bodyHtml = '';
+  // 置顶搜索栏
+  bodyHtml += '<div class="doc-modal-search-sticky">';
+  bodyHtml += '<div class="docs-search-wrap">';
+  bodyHtml += '<input type="text" class="docs-search" id="docModalSearch" placeholder="搜索文档标题..." oninput="filterDocModal()">';
+  bodyHtml += '<button class="docs-search-clear" id="docModalSearchClear" onclick="clearDocModalSearch()" title="清空搜索">✕</button>';
+  bodyHtml += '</div></div>';
+  // 文档分组列表容器
+  bodyHtml += '<div id="docModalGroupList" style="padding:8px 0;">';
+  bodyHtml += '<div style="text-align:center;padding:40px;color:#6b7280;font-size:12px;"><div class="spinner" style="margin:0 auto 12px;width:24px;height:24px;border-width:3px;"></div>加载文档列表...</div>';
+  bodyHtml += '</div>';
 
-  var tree = buildDocTree();
-  var html = renderDocTreeHTML(tree);
-
-  if (docNodes.length === 0) {
-    html = '<div style="text-align:center;padding:40px;color:#6b7280;">暂无文档</div>';
-  }
-
-  document.getElementById('statsModalBody').innerHTML = html;
-  // 根据侧边栏状态调整弹层位置
+  document.getElementById('statsModalBody').innerHTML = bodyHtml;
   updateStatsModalPosition();
   document.getElementById('statsModalOverlay').classList.add('active');
-}
 
-/** 渲染文档层级树 HTML */
-function renderDocTreeHTML(tree) {
-  var SECTION_NAMES_MODAL = {
-    overview: '概述', core_concepts: '核心概念', api_design: 'API 设计',
-    file_structure: '文件结构', config: '配置', examples: '使用示例',
-    technical_notes: '技术笔记', api_endpoints: 'API 端点',
-    milestones: '里程碑', changelog: '变更记录', custom: '自定义'
-  };
-  var SECTION_ICONS_MODAL = {
-    overview: '▸', core_concepts: '▸', api_design: '▸',
-    file_structure: '▸', config: '▸', examples: '▸',
-    technical_notes: '▸', api_endpoints: '▸',
-    milestones: '▸', changelog: '▸', custom: '▸'
-  };
-
-  var html = '';
-  for (var gi = 0; gi < tree.groupOrder.length; gi++) {
-    var sec = tree.groupOrder[gi];
-    var items = tree.groups[sec];
-    var secName = SECTION_NAMES_MODAL[sec] || sec;
-    var secIcon = SECTION_ICONS_MODAL[sec] || '▸';
-
-    html += '<div style="margin-bottom:4px;">';
-    html += '<div style="padding:8px 20px;font-size:11px;font-weight:700;color:#9ca3af;text-transform:uppercase;letter-spacing:0.05em;display:flex;align-items:center;gap:6px;">';
-    html += '<span>' + secName + '</span>';
-    html += '<span style="margin-left:auto;font-size:10px;color:#4b5563;">' + items.length + '</span>';
-    html += '</div>';
-
-    for (var ii = 0; ii < items.length; ii++) {
-      html += renderDocTreeItem(items[ii], tree.childrenMap, 0);
+  // 加载文档数据（全局共享，已加载则直接使用缓存）
+  loadDocsData(function(data, err) {
+    if (err) {
+      var list = document.getElementById('docModalGroupList');
+      if (list) list.innerHTML = '<div style="text-align:center;padding:40px;color:#f87171;font-size:12px;">加载失败: ' + err.message + '</div>';
+      return;
     }
-    html += '</div>';
-  }
-  return html;
+    document.getElementById('statsModalCount').textContent = '(' + docsData.length + ')';
+    renderDocsList(docsData, 'docModalGroupList', 'globalDocSelect');
+  });
 }
 
-/** 递归渲染单个文档节点及其子文档 */
-function renderDocTreeItem(node, childrenMap, depth) {
-  var docKey = getDocNodeKey(node);
-  var p = node.properties || {};
-  var children = childrenMap[docKey] || [];
-  var hasChildren = children.length > 0;
-  var isExpanded = docModalExpandedState[docKey] === true;
-  var paddingLeft = 20 + depth * 20;
+/** 文档弹层搜索过滤 */
+function filterDocModal() {
+  toggleSearchClear('docModalSearch', 'docModalSearchClear');
+  filterDocs('docModalSearch', 'docModalGroupList', 'globalDocSelect');
+}
 
-  var html = '';
+/** 文档弹层清空搜索 */
+function clearDocModalSearch() {
+  clearDocsSearch('docModalSearch', 'docModalSearchClear', 'docModalGroupList', 'globalDocSelect');
+}
 
-  // 文档项
-  html += '<div class="stats-modal-item" style="padding-left:' + paddingLeft + 'px;gap:6px;" onclick="docModalSelectDoc(\\x27' + escHtml(docKey).replace(/'/g, "\\\\'") + '\\x27,\\x27' + escHtml(node.id).replace(/'/g, "\\\\'") + '\\x27)">';
+/** 从图谱页文档弹层选中文档：关闭弹层 → 跳转文档浏览页 → 打开该文档 */
+function globalDocSelect(docKey) {
+  closeStatsModal();
+  navTo('docs');
+  // 确保文档浏览页数据已加载后再选中对应文档
+  loadDocsData(function() {
+    renderDocsList(docsData);   // 确保文档浏览页左侧列表已渲染
+    setTimeout(function() { selectDoc(docKey); }, 50);
+  });
+}
 
-  // 展开/折叠按钮
-  if (hasChildren) {
-    html += '<span class="doc-modal-toggle" onclick="event.stopPropagation();toggleDocModalExpand(\\x27' + escHtml(docKey).replace(/'/g, "\\\\'") + '\\x27)" style="display:inline-flex;align-items:center;justify-content:center;width:18px;height:18px;border-radius:4px;background:rgba(99,102,241,0.15);border:1px solid rgba(99,102,241,0.3);color:#818cf8;font-size:12px;font-weight:700;cursor:pointer;flex-shrink:0;transition:all 0.15s;line-height:1;">' + (isExpanded ? '−' : '+') + '</span>';
+/** 显示 Prompt 列表弹层（异步从 /api/prompts 加载） */
+function showPromptModal() {
+  document.getElementById('statsModalTitle').textContent = '💬 Prompt 日志';
+  document.getElementById('statsModalCount').textContent = '(加载中...)';
+  document.getElementById('statsModalBody').innerHTML = '<div style="text-align:center;padding:40px;color:#6b7280;"><div class="spinner" style="margin:0 auto 12px;width:24px;height:24px;border:2px solid #374151;border-top-color:#818cf8;border-radius:50%;animation:spin 0.6s linear infinite;"></div>加载 Prompt...</div>';
+  updateStatsModalPosition();
+  document.getElementById('statsModalOverlay').classList.add('active');
+
+  fetch('/api/prompts').then(function(r) { return r.json(); }).then(function(data) {
+    var prompts = data.prompts || [];
+    document.getElementById('statsModalCount').textContent = '(' + prompts.length + ')';
+
+    if (prompts.length === 0) {
+      document.getElementById('statsModalBody').innerHTML = '<div style="text-align:center;padding:40px;color:#6b7280;">暂无 Prompt 记录</div>';
+      return;
+    }
+
+    // 按日期分组（最新在前）
+    var grouped = {};
+    var dateOrder = [];
+    for (var i = 0; i < prompts.length; i++) {
+      var p = prompts[i];
+      var date = p.createdAt ? new Date(p.createdAt).toISOString().slice(0, 10) : 'unknown';
+      if (!grouped[date]) { grouped[date] = []; dateOrder.push(date); }
+      grouped[date].push(p);
+    }
+
+    var html = '';
+    for (var di = 0; di < dateOrder.length; di++) {
+      var date = dateOrder[di];
+      var items = grouped[date];
+      html += '<div style="margin-bottom:4px;">';
+      html += '<div style="padding:8px 20px;font-size:11px;font-weight:700;color:#9ca3af;text-transform:uppercase;letter-spacing:0.05em;display:flex;align-items:center;gap:6px;">';
+      html += '<span>📅 ' + escHtml(date) + '</span>';
+      html += '<span style="margin-left:auto;font-size:10px;color:#4b5563;">' + items.length + '</span>';
+      html += '</div>';
+
+      for (var ii = 0; ii < items.length; ii++) {
+        var p = items[ii];
+        var timeStr = p.createdAt ? new Date(p.createdAt).toLocaleTimeString() : '';
+        var tagHtml = '';
+        if (p.tags && p.tags.length > 0) {
+          for (var ti = 0; ti < Math.min(p.tags.length, 3); ti++) {
+            tagHtml += '<span style="font-size:10px;padding:1px 5px;border-radius:3px;background:rgba(139,92,246,0.15);color:#a78bfa;border:1px solid rgba(139,92,246,0.25);white-space:nowrap;">' + escHtml(p.tags[ti]) + '</span>';
+          }
+          if (p.tags.length > 3) tagHtml += '<span style="font-size:10px;color:#6b7280;">+' + (p.tags.length - 3) + '</span>';
+        }
+
+        // 用户原始输入（截取预览）
+        var rawContent = (p.content || '').trim();
+        var contentPreview = rawContent.length > 120 ? rawContent.substring(0, 117) + '...' : rawContent;
+        // AI 理解
+        var aiText = (p.aiInterpretation || '').trim();
+        var aiPreview = aiText.length > 120 ? aiText.substring(0, 117) + '...' : aiText;
+        // 摘要
+        var summaryText = (p.summary || '').trim();
+
+        // 唯一展开 ID
+        var expandId = 'prompt-expand-' + date + '-' + ii;
+
+        html += '<div class="stats-modal-item" style="flex-direction:column;align-items:flex-start;gap:4px;padding:10px 20px;cursor:pointer;" onclick="togglePromptExpand(\\'' + expandId + '\\')">';
+
+        // 第一行：序号 + 摘要/预览 + 时间
+        html += '<div style="display:flex;align-items:center;gap:8px;width:100%;">';
+        html += '<span style="font-size:12px;font-weight:700;color:#ec4899;flex-shrink:0;">#' + (p.promptIndex || (ii + 1)) + '</span>';
+        html += '<span class="stats-modal-item-name" title="' + escHtml(summaryText || contentPreview) + '" style="font-size:13px;">' + escHtml(summaryText || contentPreview) + '</span>';
+        html += '<span style="font-size:10px;color:#6b7280;flex-shrink:0;margin-left:auto;white-space:nowrap;">' + timeStr + '</span>';
+        html += '</div>';
+
+        // 标签行
+        if (p.relatedTaskId || tagHtml) {
+          html += '<div style="display:flex;align-items:center;gap:6px;padding-left:28px;flex-wrap:wrap;">';
+          if (p.relatedTaskId) {
+            html += '<span style="font-size:10px;padding:1px 5px;border-radius:3px;background:rgba(16,185,129,0.15);color:#34d399;border:1px solid rgba(16,185,129,0.25);white-space:nowrap;">📌 ' + escHtml(p.relatedTaskId) + '</span>';
+          }
+          html += tagHtml;
+          html += '</div>';
+        }
+
+        // 展开区域（默认隐藏）— 用户原始输入 + AI 理解
+        html += '<div id="' + expandId + '" style="display:none;width:100%;padding-top:6px;border-top:1px solid rgba(75,85,99,0.3);margin-top:4px;">';
+
+        // 用户原始输入
+        html += '<div style="margin-bottom:8px;">';
+        html += '<div style="font-size:10px;font-weight:600;color:#9ca3af;margin-bottom:3px;display:flex;align-items:center;gap:4px;">💬 用户原始输入</div>';
+        html += '<div style="font-size:12px;color:#d1d5db;background:rgba(31,41,55,0.5);padding:8px 10px;border-radius:6px;border:1px solid rgba(75,85,99,0.3);white-space:pre-wrap;word-break:break-word;max-height:200px;overflow-y:auto;line-height:1.5;">' + escHtml(rawContent || '(未记录)') + '</div>';
+        html += '</div>';
+
+        // AI 理解
+        if (aiText) {
+          html += '<div style="margin-bottom:4px;">';
+          html += '<div style="font-size:10px;font-weight:600;color:#9ca3af;margin-bottom:3px;display:flex;align-items:center;gap:4px;">🤖 AI 理解</div>';
+          html += '<div style="font-size:12px;color:#a5b4fc;background:rgba(67,56,202,0.12);padding:8px 10px;border-radius:6px;border:1px solid rgba(99,102,241,0.2);white-space:pre-wrap;word-break:break-word;max-height:200px;overflow-y:auto;line-height:1.5;">' + escHtml(aiText) + '</div>';
+          html += '</div>';
+        }
+
+        html += '</div>'; // end expand
+        html += '</div>'; // end item
+      }
+      html += '</div>';
+    }
+    document.getElementById('statsModalBody').innerHTML = html;
+  }).catch(function(err) {
+    document.getElementById('statsModalBody').innerHTML = '<div style="text-align:center;padding:40px;color:#f87171;">加载失败: ' + escHtml(err.message) + '</div>';
+  });
+}
+
+/** 切换 Prompt 展开/折叠 */
+function togglePromptExpand(expandId) {
+  var el = document.getElementById(expandId);
+  if (!el) return;
+  if (el.style.display === 'none') {
+    el.style.display = 'block';
   } else {
-    html += '<span style="width:18px;flex-shrink:0;"></span>';
+    el.style.display = 'none';
   }
-
-  html += '<span class="stats-modal-item-icon" style="font-size:13px;color:#6b7280;">▸</span>';
-  html += '<span class="stats-modal-item-name" title="' + escHtml(node.label) + '" style="font-size:' + (depth > 0 ? '12' : '13') + 'px;' + (depth > 0 ? 'opacity:0.85;' : '') + '">' + escHtml(node.label) + '</span>';
-
-  if (hasChildren) {
-    html += '<span style="font-size:10px;color:#818cf8;flex-shrink:0;">' + children.length + '</span>';
-  }
-  if (p.subSection) {
-    html += '<span style="font-size:10px;color:#6b7280;flex-shrink:0;font-family:monospace;">' + escHtml(p.subSection) + '</span>';
-  }
-
-  html += '</div>';
-
-  // 子文档列表（仅展开时显示）
-  if (hasChildren && isExpanded) {
-    for (var ci = 0; ci < children.length; ci++) {
-      html += renderDocTreeItem(children[ci], childrenMap, depth + 1);
-    }
-  }
-
-  return html;
-}
-
-/** 展开/折叠文档弹层中的子文档 */
-function toggleDocModalExpand(docKey) {
-  docModalExpandedState[docKey] = !docModalExpandedState[docKey];
-  // 重新渲染文档列表
-  var tree = buildDocTree();
-  var html = renderDocTreeHTML(tree);
-  document.getElementById('statsModalBody').innerHTML = html;
-}
-
-/** 在文档弹层中选中文档 — 复用右侧图谱详情面板显示内容 */
-function docModalSelectDoc(docKey, nodeId) {
-  // 直接复用 statsModalGoToNode，聚焦图谱节点并打开已有的右侧详情面板
-  statsModalGoToNode(nodeId);
 }
 
 function closeStatsModal() {

@@ -648,8 +648,10 @@ export interface ExecutorHeartbeat {
 export interface PromptInput {
   /** 项目名称 */
   projectName: string;
-  /** 用户输入的原始 prompt 内容 */
+  /** 用户在 Cursor 对话框中输入的原始内容（逐字复制，不做任何修改） */
   content: string;
+  /** AI 对用户输入的理解和解读（可选，AI 用自己的话描述用户想做什么） */
+  aiInterpretation?: string;
   /** AI 生成的摘要（可选，简要描述做了什么） */
   summary?: string;
   /** 关联的主任务 ID（可选） */
@@ -668,8 +670,10 @@ export interface Prompt {
   projectName: string;
   /** 自增序号（当天内序号） */
   promptIndex: number;
-  /** 用户输入的原始 prompt 内容 */
+  /** 用户在 Cursor 对话框中输入的原始内容（逐字复制） */
   content: string;
+  /** AI 对用户输入的理解和解读 */
+  aiInterpretation?: string;
   /** AI 生成的摘要 */
   summary?: string;
   /** 关联的主任务 ID */

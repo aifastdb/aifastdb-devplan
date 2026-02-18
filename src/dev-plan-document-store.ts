@@ -1383,6 +1383,7 @@ export class DevPlanDocumentStore implements IDevPlanStore {
 
     const promptData = {
       content: input.content,
+      aiInterpretation: input.aiInterpretation || '',
       summary: input.summary || '',
       relatedTaskId: input.relatedTaskId || null,
     };
@@ -1428,6 +1429,7 @@ export class DevPlanDocumentStore implements IDevPlanStore {
       projectName: this.projectName,
       promptIndex,
       content: input.content,
+      aiInterpretation: input.aiInterpretation,
       summary: input.summary,
       relatedTaskId: input.relatedTaskId,
       tags: input.tags || [],
@@ -1497,6 +1499,7 @@ export class DevPlanDocumentStore implements IDevPlanStore {
       projectName: this.projectName,
       promptIndex: meta.promptIndex || 0,
       content: data.content || '',
+      aiInterpretation: data.aiInterpretation || undefined,
       summary: data.summary || undefined,
       relatedTaskId: data.relatedTaskId || meta.relatedTaskId || undefined,
       tags: customTags.length > 0 ? customTags : (meta.tags || []),

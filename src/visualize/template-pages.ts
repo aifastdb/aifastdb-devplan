@@ -37,17 +37,36 @@ var SECTION_ICONS = {
   milestones: '▸', changelog: '▸', custom: '▸'
 };
 
-function loadDocsPage() {
-  if (docsLoaded && docsData.length > 0) return;
-  var list = document.getElementById('docsGroupList');
-  if (list) list.innerHTML = '<div style="text-align:center;padding:40px;color:#6b7280;font-size:12px;"><div class="spinner" style="margin:0 auto 12px;width:24px;height:24px;border-width:3px;"></div>加载文档列表...</div>';
-
+/** 加载文档数据（全局共享，仅请求一次） */
+function loadDocsData(callback) {
+  if (docsLoaded && docsData.length > 0) {
+    if (callback) callback(docsData, null);
+    return;
+  }
   fetch('/api/docs').then(function(r) { return r.json(); }).then(function(data) {
     docsData = data.docs || [];
     docsLoaded = true;
-    renderDocsList(docsData);
+    if (callback) callback(docsData, null);
   }).catch(function(err) {
-    if (list) list.innerHTML = '<div style="text-align:center;padding:40px;color:#f87171;font-size:12px;">加载失败: ' + err.message + '<br><span style="cursor:pointer;color:#818cf8;text-decoration:underline;" onclick="docsLoaded=false;loadDocsPage();">重试</span></div>';
+    if (callback) callback(null, err);
+  });
+}
+
+function loadDocsPage() {
+  var list = document.getElementById('docsGroupList');
+  // 数据已加载（可能由全局文档弹层预先加载），直接渲染到侧边栏
+  if (docsLoaded && docsData.length > 0) {
+    renderDocsList(docsData);
+    return;
+  }
+  if (list) list.innerHTML = '<div style="text-align:center;padding:40px;color:#6b7280;font-size:12px;"><div class="spinner" style="margin:0 auto 12px;width:24px;height:24px;border-width:3px;"></div>加载文档列表...</div>';
+
+  loadDocsData(function(data, err) {
+    if (err) {
+      if (list) list.innerHTML = '<div style="text-align:center;padding:40px;color:#f87171;font-size:12px;">加载失败: ' + err.message + '<br><span style="cursor:pointer;color:#818cf8;text-decoration:underline;" onclick="docsLoaded=false;loadDocsPage();">重试</span></div>';
+      return;
+    }
+    renderDocsList(docsData);
   });
 }
 
@@ -59,10 +78,15 @@ function docItemKey(item) {
 /** 记录哪些父文档处于折叠状态（key → true 表示折叠） */
 var docsCollapsedState = {};
 
-/** 将文档列表按 section 分组渲染，支持 parentDoc 层级 */
-function renderDocsList(docs) {
-  var list = document.getElementById('docsGroupList');
+/** 将文档列表按 section 分组渲染，支持 parentDoc 层级
+ *  @param docs      - 文档数组
+ *  @param targetId  - 渲染目标容器 ID (默认 'docsGroupList')
+ *  @param selectFn  - 点击文档时调用的函数名 (默认 'selectDoc')
+ */
+function renderDocsList(docs, targetId, selectFn) {
+  var list = document.getElementById(targetId || 'docsGroupList');
   if (!list) return;
+  selectFn = selectFn || 'selectDoc';
 
   // 建立 parentDoc → children 映射，区分顶级和子文档
   var childrenMap = {};  // parentDocKey → [child items]
@@ -151,7 +175,7 @@ function renderDocsList(docs) {
     html += '<div class="docs-group-items">';
 
     for (var ii = 0; ii < items.length; ii++) {
-      html += renderDocItemWithChildren(items[ii], childrenMap, secIcon);
+      html += renderDocItemWithChildren(items[ii], childrenMap, secIcon, selectFn);
     }
 
     html += '</div></div>';
@@ -160,8 +184,11 @@ function renderDocsList(docs) {
   list.innerHTML = html;
 }
 
-/** 递归渲染文档项及其子文档 */
-function renderDocItemWithChildren(item, childrenMap, secIcon) {
+/** 递归渲染文档项及其子文档
+ *  @param selectFn - 点击时调用的函数名 (默认 'selectDoc')
+ */
+function renderDocItemWithChildren(item, childrenMap, secIcon, selectFn) {
+  selectFn = selectFn || 'selectDoc';
   var docKey = docItemKey(item);
   var isActive = docKey === currentDocKey ? ' active' : '';
   var children = childrenMap[docKey] || [];
@@ -171,7 +198,7 @@ function renderDocItemWithChildren(item, childrenMap, secIcon) {
   var html = '<div class="docs-item-wrapper">';
 
   // 文档项本身
-  html += '<div class="docs-item' + isActive + '" data-key="' + escHtml(docKey) + '" onclick="selectDoc(\\x27' + docKey.replace(/'/g, "\\\\'") + '\\x27)">';
+  html += '<div class="docs-item' + isActive + '" data-key="' + escHtml(docKey) + '" onclick="' + selectFn + '(\\x27' + docKey.replace(/'/g, "\\\\'") + '\\x27)">';
 
   if (hasChildren) {
     var toggleIcon = isCollapsed ? '+' : '−';
@@ -193,7 +220,7 @@ function renderDocItemWithChildren(item, childrenMap, secIcon) {
   if (hasChildren) {
     html += '<div class="docs-children' + (isCollapsed ? ' collapsed' : '') + '" data-parent="' + escHtml(docKey) + '">';
     for (var ci = 0; ci < children.length; ci++) {
-      html += renderDocItemWithChildren(children[ci], childrenMap, secIcon);
+      html += renderDocItemWithChildren(children[ci], childrenMap, secIcon, selectFn);
     }
     html += '</div>';
   }
@@ -225,28 +252,41 @@ function toggleDocsGroup(el) {
   if (group) group.classList.toggle('collapsed');
 }
 
-/** 控制搜索框清除按钮的显示/隐藏 */
-function toggleSearchClear() {
-  var input = document.getElementById('docsSearch');
-  var btn = document.getElementById('docsSearchClear');
+/** 控制搜索框清除按钮的显示/隐藏
+ *  @param searchId   - 搜索输入框 ID (默认 'docsSearch')
+ *  @param clearBtnId - 清除按钮 ID (默认 'docsSearchClear')
+ */
+function toggleSearchClear(searchId, clearBtnId) {
+  var input = document.getElementById(searchId || 'docsSearch');
+  var btn = document.getElementById(clearBtnId || 'docsSearchClear');
   if (input && btn) {
     if (input.value.length > 0) { btn.classList.add('show'); } else { btn.classList.remove('show'); }
   }
 }
 
-/** 清空搜索框并重置列表 */
-function clearDocsSearch() {
-  var input = document.getElementById('docsSearch');
+/** 清空搜索框并重置列表
+ *  @param searchId   - 搜索输入框 ID (默认 'docsSearch')
+ *  @param clearBtnId - 清除按钮 ID (默认 'docsSearchClear')
+ *  @param targetId   - 渲染目标容器 ID (默认 'docsGroupList')
+ *  @param selectFn   - 点击文档时调用的函数名 (默认 'selectDoc')
+ */
+function clearDocsSearch(searchId, clearBtnId, targetId, selectFn) {
+  var input = document.getElementById(searchId || 'docsSearch');
   if (input) { input.value = ''; input.focus(); }
-  toggleSearchClear();
-  filterDocs();
+  toggleSearchClear(searchId, clearBtnId);
+  filterDocs(searchId, targetId, selectFn);
 }
 
-/** 搜索过滤文档列表 */
-function filterDocs() {
-  var query = (document.getElementById('docsSearch').value || '').toLowerCase().trim();
+/** 搜索过滤文档列表
+ *  @param searchId  - 搜索输入框 ID (默认 'docsSearch')
+ *  @param targetId  - 渲染目标容器 ID (默认 'docsGroupList')
+ *  @param selectFn  - 点击文档时调用的函数名 (默认 'selectDoc')
+ */
+function filterDocs(searchId, targetId, selectFn) {
+  var input = document.getElementById(searchId || 'docsSearch');
+  var query = (input ? input.value || '' : '').toLowerCase().trim();
   if (!query) {
-    renderDocsList(docsData);
+    renderDocsList(docsData, targetId, selectFn);
     return;
   }
   var filtered = [];
@@ -257,7 +297,7 @@ function filterDocs() {
       filtered.push(d);
     }
   }
-  renderDocsList(filtered);
+  renderDocsList(filtered, targetId, selectFn);
 }
 
 /** 选中并加载文档内容 */

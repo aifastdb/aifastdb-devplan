@@ -47,6 +47,55 @@ var SUB_TASK_STATUS_COLORS = {
   'cancelled':   _3dUniStyle.subTask.cancelled.bg
 };
 
+// ========== 3D 呼吸灯动画 (in_progress 主任务) ==========
+var _3dBreathPhase = 0;
+var _3dBreathAnimId = null;
+var _3dBreathItems = []; // { sprite, ring1, ring2: THREE.Sprite, baseScale, ring1Base, ring2Base }
+
+/** 启动 3D 呼吸灯动画循环 */
+function start3DBreathAnimation() {
+  if (_3dBreathAnimId) return;
+  function tick() {
+    _3dBreathPhase += 0.025;
+    if (_3dBreathPhase > Math.PI * 2) _3dBreathPhase -= Math.PI * 2;
+    var breath = (Math.sin(_3dBreathPhase) + 1) / 2; // [0, 1]
+
+    for (var i = 0; i < _3dBreathItems.length; i++) {
+      var item = _3dBreathItems[i];
+      // 脉冲光晕 Sprite: 缩放 + 透明度振荡
+      if (item.sprite && item.sprite.material) {
+        var s = item.baseScale * (0.8 + breath * 1.5);
+        item.sprite.scale.set(s, s, 1);
+        item.sprite.material.opacity = 0.10 + breath * 0.30;
+      }
+      // 外圈脉冲环 Sprite: 扩展 + 淡出 (始终面向相机)
+      if (item.ring1 && item.ring1.material) {
+        var r1 = (item.ring1Base || 35) * (0.85 + breath * 0.8);
+        item.ring1.scale.set(r1, r1, 1);
+        item.ring1.material.opacity = 0.55 * (1 - breath * 0.55);
+      }
+      // 内圈脉冲环 Sprite: 反向节奏 (呼吸感更强)
+      if (item.ring2 && item.ring2.material) {
+        var invBreath = 1 - breath;
+        var r2 = (item.ring2Base || 22) * (0.9 + invBreath * 0.6);
+        item.ring2.scale.set(r2, r2, 1);
+        item.ring2.material.opacity = 0.40 * (1 - invBreath * 0.45);
+      }
+    }
+
+    _3dBreathAnimId = requestAnimationFrame(tick);
+  }
+  _3dBreathAnimId = requestAnimationFrame(tick);
+}
+
+/** 停止 3D 呼吸灯动画循环 */
+function stop3DBreathAnimation() {
+  if (_3dBreathAnimId) {
+    cancelAnimationFrame(_3dBreathAnimId);
+    _3dBreathAnimId = null;
+  }
+}
+
 function get3DNodeColor(node) {
   var t = node._type || 'sub-task';
   var status = (node._props || {}).status || 'pending';
@@ -102,6 +151,30 @@ function colorWithAlpha(hex, alpha) {
     }
   }
   return 'rgba(' + r + ',' + g + ',' + b + ',' + alpha + ')';
+}
+
+/** 创建环形纹理 (用于呼吸灯脉冲环 Sprite, 始终面向相机) */
+function createRingTexture(color, size) {
+  var canvas = document.createElement('canvas');
+  canvas.width = size || 128;
+  canvas.height = size || 128;
+  var ctx = canvas.getContext('2d');
+  var cx = canvas.width / 2, cy = canvas.height / 2;
+  var r = cx * 0.75;
+  // 外圈辉光
+  ctx.beginPath();
+  ctx.arc(cx, cy, r, 0, Math.PI * 2);
+  ctx.strokeStyle = color ? colorWithAlpha(color, 0.15) : 'rgba(139,92,246,0.15)';
+  ctx.lineWidth = cx * 0.35;
+  ctx.stroke();
+  // 主环
+  ctx.beginPath();
+  ctx.arc(cx, cy, r, 0, Math.PI * 2);
+  ctx.strokeStyle = color || '#8b5cf6';
+  ctx.lineWidth = cx * 0.1;
+  ctx.globalAlpha = 0.85;
+  ctx.stroke();
+  return canvas;
 }
 
 // 缓存 glow 纹理 (避免每个节点重复创建)
@@ -337,6 +410,77 @@ function render3DGraph(container, visibleNodes, visibleEdges) {
         var sprite = new THREE.Sprite(spriteMat);
         sprite.scale.set(glowSize, glowSize, 1);
         group.add(sprite);
+      }
+
+      // ── in_progress 主任务: 呼吸脉冲光效 (参考 vis-network 发光效果) ──
+      var nodeStatus = (n._props || {}).status || 'pending';
+      if (t === 'main-task' && nodeStatus === 'in_progress') {
+        // 增强核心球体自发光强度
+        if (coreMesh && coreMesh.material) {
+          coreMesh.material.emissiveIntensity = 0.6;
+        }
+
+        // 1) 外层脉冲光晕 Sprite (大范围弥散辉光, 类似 vis-network outerGlow)
+        var pulseGlowSize = 55;
+        var pulseColor = '#7c3aed';
+        var pulseCacheKey = pulseColor + '_pulse';
+        if (!_glowTextureCache[pulseCacheKey]) {
+          _glowTextureCache[pulseCacheKey] = new THREE.CanvasTexture(createGlowTexture(pulseColor, 128));
+        }
+        var pulseSpriteMat = new THREE.SpriteMaterial({
+          map: _glowTextureCache[pulseCacheKey],
+          transparent: true,
+          opacity: 0.25,
+          blending: THREE.AdditiveBlending,
+          depthWrite: false
+        });
+        var pulseSprite = new THREE.Sprite(pulseSpriteMat);
+        pulseSprite.scale.set(pulseGlowSize, pulseGlowSize, 1);
+        group.add(pulseSprite);
+
+        // 2) 外圈脉冲环 Sprite (billboard, 始终面向相机)
+        var outerRingSize = 35;
+        var outerRingCacheKey = '#8b5cf6_ring';
+        if (!_glowTextureCache[outerRingCacheKey]) {
+          _glowTextureCache[outerRingCacheKey] = new THREE.CanvasTexture(createRingTexture('#8b5cf6', 128));
+        }
+        var outerRingMat = new THREE.SpriteMaterial({
+          map: _glowTextureCache[outerRingCacheKey],
+          transparent: true,
+          opacity: 0.55,
+          blending: THREE.AdditiveBlending,
+          depthWrite: false
+        });
+        var outerRingSprite = new THREE.Sprite(outerRingMat);
+        outerRingSprite.scale.set(outerRingSize, outerRingSize, 1);
+        group.add(outerRingSprite);
+
+        // 3) 内圈脉冲环 Sprite (更紧凑)
+        var innerRingSize = 22;
+        var innerRingCacheKey = '#a78bfa_ring';
+        if (!_glowTextureCache[innerRingCacheKey]) {
+          _glowTextureCache[innerRingCacheKey] = new THREE.CanvasTexture(createRingTexture('#a78bfa', 128));
+        }
+        var innerRingMat = new THREE.SpriteMaterial({
+          map: _glowTextureCache[innerRingCacheKey],
+          transparent: true,
+          opacity: 0.4,
+          blending: THREE.AdditiveBlending,
+          depthWrite: false
+        });
+        var innerRingSprite = new THREE.Sprite(innerRingMat);
+        innerRingSprite.scale.set(innerRingSize, innerRingSize, 1);
+        group.add(innerRingSprite);
+
+        // 记录到呼吸灯列表
+        _3dBreathItems.push({
+          sprite: pulseSprite,
+          ring1: outerRingSprite,
+          ring2: innerRingSprite,
+          baseScale: pulseGlowSize,
+          ring1Base: outerRingSize,
+          ring2Base: innerRingSize
+        });
       }
 
       return group;
@@ -721,7 +865,20 @@ function render3DGraph(container, visibleNodes, visibleEdges) {
   }
 
   // 注入数据
+  _3dBreathItems = []; // 重置呼吸灯列表 (nodeThreeObject 回调会填充)
   graph3d.graphData({ nodes: nodes3d, links: links3d });
+
+  // ── 3D 呼吸灯: nodeThreeObject 回调在下一帧才执行, 需延迟检测 ──
+  stop3DBreathAnimation();
+  function _checkAndStartBreath() {
+    if (_3dBreathItems.length > 0 && !_3dBreathAnimId) {
+      start3DBreathAnimation();
+      log('3D 呼吸灯: 检测到 ' + _3dBreathItems.length + ' 个进行中主任务', true);
+    }
+  }
+  // 多次检测: 300ms (首帧渲染后) + 1500ms (大数据集延迟)
+  setTimeout(_checkAndStartBreath, 300);
+  setTimeout(_checkAndStartBreath, 1500);
 
   // ── 🪐 行星轨道: 绘制轨道环线 (Three.js) ──
   if (_isOrbital && _s3d.showOrbits) {
@@ -841,6 +998,9 @@ function render3DGraph(container, visibleNodes, visibleEdges) {
     _graph3d: graph3d,
     _container: container,
     destroy: function() {
+      // 停止 3D 呼吸灯动画
+      stop3DBreathAnimation();
+      _3dBreathItems = [];
       try {
         if (graph3d && graph3d._destructor) graph3d._destructor();
         else if (graph3d && graph3d.scene) {

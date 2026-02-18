@@ -1,14 +1,15 @@
 ---
-description: aifastdb-devplan 项目的 DevPlan 配置。包含项目标识、文档层级、开发阶段。通用的 DevPlan 工作流规则由用户级全局规则提供。
+description: aifastdb-devplan 项目的 DevPlan 完整配置。包含项目标识、任务创建工作流、Prompt 自动记录、文档层级、开发阶段。
 globs: []
 alwaysApply: true
 mcpServers: aifastdb-devplan
 ---
 
-# aifastdb-devplan 项目 — DevPlan 配置
+# aifastdb-devplan 项目 — DevPlan 完整配置
 
 > **MCP Server**: `aifastdb-devplan`  
-> **项目定位**: 基于 aifastdb 存储引擎的通用开发计划管理 MCP Server
+> **项目定位**: 基于 aifastdb 存储引擎的通用开发计划管理 MCP Server  
+> 通用的 DevPlan 工作流（触发词识别、阶段工作流、完成流程等）由用户级全局 Cursor Rule 提供（`C:\Users\daxue\.cursor\rules\dev-plan-management.mdc`）。
 
 ## 项目标识
 
@@ -16,76 +17,147 @@ mcpServers: aifastdb-devplan
 projectName = "aifastdb-devplan"
 ```
 
+---
+
+## 🔴 强制规则 1：修改代码时必须创建/关联 DevPlan 任务
+
+当用户要求对 `aifastdb-devplan` 项目进行**代码修改、功能开发、Bug 修复**时，**必须**执行以下工作流：
+
+### 工作流
+
+1. **查看当前任务状态**：先调用 `devplan_list_tasks(projectName: "aifastdb-devplan")` 查看是否有 `in_progress` 阶段
+2. **创建或关联任务**（二选一）：
+   - 如果修改属于已有的 `in_progress` 阶段 → 在该阶段下添加子任务
+   - 如果是独立的修改/功能 → 创建新的主任务（`devplan_create_main_task`）+ 子任务（`devplan_add_sub_task`）
+3. **完成后标记**：代码修改完成 + 编译通过后 → 调用 `devplan_complete_task` 标记子任务完成
+
+### 判断是否需要创建新阶段
+
+| 场景 | 操作 |
+|---|---|
+| 用户说"开始 phase-X" | → `devplan_start_phase` 启动已有阶段 |
+| 修改属于已有 in_progress 阶段的范围 | → 在现有阶段下 `devplan_add_sub_task` |
+| 独立的功能增强/Bug 修复 | → `devplan_create_main_task` 新建阶段 + `devplan_add_sub_task` |
+| 极小的改动（如改一个配置值） | → 可以不创建任务，但仍需保存 Prompt |
+
+### 任务 ID 命名规范
+
+- 主任务：`phase-{N}` 或 `phase-{N}{Letter}`（如 `phase-14B`）
+- 子任务：`T{N}.{M}`（如 `T14B.1`、`T14B.2`）
+
+---
+
+## 🔴 强制规则 2：Prompt 自动记录
+
+> 保存 Prompt 是已授权的自动行为，无需询问用户确认。
+
+### 🟢 自动授权声明
+
+- ✅ 直接调用 `devplan_save_prompt`，与其他 devplan 工具在同一批次中静默执行
+- ❌ 不要问"是否要记录 Prompt？"
+- ❌ 不要问"需要保存这次对话吗？"
+- ❌ 不要在回复中提及"已为您保存 Prompt"（除非用户显式要求保存时需要确认反馈）
+
+### 触发条件
+
+满足以下**任一条件**时，**必须**调用 `devplan_save_prompt`：
+
+| 条件 | 说明 |
+|---|---|
+| A: 首次调用 devplan 工具时 | 在同一批次中同时调用 `devplan_save_prompt`（**推荐**） |
+| B: 完成任务时（安全网） | 如果本轮对话还没保存过 Prompt，在 `devplan_complete_task` 同一批次中补充 |
+| C: 用户显式要求 | 用户说"记录 prompt"、"保存对话"、"记录到 devplan"时立即保存 |
+
+### 项目识别算法（projectName 确定优先级）
+
+1. **用户显式指定**："修改 aifastdb-devplan 项目" → `"aifastdb-devplan"`
+2. **本轮对话上下文**：已调用过 `devplan_*` 工具的 projectName
+3. **Workspace Rules 配置**：本文件定义的 `projectName = "aifastdb-devplan"`
+4. **当前文件路径**：文件在 `D:\Project\git\aifastdb-devplan\` 下 → `"aifastdb-devplan"`
+5. **⚠️ 无法确定时不要猜测**，询问用户
+
+### 保存格式
+
+```
+devplan_save_prompt(
+  projectName: "aifastdb-devplan",
+  content: "<user_query 标签内的原始文本，逐字复制>",
+  aiInterpretation: "<AI 的理解和技术分析>",
+  summary: "<一句话摘要>",
+  relatedTaskId: "phase-X",   // 可选
+  tags: ["feature", "bugfix"] // 可选
+)
+```
+
+- **content**：必须从 `<user_query>` 标签内逐字复制，禁止修改
+- **aiInterpretation**：AI 的技术解读，不是用户原话
+- **一轮对话只保存一次**（用户第一条消息），后续追问不重复保存
+
+---
+
+## 完整工作流示例
+
+用户说："修改 aifastdb-devplan 项目，在 3D 图谱中添加呼吸灯效果"
+
+```
+// 第 1 批工具调用：保存 Prompt + 查看任务状态
+batch 1: [
+  devplan_save_prompt(projectName: "aifastdb-devplan", content: "...", ...),
+  devplan_list_tasks(projectName: "aifastdb-devplan"),
+]
+
+// 第 2 批：创建任务（如果没有合适的 in_progress 阶段）
+batch 2: [
+  devplan_create_main_task(projectName: "aifastdb-devplan", taskId: "phase-14B", title: "...", priority: "P1"),
+  devplan_add_sub_task(projectName: "aifastdb-devplan", taskId: "T14B.1", parentTaskId: "phase-14B", title: "..."),
+  devplan_add_sub_task(projectName: "aifastdb-devplan", taskId: "T14B.2", parentTaskId: "phase-14B", title: "..."),
+]
+
+// ... 执行代码修改 ...
+
+// 完成后标记任务
+batch N: [
+  devplan_complete_task(projectName: "aifastdb-devplan", taskId: "T14B.1"),
+  devplan_complete_task(projectName: "aifastdb-devplan", taskId: "T14B.2"),
+]
+```
+
+---
+
 ## 文档层级
 
 | 层级 | 文件 | 用途 | 大小 |
-|------|------|------|------|
+|---|---|---|---|
 | Layer 1 (鸟瞰) | [aifastdb-devplan-overview.md](mdc:docs/aifastdb-devplan-overview.md) | AI 首选阅读，< 500 行，一次读完 | ~320 行 |
 | Layer 2 (详细) | [DEVPLAN_ReadMe.md](mdc:DEVPLAN_ReadMe.md) | 完整功能文档，分段读取 | 2100+ 行 |
 | Layer 3 (实时) | `.devplan/aifastdb-devplan/` | MCP 工具查询任务状态 | — |
 
 ## 快捷操作
 
-### 查看项目进度
 ```
 devplan_get_progress(projectName: "aifastdb-devplan")
-```
-
-### 查看任务列表
-```
 devplan_list_tasks(projectName: "aifastdb-devplan")
 devplan_list_tasks(projectName: "aifastdb-devplan", parentTaskId: "phase-1")
 devplan_list_tasks(projectName: "aifastdb-devplan", status: "pending")
-```
-
-### 完成任务
-```
 devplan_complete_task(projectName: "aifastdb-devplan", taskId: "T1.1")
-```
-
-### Git 同步检查
-```
 devplan_sync_git(projectName: "aifastdb-devplan", dryRun: true)
-devplan_sync_git(projectName: "aifastdb-devplan")
-```
-
-### 查看/更新文档片段
-```
 devplan_list_sections(projectName: "aifastdb-devplan")
 devplan_get_section(projectName: "aifastdb-devplan", section: "overview")
-devplan_get_section(projectName: "aifastdb-devplan", section: "technical_notes", subSection: "multi-project-routing")
-```
-
-### 导出 Markdown
-```
 devplan_export_markdown(projectName: "aifastdb-devplan", scope: "tasks")
-devplan_export_markdown(projectName: "aifastdb-devplan", scope: "full")
-```
-
-### 功能模块管理
-```
 devplan_list_modules(projectName: "aifastdb-devplan")
-devplan_get_module(projectName: "aifastdb-devplan", moduleId: "<模块ID>")
-```
-
-### Prompt 日志
-```
 devplan_save_prompt(projectName: "aifastdb-devplan", content: "用户 Prompt", relatedTaskId: "phase-X")
 devplan_list_prompts(projectName: "aifastdb-devplan")
-devplan_list_prompts(projectName: "aifastdb-devplan", date: "2026-02-18")
-devplan_list_prompts(projectName: "aifastdb-devplan", relatedTaskId: "phase-1")
 ```
 
 ## 开发阶段概览
 
 | 阶段 | 状态 | 说明 |
-|------|------|------|
+|---|---|---|
 | 阶段一 | ✅ 已完成 | 多项目路由完善与测试 (5/5) |
-| 阶段二 | ⬜ 待开发 | Autopilot HTTP API 开发 |
-| 阶段三 | ⬜ 待开发 | Autopilot MCP 工具 |
-| 阶段四 | ⬜ 待开发 | Python Executor 核心 |
-| 阶段五 | ⬜ 待开发 P1 | Executor GUI 自动化与视觉分析 |
-| 阶段六 | ⬜ 待开发 P1 | Executor Web UI 与集成测试 |
+| 阶段二~六 | ✅ 已完成 | Autopilot + Executor (全部完成) |
+| Phase 1B | ✅ 已完成 | WAL Shard 语义化重命名 |
+| Phase 7~13 | ✅ 已完成 | 图谱渲染引擎 + 性能优化 + 3D 可视化 |
+| Phase 14 | 🔄 进行中 | template.ts 拆分重构 |
 
 ## 注意事项
 

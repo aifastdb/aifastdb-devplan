@@ -292,6 +292,8 @@ function startServer(projectName: string, basePath: string, port: number): void 
           const includeModules = url.searchParams.get('includeModules') !== 'false';
           const includeNodeDegree = url.searchParams.get('includeNodeDegree') !== 'false';
           const enableBackendDegreeFallback = url.searchParams.get('enableBackendDegreeFallback') !== 'false';
+          // 可视化页面默认不渲染 Prompt 节点（通过顶部统计栏点击查看 Prompt 列表）
+          const includePrompts = url.searchParams.get('includePrompts') === 'true';
 
           if (store.exportGraph) {
             const graph = store.exportGraph({
@@ -299,6 +301,7 @@ function startServer(projectName: string, basePath: string, port: number): void 
               includeModules,
               includeNodeDegree,
               enableBackendDegreeFallback,
+              includePrompts,
             });
             res.writeHead(200, { 'Content-Type': 'application/json; charset=utf-8' });
             res.end(JSON.stringify(graph));
@@ -316,12 +319,37 @@ function startServer(projectName: string, basePath: string, port: number): void 
           // 附加模块和文档计数（分层加载模式下 graph.nodes 不含全部类型，需从此处获取真实数量）
           const sections = store.listSections();
           const modules = store.listModules();
+          // 附加 Prompt 计数
+          let promptCount = 0;
+          try {
+            if (typeof store.listPrompts === 'function') {
+              promptCount = store.listPrompts().length;
+            }
+          } catch (e) { /* listPrompts 不支持时忽略 */ }
+
           res.writeHead(200, { 'Content-Type': 'application/json; charset=utf-8' });
           res.end(JSON.stringify({
             ...progress,
             moduleCount: modules.length,
             docCount: sections.length,
+            promptCount,
           }));
+          break;
+        }
+
+        case '/api/prompts': {
+          // 列出所有 Prompt 日志
+          const store = createFreshStore(projectName, basePath);
+          let prompts: any[] = [];
+          try {
+            if (typeof store.listPrompts === 'function') {
+              prompts = store.listPrompts();
+            }
+          } catch (e) {
+            prompts = [];
+          }
+          res.writeHead(200, { 'Content-Type': 'application/json; charset=utf-8' });
+          res.end(JSON.stringify({ prompts, count: prompts.length }));
           break;
         }
 

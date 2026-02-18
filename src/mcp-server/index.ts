@@ -768,11 +768,15 @@ const TOOLS = [
         },
         content: {
           type: 'string',
-          description: 'The user prompt content\n用户输入的 Prompt 内容',
+          description: 'The exact raw user input from Cursor chat (verbatim copy, no modifications)\n用户在 Cursor 对话框中的原始输入（逐字复制，不做任何修改）',
+        },
+        aiInterpretation: {
+          type: 'string',
+          description: 'Optional: AI interpretation of the user input — describe in your own words what the user wants to do\n可选：AI 对用户输入的理解和解读 — 用你自己的话描述用户想做什么',
         },
         summary: {
           type: 'string',
-          description: 'Optional: AI-generated summary of the prompt\n可选：AI 生成的 Prompt 摘要',
+          description: 'Optional: AI-generated short summary of the prompt (one sentence)\n可选：AI 生成的 Prompt 简要摘要（一句话）',
         },
         relatedTaskId: {
           type: 'string',
@@ -875,6 +879,8 @@ interface ToolArgs {
   parentDoc?: string;
   /** devplan_auto_config: Autopilot 配置（部分更新） */
   config?: Partial<AutopilotConfig>;
+  /** devplan_save_prompt: AI 对用户输入的理解 */
+  aiInterpretation?: string;
   /** devplan_save_prompt: Prompt 摘要 */
   summary?: string;
   /** devplan_save_prompt: 关联的主任务 ID */
@@ -1981,6 +1987,7 @@ async function handleToolCall(name: string, args: ToolArgs): Promise<string> {
       const prompt = (plan as any).savePrompt({
         projectName,
         content,
+        aiInterpretation: args.aiInterpretation,
         summary: args.summary,
         relatedTaskId: args.relatedTaskId,
         tags: args.tags,

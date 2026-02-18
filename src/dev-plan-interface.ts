@@ -295,6 +295,7 @@ export interface IDevPlanStore {
     includeModules?: boolean;
     includeNodeDegree?: boolean;
     enableBackendDegreeFallback?: boolean;
+    includePrompts?: boolean;
   }): DevPlanExportedGraph | null;
 
   // ==========================================================================

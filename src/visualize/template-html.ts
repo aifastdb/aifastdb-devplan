@@ -30,8 +30,8 @@ export function getHTML(projectName: string): string {
       </div>
       <div class="nav-item" data-page="docs" onclick="navTo('docs')">
         <span class="nav-item-icon">📄</span>
-        <span class="nav-item-text">文档浏览</span>
-        <span class="nav-tooltip">文档浏览</span>
+        <span class="nav-item-text">文档库</span>
+        <span class="nav-tooltip">文档库</span>
       </div>
       <div class="nav-item" data-page="stats" onclick="navTo('stats')">
         <span class="nav-item-icon">📊</span>
@@ -200,259 +200,264 @@ export function getHTML(projectName: string): string {
         <h2>⚙️ 项目设置</h2>
         <p class="settings-subtitle">配置 ${projectName} 项目的可视化与交互选项</p>
 
-        <!-- 统一节点颜色 (适用于所有渲染引擎) -->
-        <div class="settings-section">
-          <div class="settings-section-title">🎨 节点颜色 <span style="font-size:11px;color:#94a3b8;font-weight:400;margin-left:6px;">适用于所有渲染引擎</span></div>
-          <div class="settings-3d-panel" id="ncColors">
-            <div class="s3d-body" style="margin-top:0;">
-              <div class="s3d-group">
-                <div class="s3d-color-row">
-                  <span class="s3d-color-label"><span class="s3d-dot" style="background:#f59e0b;border-radius:50%;"></span> 项目</span>
-                  <input type="color" class="s3d-color-input" id="ncColorProject" value="#f59e0b" oninput="updateNodeColor('project',this.value)">
-                  <span class="s3d-color-hex" id="ncColorProjectHex">#f59e0b</span>
+        <div class="settings-grid">
+          <!-- 左列: 节点颜色 -->
+          <div class="settings-section">
+            <div class="settings-section-title">🎨 节点颜色 <span style="font-size:11px;color:#94a3b8;font-weight:400;margin-left:6px;">适用于所有渲染引擎</span></div>
+            <div class="settings-3d-panel" id="ncColors">
+              <div class="s3d-body" style="margin-top:0;">
+                <div class="s3d-group">
+                  <div class="s3d-color-row">
+                    <span class="s3d-color-label"><span class="s3d-dot" style="background:#f59e0b;border-radius:50%;"></span> 项目</span>
+                    <input type="color" class="s3d-color-input" id="ncColorProject" value="#f59e0b" oninput="updateNodeColor('project',this.value)">
+                    <span class="s3d-color-hex" id="ncColorProjectHex">#f59e0b</span>
+                  </div>
+                  <div class="s3d-color-row">
+                    <span class="s3d-color-label"><span class="s3d-dot" style="background:#ff6600;"></span> 模块</span>
+                    <input type="color" class="s3d-color-input" id="ncColorModule" value="#ff6600" oninput="updateNodeColor('module',this.value)">
+                    <span class="s3d-color-hex" id="ncColorModuleHex">#ff6600</span>
+                  </div>
+                  <div class="s3d-color-row">
+                    <span class="s3d-color-label"><span class="s3d-dot" style="background:#22c55e;border-radius:50%;"></span> 主任务</span>
+                    <input type="color" class="s3d-color-input" id="ncColorMainTask" value="#22c55e" oninput="updateNodeColor('main-task',this.value)">
+                    <span class="s3d-color-hex" id="ncColorMainTaskHex">#22c55e</span>
+                  </div>
+                  <div class="s3d-color-row">
+                    <span class="s3d-color-label"><span class="s3d-dot" style="background:#047857;border-radius:50%;"></span> 子任务</span>
+                    <input type="color" class="s3d-color-input" id="ncColorSubTask" value="#047857" oninput="updateNodeColor('sub-task',this.value)">
+                    <span class="s3d-color-hex" id="ncColorSubTaskHex">#047857</span>
+                  </div>
+                  <div class="s3d-color-row">
+                    <span class="s3d-color-label"><span class="s3d-dot" style="background:#3b82f6;"></span> 文档</span>
+                    <input type="color" class="s3d-color-input" id="ncColorDocument" value="#3b82f6" oninput="updateNodeColor('document',this.value)">
+                    <span class="s3d-color-hex" id="ncColorDocumentHex">#3b82f6</span>
+                  </div>
                 </div>
-                <div class="s3d-color-row">
-                  <span class="s3d-color-label"><span class="s3d-dot" style="background:#ff6600;"></span> 模块</span>
-                  <input type="color" class="s3d-color-input" id="ncColorModule" value="#ff6600" oninput="updateNodeColor('module',this.value)">
-                  <span class="s3d-color-hex" id="ncColorModuleHex">#ff6600</span>
-                </div>
-                <div class="s3d-color-row">
-                  <span class="s3d-color-label"><span class="s3d-dot" style="background:#22c55e;border-radius:50%;"></span> 主任务</span>
-                  <input type="color" class="s3d-color-input" id="ncColorMainTask" value="#22c55e" oninput="updateNodeColor('main-task',this.value)">
-                  <span class="s3d-color-hex" id="ncColorMainTaskHex">#22c55e</span>
-                </div>
-                <div class="s3d-color-row">
-                  <span class="s3d-color-label"><span class="s3d-dot" style="background:#047857;border-radius:50%;"></span> 子任务</span>
-                  <input type="color" class="s3d-color-input" id="ncColorSubTask" value="#047857" oninput="updateNodeColor('sub-task',this.value)">
-                  <span class="s3d-color-hex" id="ncColorSubTaskHex">#047857</span>
-                </div>
-                <div class="s3d-color-row">
-                  <span class="s3d-color-label"><span class="s3d-dot" style="background:#3b82f6;"></span> 文档</span>
-                  <input type="color" class="s3d-color-input" id="ncColorDocument" value="#3b82f6" oninput="updateNodeColor('document',this.value)">
-                  <span class="s3d-color-hex" id="ncColorDocumentHex">#3b82f6</span>
-                </div>
-              </div>
-              <button class="s3d-reset-btn" style="margin-top:8px;font-size:11px;" onclick="resetNodeColors()">↩ 恢复默认颜色</button>
-            </div>
-          </div>
-        </div>
-
-        <div class="settings-section">
-          <div class="settings-section-title">🖥️ 加载引擎</div>
-          <div class="settings-option-group" id="rendererOptions">
-            <label class="settings-radio-card selected" data-value="vis" onclick="selectRenderer('vis')">
-              <input type="radio" name="renderer" value="vis" checked>
-              <div class="radio-content">
-                <div class="radio-label">vis-network <span class="default-badge">默认</span></div>
-                <div class="radio-desc">基于 vis.js 的成熟图可视化库。使用 Canvas 2D 渲染，内置物理引擎力导向布局，支持节点拖拽、缩放、选中高亮等完整交互。适合中小规模图谱（< 2000 节点），生态成熟、兼容性好。</div>
-              </div>
-            </label>
-            <label class="settings-radio-card" data-value="3d" onclick="selectRenderer('3d')">
-              <input type="radio" name="renderer" value="3d">
-              <div class="radio-content">
-                <div class="radio-label">3D Force Graph <span style="font-size:10px;padding:1px 6px;border-radius:4px;background:linear-gradient(135deg,#7c3aed,#3b82f6);color:#e0e7ff;font-weight:500;">Three.js</span></div>
-                <div class="radio-desc">基于 Three.js + d3-force-3d 的 3D 球体可视化引擎。节点在三维空间中浮动、旋转、缩放，整体呈球形分布。支持 WebGL 硬件加速渲染、轨道控制器旋转视角、节点拖拽固定、流动粒子特效。适合沉浸式图谱探索。</div>
-              </div>
-            </label>
-          </div>
-        </div>
-
-        <!-- 通用图谱显示设置 (适用于所有引擎) -->
-        <div class="settings-section">
-          <div class="settings-section-title">🔗 图谱显示</div>
-          <div class="settings-3d-panel">
-            <div class="s3d-body" style="margin-top:0;">
-              <div class="s3d-group">
-                <div class="s3d-toggle-row">
-                  <span class="s3d-toggle-label">显示主节点连线 <span style="font-size:10px;color:#6b7280;margin-left:4px;">(项目节点 ↔ 周围节点的连线)</span></span>
-                  <label class="s3d-toggle"><input type="checkbox" id="settingShowProjectEdges" onchange="updateGraphSetting('showProjectEdges',this.checked)"><span class="s3d-toggle-slider"></span></label>
-                </div>
+                <button class="s3d-reset-btn" style="margin-top:8px;font-size:11px;" onclick="resetNodeColors()">↩ 恢复默认颜色</button>
               </div>
             </div>
           </div>
-        </div>
 
-        <!-- 3D Force Graph 自定义设置 (仅 3D 引擎时显示) -->
-        <div class="settings-section" id="settings3dSection" style="display:none;">
-          <div class="settings-section-title">🎛️ 3D Force Graph 参数</div>
-
-          <!-- 布局模式 -->
-          <div class="settings-3d-panel" id="s3dLayout">
-            <div class="s3d-header" onclick="toggle3DPanel('s3dLayout')">
-              <div class="s3d-header-title">🪐 布局模式</div>
-              <span class="s3d-header-arrow">▼</span>
+          <!-- 加载引擎 -->
+          <div class="settings-section">
+            <div class="settings-section-title">🖥️ 加载引擎</div>
+            <div class="settings-option-group" id="rendererOptions">
+              <label class="settings-radio-card selected" data-value="vis" onclick="selectRenderer('vis')">
+                <input type="radio" name="renderer" value="vis" checked>
+                <div class="radio-content">
+                  <div class="radio-label">vis-network <span class="default-badge">默认</span></div>
+                  <div class="radio-desc">基于 vis.js 的成熟图可视化库。使用 Canvas 2D 渲染，内置物理引擎力导向布局，支持节点拖拽、缩放、选中高亮等完整交互。适合中小规模图谱（< 2000 节点），生态成熟、兼容性好。</div>
+                </div>
+              </label>
+              <label class="settings-radio-card" data-value="3d" onclick="selectRenderer('3d')">
+                <input type="radio" name="renderer" value="3d">
+                <div class="radio-content">
+                  <div class="radio-label">3D Force Graph <span style="font-size:10px;padding:1px 6px;border-radius:4px;background:linear-gradient(135deg,#7c3aed,#3b82f6);color:#e0e7ff;font-weight:500;">Three.js</span></div>
+                  <div class="radio-desc">基于 Three.js + d3-force-3d 的 3D 球体可视化引擎。节点在三维空间中浮动、旋转、缩放，整体呈球形分布。支持 WebGL 硬件加速渲染、轨道控制器旋转视角、节点拖拽固定、流动粒子特效。适合沉浸式图谱探索。</div>
+                </div>
+              </label>
             </div>
-            <div class="s3d-body">
-              <div class="s3d-group">
-                <div class="s3d-layout-radios" style="display:flex;gap:8px;margin-bottom:10px;">
-                  <label style="flex:1;display:flex;align-items:center;gap:6px;padding:8px 12px;background:rgba(99,102,241,0.08);border:1px solid rgba(99,102,241,0.2);border-radius:8px;cursor:pointer;font-size:12px;color:#e2e8f0;transition:all 0.2s;">
-                    <input type="radio" name="s3dLayoutMode" value="force" onchange="updateLayoutMode('force')" style="accent-color:#6366f1;">
-                    <span>⚡ 力导向</span>
-                  </label>
-                  <label style="flex:1;display:flex;align-items:center;gap:6px;padding:8px 12px;background:rgba(99,102,241,0.08);border:1px solid rgba(99,102,241,0.2);border-radius:8px;cursor:pointer;font-size:12px;color:#e2e8f0;transition:all 0.2s;">
-                    <input type="radio" name="s3dLayoutMode" value="orbital" onchange="updateLayoutMode('orbital')" style="accent-color:#6366f1;">
-                    <span>🪐 行星轨道</span>
-                  </label>
-                </div>
-                <div class="s3d-desc" style="font-size:11px;color:#94a3b8;margin-bottom:10px;line-height:1.4;">
-                  行星轨道模式：项目节点为中心（太阳），模块/主任务/子任务/文档按层级排列在固定间距的同心轨道上，类似太阳系行星排列。
-                </div>
-                <div id="s3dOrbitalSettings" style="display:none;">
-                  <div class="s3d-row">
-                    <span class="s3d-label">轨道间距</span>
-                    <input type="range" class="s3d-slider" id="s3dOrbitSpacing" min="30" max="200" step="10" value="80" oninput="update3DSetting('orbitSpacing',this.value)">
-                    <span class="s3d-value" id="s3dOrbitSpacingVal">80</span>
-                  </div>
-                  <div class="s3d-row">
-                    <span class="s3d-label">轨道引力</span>
-                    <input type="range" class="s3d-slider" id="s3dOrbitStrength" min="0.1" max="2.0" step="0.1" value="0.8" oninput="update3DSetting('orbitStrength',this.value)">
-                    <span class="s3d-value" id="s3dOrbitStrengthVal">0.80</span>
-                  </div>
-                  <div class="s3d-row">
-                    <span class="s3d-label">平面化</span>
-                    <input type="range" class="s3d-slider" id="s3dOrbitFlatten" min="0" max="1.0" step="0.1" value="0.6" oninput="update3DSetting('orbitFlatten',this.value)">
-                    <span class="s3d-value" id="s3dOrbitFlattenVal">0.60</span>
-                  </div>
-                  <div class="s3d-desc" style="font-size:10px;color:#64748b;margin:4px 0 8px;">平面化=0 → 3D 球壳布局；平面化=1 → 完全扁平太阳系圆盘</div>
+          </div>
+
+          <!-- 通用图谱显示设置 (适用于所有引擎) -->
+          <div class="settings-section">
+            <div class="settings-section-title">🔗 图谱显示</div>
+            <div class="settings-3d-panel">
+              <div class="s3d-body" style="margin-top:0;">
+                <div class="s3d-group">
                   <div class="s3d-toggle-row">
-                    <span class="s3d-toggle-label">显示轨道环线</span>
-                    <label class="s3d-toggle"><input type="checkbox" id="s3dShowOrbits" checked onchange="update3DSetting('showOrbits',this.checked)"><span class="s3d-toggle-slider"></span></label>
+                    <span class="s3d-toggle-label">显示主节点连线 <span style="font-size:10px;color:#6b7280;margin-left:4px;">(项目节点 ↔ 周围节点的连线)</span></span>
+                    <label class="s3d-toggle"><input type="checkbox" id="settingShowProjectEdges" onchange="updateGraphSetting('showProjectEdges',this.checked)"><span class="s3d-toggle-slider"></span></label>
                   </div>
                 </div>
               </div>
             </div>
           </div>
 
-          <!-- 力导向物理参数 -->
-          <div class="settings-3d-panel" id="s3dPhysics">
-            <div class="s3d-header" onclick="toggle3DPanel('s3dPhysics')">
-              <div class="s3d-header-title">⚡ 力导向物理参数</div>
-              <span class="s3d-header-arrow">▼</span>
-            </div>
-            <div class="s3d-body">
-              <div class="s3d-group">
-                <div class="s3d-row">
-                  <span class="s3d-label">中心引力</span>
-                  <input type="range" class="s3d-slider" id="s3dGravity" min="0.01" max="0.30" step="0.01" value="0.05" oninput="update3DSetting('gravity',this.value)">
-                  <span class="s3d-value" id="s3dGravityVal">0.05</span>
+          <!-- 3D Force Graph 自定义设置 (仅 3D 引擎时显示) -->
+          <div class="settings-section" id="settings3dSection" style="display:none;">
+            <div class="settings-section-title">🎛️ 3D Force Graph 参数</div>
+            <div class="settings-3d-grid">
+
+              <!-- 布局模式 -->
+              <div class="settings-3d-panel" id="s3dLayout">
+                <div class="s3d-header" onclick="toggle3DPanel('s3dLayout')">
+                  <div class="s3d-header-title">🪐 布局模式</div>
+                  <span class="s3d-header-arrow">▼</span>
                 </div>
-                <div class="s3d-row">
-                  <span class="s3d-label">排斥力</span>
-                  <input type="range" class="s3d-slider" id="s3dRepulsion" min="-300" max="-5" step="5" value="-30" oninput="update3DSetting('repulsion',this.value)">
-                  <span class="s3d-value" id="s3dRepulsionVal">-30</span>
-                </div>
-                <div class="s3d-row">
-                  <span class="s3d-label">连接距离</span>
-                  <input type="range" class="s3d-slider" id="s3dLinkDist" min="10" max="120" step="5" value="40" oninput="update3DSetting('linkDistance',this.value)">
-                  <span class="s3d-value" id="s3dLinkDistVal">40</span>
-                </div>
-                <div class="s3d-row">
-                  <span class="s3d-label">速度衰减</span>
-                  <input type="range" class="s3d-slider" id="s3dVelocityDecay" min="0.1" max="0.8" step="0.05" value="0.30" oninput="update3DSetting('velocityDecay',this.value)">
-                  <span class="s3d-value" id="s3dVelocityDecayVal">0.30</span>
-                </div>
-                <div class="s3d-row">
-                  <span class="s3d-label">Alpha衰减</span>
-                  <input type="range" class="s3d-slider" id="s3dAlphaDecay" min="0.005" max="0.05" step="0.005" value="0.020" oninput="update3DSetting('alphaDecay',this.value)">
-                  <span class="s3d-value" id="s3dAlphaDecayVal">0.020</span>
+                <div class="s3d-body">
+                  <div class="s3d-group">
+                    <div class="s3d-layout-radios" style="display:flex;gap:8px;margin-bottom:10px;">
+                      <label style="flex:1;display:flex;align-items:center;gap:6px;padding:8px 12px;background:rgba(99,102,241,0.08);border:1px solid rgba(99,102,241,0.2);border-radius:8px;cursor:pointer;font-size:12px;color:#e2e8f0;transition:all 0.2s;">
+                        <input type="radio" name="s3dLayoutMode" value="force" onchange="updateLayoutMode('force')" style="accent-color:#6366f1;">
+                        <span>⚡ 力导向</span>
+                      </label>
+                      <label style="flex:1;display:flex;align-items:center;gap:6px;padding:8px 12px;background:rgba(99,102,241,0.08);border:1px solid rgba(99,102,241,0.2);border-radius:8px;cursor:pointer;font-size:12px;color:#e2e8f0;transition:all 0.2s;">
+                        <input type="radio" name="s3dLayoutMode" value="orbital" onchange="updateLayoutMode('orbital')" style="accent-color:#6366f1;">
+                        <span>🪐 行星轨道</span>
+                      </label>
+                    </div>
+                    <div class="s3d-desc" style="font-size:11px;color:#94a3b8;margin-bottom:10px;line-height:1.4;">
+                      行星轨道模式：项目节点为中心（太阳），模块/主任务/子任务/文档按层级排列在固定间距的同心轨道上，类似太阳系行星排列。
+                    </div>
+                    <div id="s3dOrbitalSettings" style="display:none;">
+                      <div class="s3d-row">
+                        <span class="s3d-label">轨道间距</span>
+                        <input type="range" class="s3d-slider" id="s3dOrbitSpacing" min="30" max="200" step="10" value="80" oninput="update3DSetting('orbitSpacing',this.value)">
+                        <span class="s3d-value" id="s3dOrbitSpacingVal">80</span>
+                      </div>
+                      <div class="s3d-row">
+                        <span class="s3d-label">轨道引力</span>
+                        <input type="range" class="s3d-slider" id="s3dOrbitStrength" min="0.1" max="2.0" step="0.1" value="0.8" oninput="update3DSetting('orbitStrength',this.value)">
+                        <span class="s3d-value" id="s3dOrbitStrengthVal">0.80</span>
+                      </div>
+                      <div class="s3d-row">
+                        <span class="s3d-label">平面化</span>
+                        <input type="range" class="s3d-slider" id="s3dOrbitFlatten" min="0" max="1.0" step="0.1" value="0.6" oninput="update3DSetting('orbitFlatten',this.value)">
+                        <span class="s3d-value" id="s3dOrbitFlattenVal">0.60</span>
+                      </div>
+                      <div class="s3d-desc" style="font-size:10px;color:#64748b;margin:4px 0 8px;">平面化=0 → 3D 球壳布局；平面化=1 → 完全扁平太阳系圆盘</div>
+                      <div class="s3d-toggle-row">
+                        <span class="s3d-toggle-label">显示轨道环线</span>
+                        <label class="s3d-toggle"><input type="checkbox" id="s3dShowOrbits" checked onchange="update3DSetting('showOrbits',this.checked)"><span class="s3d-toggle-slider"></span></label>
+                      </div>
+                    </div>
+                  </div>
                 </div>
               </div>
-              <!-- 类型分层 (天体间距效果) -->
-              <div class="s3d-group" style="margin-top:8px; border-top:1px solid rgba(99,102,241,0.12); padding-top:8px;">
-                <div style="font-size:11px; color:#94a3b8; margin-bottom:6px;">🌍 类型分层 — 不同类型节点保持空间距离（类似天体间距）</div>
-                <div class="s3d-toggle-row">
-                  <span class="s3d-toggle-label">启用类型分层</span>
-                  <label class="s3d-toggle"><input type="checkbox" id="s3dTypeSeparation" checked onchange="update3DSetting('typeSeparation',this.checked)"><span class="s3d-toggle-slider"></span></label>
+
+              <!-- 力导向物理参数 -->
+              <div class="settings-3d-panel" id="s3dPhysics">
+                <div class="s3d-header" onclick="toggle3DPanel('s3dPhysics')">
+                  <div class="s3d-header-title">⚡ 力导向物理参数</div>
+                  <span class="s3d-header-arrow">▼</span>
                 </div>
-                <div class="s3d-row">
-                  <span class="s3d-label">分层强度</span>
-                  <input type="range" class="s3d-slider" id="s3dTypeSepStrength" min="0.1" max="2.0" step="0.1" value="0.8" oninput="update3DSetting('typeSepStrength',this.value)">
-                  <span class="s3d-value" id="s3dTypeSepStrengthVal">0.80</span>
-                </div>
-                <div class="s3d-row">
-                  <span class="s3d-label">层间间距</span>
-                  <input type="range" class="s3d-slider" id="s3dTypeSepSpacing" min="30" max="200" step="10" value="80" oninput="update3DSetting('typeSepSpacing',this.value)">
-                  <span class="s3d-value" id="s3dTypeSepSpacingVal">80</span>
+                <div class="s3d-body">
+                  <div class="s3d-group">
+                    <div class="s3d-row">
+                      <span class="s3d-label">中心引力</span>
+                      <input type="range" class="s3d-slider" id="s3dGravity" min="0.01" max="0.30" step="0.01" value="0.05" oninput="update3DSetting('gravity',this.value)">
+                      <span class="s3d-value" id="s3dGravityVal">0.05</span>
+                    </div>
+                    <div class="s3d-row">
+                      <span class="s3d-label">排斥力</span>
+                      <input type="range" class="s3d-slider" id="s3dRepulsion" min="-300" max="-5" step="5" value="-30" oninput="update3DSetting('repulsion',this.value)">
+                      <span class="s3d-value" id="s3dRepulsionVal">-30</span>
+                    </div>
+                    <div class="s3d-row">
+                      <span class="s3d-label">连接距离</span>
+                      <input type="range" class="s3d-slider" id="s3dLinkDist" min="10" max="120" step="5" value="40" oninput="update3DSetting('linkDistance',this.value)">
+                      <span class="s3d-value" id="s3dLinkDistVal">40</span>
+                    </div>
+                    <div class="s3d-row">
+                      <span class="s3d-label">速度衰减</span>
+                      <input type="range" class="s3d-slider" id="s3dVelocityDecay" min="0.1" max="0.8" step="0.05" value="0.30" oninput="update3DSetting('velocityDecay',this.value)">
+                      <span class="s3d-value" id="s3dVelocityDecayVal">0.30</span>
+                    </div>
+                    <div class="s3d-row">
+                      <span class="s3d-label">Alpha衰减</span>
+                      <input type="range" class="s3d-slider" id="s3dAlphaDecay" min="0.005" max="0.05" step="0.005" value="0.020" oninput="update3DSetting('alphaDecay',this.value)">
+                      <span class="s3d-value" id="s3dAlphaDecayVal">0.020</span>
+                    </div>
+                  </div>
+                  <!-- 类型分层 (天体间距效果) -->
+                  <div class="s3d-group" style="margin-top:8px; border-top:1px solid rgba(99,102,241,0.12); padding-top:8px;">
+                    <div style="font-size:11px; color:#94a3b8; margin-bottom:6px;">🌍 类型分层 — 不同类型节点保持空间距离（类似天体间距）</div>
+                    <div class="s3d-toggle-row">
+                      <span class="s3d-toggle-label">启用类型分层</span>
+                      <label class="s3d-toggle"><input type="checkbox" id="s3dTypeSeparation" checked onchange="update3DSetting('typeSeparation',this.checked)"><span class="s3d-toggle-slider"></span></label>
+                    </div>
+                    <div class="s3d-row">
+                      <span class="s3d-label">分层强度</span>
+                      <input type="range" class="s3d-slider" id="s3dTypeSepStrength" min="0.1" max="2.0" step="0.1" value="0.8" oninput="update3DSetting('typeSepStrength',this.value)">
+                      <span class="s3d-value" id="s3dTypeSepStrengthVal">0.80</span>
+                    </div>
+                    <div class="s3d-row">
+                      <span class="s3d-label">层间间距</span>
+                      <input type="range" class="s3d-slider" id="s3dTypeSepSpacing" min="30" max="200" step="10" value="80" oninput="update3DSetting('typeSepSpacing',this.value)">
+                      <span class="s3d-value" id="s3dTypeSepSpacingVal">80</span>
+                    </div>
+                  </div>
                 </div>
               </div>
-            </div>
+
+              <!-- 节点大小 -->
+              <div class="settings-3d-panel" id="s3dSizes">
+                <div class="s3d-header" onclick="toggle3DPanel('s3dSizes')">
+                  <div class="s3d-header-title">📐 节点大小</div>
+                  <span class="s3d-header-arrow">▼</span>
+                </div>
+                <div class="s3d-body">
+                  <div class="s3d-group">
+                    <div class="s3d-row">
+                      <span class="s3d-label">项目</span>
+                      <input type="range" class="s3d-slider" id="s3dSizeProject" min="10" max="100" step="5" value="50" oninput="update3DSetting('sizeProject',this.value)">
+                      <span class="s3d-value" id="s3dSizeProjectVal">50</span>
+                    </div>
+                    <div class="s3d-row">
+                      <span class="s3d-label">模块</span>
+                      <input type="range" class="s3d-slider" id="s3dSizeModule" min="5" max="50" step="1" value="25" oninput="update3DSetting('sizeModule',this.value)">
+                      <span class="s3d-value" id="s3dSizeModuleVal">25</span>
+                    </div>
+                    <div class="s3d-row">
+                      <span class="s3d-label">主任务</span>
+                      <input type="range" class="s3d-slider" id="s3dSizeMainTask" min="3" max="30" step="1" value="15" oninput="update3DSetting('sizeMainTask',this.value)">
+                      <span class="s3d-value" id="s3dSizeMainTaskVal">15</span>
+                    </div>
+                    <div class="s3d-row">
+                      <span class="s3d-label">子任务</span>
+                      <input type="range" class="s3d-slider" id="s3dSizeSubTask" min="1" max="20" step="1" value="8" oninput="update3DSetting('sizeSubTask',this.value)">
+                      <span class="s3d-value" id="s3dSizeSubTaskVal">8</span>
+                    </div>
+                    <div class="s3d-row">
+                      <span class="s3d-label">文档</span>
+                      <input type="range" class="s3d-slider" id="s3dSizeDocument" min="1" max="20" step="1" value="10" oninput="update3DSetting('sizeDocument',this.value)">
+                      <span class="s3d-value" id="s3dSizeDocumentVal">10</span>
+                    </div>
+                  </div>
+                </div>
+              </div>
+
+              <!-- 视觉效果 -->
+              <div class="settings-3d-panel" id="s3dVisual">
+                <div class="s3d-header" onclick="toggle3DPanel('s3dVisual')">
+                  <div class="s3d-header-title">✨ 视觉效果</div>
+                  <span class="s3d-header-arrow">▼</span>
+                </div>
+                <div class="s3d-body">
+                  <div class="s3d-group">
+                    <div class="s3d-toggle-row">
+                      <span class="s3d-toggle-label">流动粒子特效</span>
+                      <label class="s3d-toggle"><input type="checkbox" id="s3dParticles" checked onchange="update3DSetting('particles',this.checked)"><span class="s3d-toggle-slider"></span></label>
+                    </div>
+                    <div class="s3d-toggle-row">
+                      <span class="s3d-toggle-label">方向箭头</span>
+                      <label class="s3d-toggle"><input type="checkbox" id="s3dArrows" onchange="update3DSetting('arrows',this.checked)"><span class="s3d-toggle-slider"></span></label>
+                    </div>
+                    <div class="s3d-row">
+                      <span class="s3d-label">节点透明度</span>
+                      <input type="range" class="s3d-slider" id="s3dNodeOpacity" min="0.3" max="1.0" step="0.05" value="0.90" oninput="update3DSetting('nodeOpacity',this.value)">
+                      <span class="s3d-value" id="s3dNodeOpacityVal">0.92</span>
+                    </div>
+                    <div class="s3d-row">
+                      <span class="s3d-label">边透明度</span>
+                      <input type="range" class="s3d-slider" id="s3dLinkOpacity" min="0.05" max="1.0" step="0.05" value="0.25" oninput="update3DSetting('linkOpacity',this.value)">
+                      <span class="s3d-value" id="s3dLinkOpacityVal">0.25</span>
+                    </div>
+                    <div class="s3d-color-row">
+                      <span class="s3d-color-label">背景色</span>
+                      <input type="color" class="s3d-color-input" id="s3dBgColor" value="#0a0e1a" oninput="update3DSetting('bgColor',this.value);document.getElementById('s3dBgColorHex').textContent=this.value;">
+                      <span class="s3d-color-hex" id="s3dBgColorHex">#0a0e1a</span>
+                    </div>
+                  </div>
+                </div>
+              </div>
+
+            </div><!-- /settings-3d-grid -->
+            <button class="s3d-reset-btn" style="margin-top:16px;" onclick="reset3DSettings()">↩ 恢复默认设置</button>
           </div>
 
-          <!-- 节点大小 -->
-          <div class="settings-3d-panel" id="s3dSizes">
-            <div class="s3d-header" onclick="toggle3DPanel('s3dSizes')">
-              <div class="s3d-header-title">📐 节点大小</div>
-              <span class="s3d-header-arrow">▼</span>
-            </div>
-            <div class="s3d-body">
-              <div class="s3d-group">
-                <div class="s3d-row">
-                  <span class="s3d-label">项目</span>
-                  <input type="range" class="s3d-slider" id="s3dSizeProject" min="10" max="100" step="5" value="50" oninput="update3DSetting('sizeProject',this.value)">
-                  <span class="s3d-value" id="s3dSizeProjectVal">50</span>
-                </div>
-                <div class="s3d-row">
-                  <span class="s3d-label">模块</span>
-                  <input type="range" class="s3d-slider" id="s3dSizeModule" min="5" max="50" step="1" value="25" oninput="update3DSetting('sizeModule',this.value)">
-                  <span class="s3d-value" id="s3dSizeModuleVal">25</span>
-                </div>
-                <div class="s3d-row">
-                  <span class="s3d-label">主任务</span>
-                  <input type="range" class="s3d-slider" id="s3dSizeMainTask" min="3" max="30" step="1" value="15" oninput="update3DSetting('sizeMainTask',this.value)">
-                  <span class="s3d-value" id="s3dSizeMainTaskVal">15</span>
-                </div>
-                <div class="s3d-row">
-                  <span class="s3d-label">子任务</span>
-                  <input type="range" class="s3d-slider" id="s3dSizeSubTask" min="1" max="20" step="1" value="8" oninput="update3DSetting('sizeSubTask',this.value)">
-                  <span class="s3d-value" id="s3dSizeSubTaskVal">8</span>
-                </div>
-                <div class="s3d-row">
-                  <span class="s3d-label">文档</span>
-                  <input type="range" class="s3d-slider" id="s3dSizeDocument" min="1" max="20" step="1" value="10" oninput="update3DSetting('sizeDocument',this.value)">
-                  <span class="s3d-value" id="s3dSizeDocumentVal">10</span>
-                </div>
-              </div>
-            </div>
-          </div>
-
-          <!-- 视觉效果 -->
-          <div class="settings-3d-panel" id="s3dVisual">
-            <div class="s3d-header" onclick="toggle3DPanel('s3dVisual')">
-              <div class="s3d-header-title">✨ 视觉效果</div>
-              <span class="s3d-header-arrow">▼</span>
-            </div>
-            <div class="s3d-body">
-              <div class="s3d-group">
-                <div class="s3d-toggle-row">
-                  <span class="s3d-toggle-label">流动粒子特效</span>
-                  <label class="s3d-toggle"><input type="checkbox" id="s3dParticles" checked onchange="update3DSetting('particles',this.checked)"><span class="s3d-toggle-slider"></span></label>
-                </div>
-                <div class="s3d-toggle-row">
-                  <span class="s3d-toggle-label">方向箭头</span>
-                  <label class="s3d-toggle"><input type="checkbox" id="s3dArrows" onchange="update3DSetting('arrows',this.checked)"><span class="s3d-toggle-slider"></span></label>
-                </div>
-                <div class="s3d-row">
-                  <span class="s3d-label">节点透明度</span>
-                  <input type="range" class="s3d-slider" id="s3dNodeOpacity" min="0.3" max="1.0" step="0.05" value="0.90" oninput="update3DSetting('nodeOpacity',this.value)">
-                  <span class="s3d-value" id="s3dNodeOpacityVal">0.92</span>
-                </div>
-                <div class="s3d-row">
-                  <span class="s3d-label">边透明度</span>
-                  <input type="range" class="s3d-slider" id="s3dLinkOpacity" min="0.05" max="1.0" step="0.05" value="0.25" oninput="update3DSetting('linkOpacity',this.value)">
-                  <span class="s3d-value" id="s3dLinkOpacityVal">0.25</span>
-                </div>
-                <div class="s3d-color-row">
-                  <span class="s3d-color-label">背景色</span>
-                  <input type="color" class="s3d-color-input" id="s3dBgColor" value="#0a0e1a" oninput="update3DSetting('bgColor',this.value);document.getElementById('s3dBgColorHex').textContent=this.value;">
-                  <span class="s3d-color-hex" id="s3dBgColorHex">#0a0e1a</span>
-                </div>
-              </div>
-            </div>
-          </div>
-
-          <button class="s3d-reset-btn" onclick="reset3DSettings()">↩ 恢复默认设置</button>
-        </div>
-
+        </div><!-- /settings-grid -->
       </div>
     </div>
 

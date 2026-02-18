@@ -1533,6 +1533,7 @@ export class DevPlanGraphStore implements IDevPlanStore {
       projectName: this.projectName,
       promptIndex,
       content: input.content,
+      aiInterpretation: input.aiInterpretation || '',
       summary: input.summary || '',
       relatedTaskId: input.relatedTaskId || null,
       tags: input.tags || [],
@@ -1632,6 +1633,7 @@ export class DevPlanGraphStore implements IDevPlanStore {
       projectName: this.projectName,
       promptIndex: p.promptIndex || 0,
       content: p.content || '',
+      aiInterpretation: p.aiInterpretation || undefined,
       summary: p.summary || undefined,
       relatedTaskId: p.relatedTaskId || undefined,
       tags: p.tags || [],
@@ -1714,11 +1716,13 @@ export class DevPlanGraphStore implements IDevPlanStore {
     includeModules?: boolean;
     includeNodeDegree?: boolean;
     enableBackendDegreeFallback?: boolean;
+    includePrompts?: boolean;
   }): DevPlanExportedGraph {
     const includeDocuments = options?.includeDocuments !== false;
     const includeModules = options?.includeModules !== false;
     const includeNodeDegree = options?.includeNodeDegree !== false;
     const enableBackendDegreeFallback = options?.enableBackendDegreeFallback !== false;
+    const includePrompts = options?.includePrompts !== false;
 
     const nodes: DevPlanGraphNode[] = [];
     const edges: DevPlanGraphEdge[] = [];
@@ -1785,35 +1789,39 @@ export class DevPlanGraphStore implements IDevPlanStore {
       }
 
       // task -> prompt 关系
-      const taskPromptRels = this.getOutRelations(mt.id, RT.TASK_HAS_PROMPT);
-      for (const rel of taskPromptRels) {
-        edges.push({
-          from: mt.id,
-          to: rel.target,
-          label: RT.TASK_HAS_PROMPT,
-        });
+      if (includePrompts) {
+        const taskPromptRels = this.getOutRelations(mt.id, RT.TASK_HAS_PROMPT);
+        for (const rel of taskPromptRels) {
+          edges.push({
+            from: mt.id,
+            to: rel.target,
+            label: RT.TASK_HAS_PROMPT,
+          });
+        }
       }
     }
 
-    // Prompt 节点
-    const prompts = this.listPrompts();
-    for (const prompt of prompts) {
-      nodes.push({
-        id: prompt.id,
-        label: `Prompt #${prompt.promptIndex}`,
-        type: 'prompt',
-        properties: {
-          promptIndex: prompt.promptIndex,
-          summary: prompt.summary || '',
-          relatedTaskId: prompt.relatedTaskId || null,
-          createdAt: prompt.createdAt,
-        },
-      });
-      edges.push({
-        from: this.getProjectId(),
-        to: prompt.id,
-        label: RT.HAS_PROMPT,
-      });
+    // Prompt 节点（默认包含，可视化页面可传 includePrompts=false 排除）
+    if (includePrompts) {
+      const prompts = this.listPrompts();
+      for (const prompt of prompts) {
+        nodes.push({
+          id: prompt.id,
+          label: `Prompt #${prompt.promptIndex}`,
+          type: 'prompt',
+          properties: {
+            promptIndex: prompt.promptIndex,
+            summary: prompt.summary || '',
+            relatedTaskId: prompt.relatedTaskId || null,
+            createdAt: prompt.createdAt,
+          },
+        });
+        edges.push({
+          from: this.getProjectId(),
+          to: prompt.id,
+          label: RT.HAS_PROMPT,
+        });
+      }
     }
 
     // 文档节点
