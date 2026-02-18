@@ -1,0 +1,411 @@
+/**
+ * DevPlan 图可视化 — HTML 结构模块
+ *
+ * 从 template.ts 拆分出的全部 HTML 结构定义。
+ * 包含: 侧边栏、图谱容器、详情面板、文档浏览、RAG 聊天、
+ * 统计仪表盘、项目设置、统计弹层等 HTML 结构。
+ */
+
+export function getHTML(projectName: string): string {
+  return `
+<body>
+<div class="app-layout">
+  <!-- Sidebar -->
+  <div class="sidebar" id="sidebar">
+    <div class="sidebar-header" onclick="toggleSidebar()" title="展开/收起导航">
+      <span class="sidebar-menu-icon sidebar-logo-short"><svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><line x1="3" y1="6" x2="21" y2="6"/><line x1="3" y1="12" x2="21" y2="12"/><line x1="3" y1="18" x2="21" y2="18"/></svg></span>
+      <span class="sidebar-logo sidebar-logo-full">AiFastDb-DevPlan</span>
+    </div>
+    <div class="sidebar-nav">
+      <div class="nav-item active" data-page="graph" onclick="navTo('graph')">
+        <span class="nav-item-icon">🔗</span>
+        <span class="nav-item-text">图谱可视化</span>
+        <span class="nav-tooltip">图谱可视化</span>
+      </div>
+      <div class="nav-item disabled" data-page="tasks" onclick="navTo('tasks')">
+        <span class="nav-item-icon">📋</span>
+        <span class="nav-item-text">任务看板</span>
+        <span class="nav-item-badge">即将推出</span>
+        <span class="nav-tooltip">任务看板 (即将推出)</span>
+      </div>
+      <div class="nav-item" data-page="docs" onclick="navTo('docs')">
+        <span class="nav-item-icon">📄</span>
+        <span class="nav-item-text">文档浏览</span>
+        <span class="nav-tooltip">文档浏览</span>
+      </div>
+      <div class="nav-item" data-page="stats" onclick="navTo('stats')">
+        <span class="nav-item-icon">📊</span>
+        <span class="nav-item-text">统计仪表盘</span>
+        <span class="nav-tooltip">统计仪表盘</span>
+      </div>
+    </div>
+    <div class="sidebar-footer">
+      <div class="nav-item" data-page="settings" onclick="navTo('settings')">
+        <span class="nav-item-icon">⚙️</span>
+        <span class="nav-item-text">项目设置</span>
+        <span class="nav-tooltip">项目设置</span>
+      </div>
+    </div>
+  </div>
+
+  <!-- Main Content -->
+  <div class="main-content">
+
+    <!-- ===== PAGE: Graph ===== -->
+    <div class="page-view page-graph active" id="pageGraph">
+      <!-- Header -->
+      <div class="header">
+        <h1><span class="icon">🔗</span> DevPlan 图谱 <span class="project-name">${projectName}</span></h1>
+        <div class="stats-bar" id="statsBar">
+          <div class="stat"><span>加载中...</span></div>
+        </div>
+      </div>
+
+      <!-- Graph -->
+      <div class="graph-container">
+        <div class="loading" id="loading"><div><div class="spinner"></div><p style="margin-top:12px;color:#9ca3af;">加载图谱数据...</p></div></div>
+        <div id="graph"></div>
+        <div class="panel" id="panel">
+          <div class="panel-resize-handle" id="panelResizeHandle"></div>
+          <div class="panel-header" id="panelHeader">
+            <div class="panel-header-left">
+              <button class="panel-back" id="panelBack" onclick="panelGoBack()" title="返回上一个详情">
+                <svg width="16" height="16" viewBox="0 0 16 16" fill="none"><path d="M10 3L5 8L10 13" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/></svg>
+              </button>
+              <span class="panel-title" id="panelTitle">节点详情</span>
+            </div>
+            <button class="panel-close" onclick="closePanel()">✕</button>
+          </div>
+          <div class="panel-body" id="panelBody"></div>
+        </div>
+        <!-- Debug info -->
+        <div class="debug" id="debug">状态: 正在加载 vis-network...</div>
+      </div>
+
+      <!-- Legend + Filters (merged) -->
+      <div class="legend">
+        <!-- 加载引擎标识 -->
+        <div class="legend-engine-badge" id="engineBadge" onclick="navTo('settings')" title="点击前往项目设置切换加载引擎">
+          ⚡ 加载引擎: <span class="engine-name" id="engineNameLabel">vis-network</span>
+        </div>
+        <div class="legend-divider"></div>
+        <!-- 刷新按钮 -->
+        <button class="legend-refresh-btn" id="legendRefreshBtn" onclick="manualRefresh()" title="刷新数据 (F5)">
+          <svg class="legend-refresh-icon" id="legendRefreshIcon" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><path d="M21 2v6h-6"/><path d="M3 12a9 9 0 0 1 15-6.7L21 8"/><path d="M3 22v-6h6"/><path d="M21 12a9 9 0 0 1-15 6.7L3 16"/></svg>
+        </button>
+        <!-- Phase-10: Load All button (shown in tiered loading mode) -->
+        <button class="legend-refresh-btn" id="loadAllBtn" onclick="loadAllNodes()" title="加载全部节点" style="display:none;font-size:11px;padding:2px 8px;">
+          全部
+        </button>
+        <!-- Phase-10 T10.2: Overview mode toggle -->
+        <button class="legend-refresh-btn" id="overviewBtn" onclick="toggleOverviewMode()" title="概览模式 — 每种类型一个超级节点" style="font-size:11px;padding:2px 8px;">
+          概览
+        </button>
+        <!-- Phase-10: Tiered loading indicator -->
+        <span id="tieredIndicator" style="display:none;font-size:10px;color:#60a5fa;margin-left:4px;"></span>
+        <div class="legend-divider"></div>
+        <!-- 节点类型筛选（复选框 + 图例） -->
+        <div class="legend-item toggle active" data-type="module" onclick="toggleFilter('module')" title="点击切换模块显隐"><input type="checkbox" class="filter-cb" id="cb-module" checked><div class="legend-icon diamond"></div> 模块</div>
+        <div class="legend-item toggle active" data-type="main-task" onclick="toggleFilter('main-task')" title="点击切换主任务显隐"><input type="checkbox" class="filter-cb" id="cb-main-task" checked><div class="legend-icon circle"></div> 主任务</div>
+        <div class="legend-item toggle active" data-type="sub-task" onclick="toggleFilter('sub-task')" title="点击切换子任务显隐"><input type="checkbox" class="filter-cb" id="cb-sub-task" checked><div class="legend-icon dot"></div> 子任务</div>
+        <div class="legend-item toggle active" data-type="document" onclick="toggleFilter('document')" title="点击切换文档显隐"><input type="checkbox" class="filter-cb" id="cb-document" checked><div class="legend-icon square"></div> 文档</div>
+        <div class="legend-divider"></div>
+        <!-- 边类型图例 -->
+        <div class="legend-item"><div class="legend-line solid"></div> 主任务</div>
+        <div class="legend-item"><div class="legend-line thin"></div> 子任务</div>
+        <div class="legend-item"><div class="legend-line dashed"></div> 文档</div>
+        <div class="legend-item"><div class="legend-line dotted"></div> 模块关联</div>
+      </div>
+    </div>
+
+    <!-- ===== PAGE: Docs Browser ===== -->
+    <div class="page-view" id="pageDocs">
+      <div class="docs-page">
+        <!-- Left: Document List -->
+        <div class="docs-sidebar">
+          <div class="docs-sidebar-header">
+            <h3>📄 文档库</h3>
+            <div class="docs-search-wrap">
+              <input type="text" class="docs-search" id="docsSearch" placeholder="搜索文档标题..." oninput="filterDocs();toggleSearchClear()">
+              <button class="docs-search-clear" id="docsSearchClear" onclick="clearDocsSearch()" title="清空搜索">✕</button>
+            </div>
+          </div>
+          <div class="docs-group-list" id="docsGroupList">
+            <div style="text-align:center;padding:40px;color:#6b7280;font-size:12px;">加载中...</div>
+          </div>
+        </div>
+        <!-- Right: Document Content / Chat -->
+        <div class="docs-content">
+          <!-- RAG Chat (default view) -->
+          <div class="docs-content-empty" id="docsEmptyState">
+            <div class="docs-chat-container">
+              <div class="docs-chat-messages" id="docsChatMessages">
+                <div class="docs-chat-welcome" id="docsChatWelcome">
+                  <div class="welcome-icon">🔍</div>
+                  <div class="welcome-title">文档智能搜索</div>
+                  <div class="welcome-desc">输入问题，AI 将在文档库中搜索相关内容<br>支持语义搜索，理解你的意图而非仅匹配关键词</div>
+                  <div class="welcome-tips">
+                    <span class="tip-chip" onclick="chatSendTip(this)">有多少篇文档？</span>
+                    <span class="tip-chip" onclick="chatSendTip(this)">项目进度</span>
+                    <span class="tip-chip" onclick="chatSendTip(this)">有哪些阶段？</span>
+                    <span class="tip-chip" onclick="chatSendTip(this)">最近更新</span>
+                    <span class="tip-chip" onclick="chatSendTip(this)">帮助</span>
+                  </div>
+                  <div class="welcome-tips" style="margin-top:8px;">
+                    <span class="tip-chip" onclick="chatSendTip(this)">向量搜索</span>
+                    <span class="tip-chip" onclick="chatSendTip(this)">aifastdb vs LanceDB</span>
+                    <span class="tip-chip" onclick="chatSendTip(this)">GPU 加速</span>
+                    <span class="tip-chip" onclick="chatSendTip(this)">全文搜索</span>
+                  </div>
+                </div>
+              </div>
+              <div class="docs-chat-input-wrap">
+                <textarea class="docs-chat-input" id="docsChatInput" placeholder="发送消息搜索文档数据库..." rows="1" onkeydown="chatInputKeydown(event)" oninput="chatAutoResize(this)"></textarea>
+                <button class="docs-chat-send" id="docsChatSend" onclick="chatSend()" title="发送">↑</button>
+              </div>
+            </div>
+          </div>
+          <!-- Document Content View -->
+          <div id="docsContentView" style="display:none;flex-direction:column;flex:1;min-height:0;">
+            <div class="docs-content-header">
+              <div style="flex:1;min-width:0;">
+                <div class="docs-content-title" id="docsContentTitle">文档标题</div>
+                <div class="docs-content-meta" id="docsContentMeta"></div>
+              </div>
+              <button style="flex-shrink:0;background:none;border:1px solid #374151;border-radius:6px;padding:4px 10px;color:#9ca3af;font-size:11px;cursor:pointer;transition:all 0.15s;" onmouseover="this.style.borderColor='#6366f1';this.style.color='#a5b4fc'" onmouseout="this.style.borderColor='#374151';this.style.color='#9ca3af'" onclick="backToChat()" title="返回对话搜索">← 返回搜索</button>
+            </div>
+            <div class="docs-content-body" id="docsContentBody">
+              <div class="doc-content" id="docsContentInner"></div>
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- ===== PAGE: Stats Dashboard ===== -->
+    <div class="page-view" id="pageStats">
+      <div class="stats-page" id="statsPageContent">
+        <div class="stats-header">
+          <h2>📊 项目仪表盘 — ${projectName}</h2>
+          <p>项目开发进度总览与关键指标</p>
+        </div>
+        <!-- 内容由 JS 动态渲染 -->
+        <div id="statsContent"><div style="text-align:center;padding:60px;color:#6b7280;">加载中...</div></div>
+      </div>
+    </div>
+
+    <!-- ===== PAGE: Settings ===== -->
+    <div class="page-view" id="pageSettings">
+      <div class="settings-page">
+        <h2>⚙️ 项目设置</h2>
+        <p class="settings-subtitle">配置 ${projectName} 项目的可视化与交互选项</p>
+
+        <div class="settings-section">
+          <div class="settings-section-title">🖥️ 加载引擎</div>
+          <div class="settings-option-group" id="rendererOptions">
+            <label class="settings-radio-card selected" data-value="vis" onclick="selectRenderer('vis')">
+              <input type="radio" name="renderer" value="vis" checked>
+              <div class="radio-content">
+                <div class="radio-label">vis-network <span class="default-badge">默认</span></div>
+                <div class="radio-desc">基于 vis.js 的成熟图可视化库。使用 Canvas 2D 渲染，内置物理引擎力导向布局，支持节点拖拽、缩放、选中高亮等完整交互。适合中小规模图谱（< 2000 节点），生态成熟、兼容性好。</div>
+              </div>
+            </label>
+            <label class="settings-radio-card" data-value="3d" onclick="selectRenderer('3d')">
+              <input type="radio" name="renderer" value="3d">
+              <div class="radio-content">
+                <div class="radio-label">3D Force Graph <span style="font-size:10px;padding:1px 6px;border-radius:4px;background:linear-gradient(135deg,#7c3aed,#3b82f6);color:#e0e7ff;font-weight:500;">Three.js</span></div>
+                <div class="radio-desc">基于 Three.js + d3-force-3d 的 3D 球体可视化引擎。节点在三维空间中浮动、旋转、缩放，整体呈球形分布。支持 WebGL 硬件加速渲染、轨道控制器旋转视角、节点拖拽固定、流动粒子特效。适合沉浸式图谱探索。</div>
+              </div>
+            </label>
+          </div>
+        </div>
+
+        <!-- 通用图谱显示设置 (适用于所有引擎) -->
+        <div class="settings-section">
+          <div class="settings-section-title">🔗 图谱显示</div>
+          <div class="settings-3d-panel">
+            <div class="s3d-body" style="margin-top:0;">
+              <div class="s3d-group">
+                <div class="s3d-toggle-row">
+                  <span class="s3d-toggle-label">显示主节点连线 <span style="font-size:10px;color:#6b7280;margin-left:4px;">(项目节点 ↔ 周围节点的连线)</span></span>
+                  <label class="s3d-toggle"><input type="checkbox" id="settingShowProjectEdges" onchange="updateGraphSetting('showProjectEdges',this.checked)"><span class="s3d-toggle-slider"></span></label>
+                </div>
+              </div>
+            </div>
+          </div>
+        </div>
+
+        <!-- 3D Force Graph 自定义设置 (仅 3D 引擎时显示) -->
+        <div class="settings-section" id="settings3dSection" style="display:none;">
+          <div class="settings-section-title">🎛️ 3D Force Graph 参数</div>
+
+          <!-- 力导向物理参数 -->
+          <div class="settings-3d-panel" id="s3dPhysics">
+            <div class="s3d-header" onclick="toggle3DPanel('s3dPhysics')">
+              <div class="s3d-header-title">⚡ 力导向物理参数</div>
+              <span class="s3d-header-arrow">▼</span>
+            </div>
+            <div class="s3d-body">
+              <div class="s3d-group">
+                <div class="s3d-row">
+                  <span class="s3d-label">中心引力</span>
+                  <input type="range" class="s3d-slider" id="s3dGravity" min="0.01" max="0.30" step="0.01" value="0.05" oninput="update3DSetting('gravity',this.value)">
+                  <span class="s3d-value" id="s3dGravityVal">0.05</span>
+                </div>
+                <div class="s3d-row">
+                  <span class="s3d-label">排斥力</span>
+                  <input type="range" class="s3d-slider" id="s3dRepulsion" min="-300" max="-5" step="5" value="-30" oninput="update3DSetting('repulsion',this.value)">
+                  <span class="s3d-value" id="s3dRepulsionVal">-30</span>
+                </div>
+                <div class="s3d-row">
+                  <span class="s3d-label">连接距离</span>
+                  <input type="range" class="s3d-slider" id="s3dLinkDist" min="10" max="120" step="5" value="40" oninput="update3DSetting('linkDistance',this.value)">
+                  <span class="s3d-value" id="s3dLinkDistVal">40</span>
+                </div>
+                <div class="s3d-row">
+                  <span class="s3d-label">速度衰减</span>
+                  <input type="range" class="s3d-slider" id="s3dVelocityDecay" min="0.1" max="0.8" step="0.05" value="0.30" oninput="update3DSetting('velocityDecay',this.value)">
+                  <span class="s3d-value" id="s3dVelocityDecayVal">0.30</span>
+                </div>
+                <div class="s3d-row">
+                  <span class="s3d-label">Alpha衰减</span>
+                  <input type="range" class="s3d-slider" id="s3dAlphaDecay" min="0.005" max="0.05" step="0.005" value="0.020" oninput="update3DSetting('alphaDecay',this.value)">
+                  <span class="s3d-value" id="s3dAlphaDecayVal">0.020</span>
+                </div>
+              </div>
+            </div>
+          </div>
+
+          <!-- 节点颜色 -->
+          <div class="settings-3d-panel" id="s3dColors">
+            <div class="s3d-header" onclick="toggle3DPanel('s3dColors')">
+              <div class="s3d-header-title">🎨 节点颜色</div>
+              <span class="s3d-header-arrow">▼</span>
+            </div>
+            <div class="s3d-body">
+              <div class="s3d-group">
+                <div class="s3d-color-row">
+                  <span class="s3d-color-label"><span class="s3d-dot" style="background:#fbbf24;border-radius:50%;"></span> 项目</span>
+                  <input type="color" class="s3d-color-input" id="s3dColorProject" value="#fbbf24" oninput="update3DColor('project',this.value)">
+                  <span class="s3d-color-hex" id="s3dColorProjectHex">#fbbf24</span>
+                </div>
+                <div class="s3d-color-row">
+                  <span class="s3d-color-label"><span class="s3d-dot" style="background:#ff6600;"></span> 模块</span>
+                  <input type="color" class="s3d-color-input" id="s3dColorModule" value="#ff6600" oninput="update3DColor('module',this.value)">
+                  <span class="s3d-color-hex" id="s3dColorModuleHex">#ff6600</span>
+                </div>
+                <div class="s3d-color-row">
+                  <span class="s3d-color-label"><span class="s3d-dot" style="background:#15803d;border-radius:50%;"></span> 主任务</span>
+                  <input type="color" class="s3d-color-input" id="s3dColorMainTask" value="#15803d" oninput="update3DColor('main-task',this.value)">
+                  <span class="s3d-color-hex" id="s3dColorMainTaskHex">#15803d</span>
+                </div>
+                <div class="s3d-color-row">
+                  <span class="s3d-color-label"><span class="s3d-dot" style="background:#22c55e;border-radius:50%;"></span> 子任务</span>
+                  <input type="color" class="s3d-color-input" id="s3dColorSubTask" value="#22c55e" oninput="update3DColor('sub-task',this.value)">
+                  <span class="s3d-color-hex" id="s3dColorSubTaskHex">#22c55e</span>
+                </div>
+                <div class="s3d-color-row">
+                  <span class="s3d-color-label"><span class="s3d-dot" style="background:#38bdf8;"></span> 文档</span>
+                  <input type="color" class="s3d-color-input" id="s3dColorDocument" value="#38bdf8" oninput="update3DColor('document',this.value)">
+                  <span class="s3d-color-hex" id="s3dColorDocumentHex">#38bdf8</span>
+                </div>
+              </div>
+            </div>
+          </div>
+
+          <!-- 节点大小 -->
+          <div class="settings-3d-panel" id="s3dSizes">
+            <div class="s3d-header" onclick="toggle3DPanel('s3dSizes')">
+              <div class="s3d-header-title">📐 节点大小</div>
+              <span class="s3d-header-arrow">▼</span>
+            </div>
+            <div class="s3d-body">
+              <div class="s3d-group">
+                <div class="s3d-row">
+                  <span class="s3d-label">项目</span>
+                  <input type="range" class="s3d-slider" id="s3dSizeProject" min="10" max="80" step="5" value="40" oninput="update3DSetting('sizeProject',this.value)">
+                  <span class="s3d-value" id="s3dSizeProjectVal">40</span>
+                </div>
+                <div class="s3d-row">
+                  <span class="s3d-label">模块</span>
+                  <input type="range" class="s3d-slider" id="s3dSizeModule" min="5" max="40" step="1" value="18" oninput="update3DSetting('sizeModule',this.value)">
+                  <span class="s3d-value" id="s3dSizeModuleVal">18</span>
+                </div>
+                <div class="s3d-row">
+                  <span class="s3d-label">主任务</span>
+                  <input type="range" class="s3d-slider" id="s3dSizeMainTask" min="3" max="25" step="1" value="10" oninput="update3DSetting('sizeMainTask',this.value)">
+                  <span class="s3d-value" id="s3dSizeMainTaskVal">10</span>
+                </div>
+                <div class="s3d-row">
+                  <span class="s3d-label">子任务</span>
+                  <input type="range" class="s3d-slider" id="s3dSizeSubTask" min="1" max="15" step="1" value="3" oninput="update3DSetting('sizeSubTask',this.value)">
+                  <span class="s3d-value" id="s3dSizeSubTaskVal">3</span>
+                </div>
+                <div class="s3d-row">
+                  <span class="s3d-label">文档</span>
+                  <input type="range" class="s3d-slider" id="s3dSizeDocument" min="1" max="15" step="1" value="4" oninput="update3DSetting('sizeDocument',this.value)">
+                  <span class="s3d-value" id="s3dSizeDocumentVal">4</span>
+                </div>
+              </div>
+            </div>
+          </div>
+
+          <!-- 视觉效果 -->
+          <div class="settings-3d-panel" id="s3dVisual">
+            <div class="s3d-header" onclick="toggle3DPanel('s3dVisual')">
+              <div class="s3d-header-title">✨ 视觉效果</div>
+              <span class="s3d-header-arrow">▼</span>
+            </div>
+            <div class="s3d-body">
+              <div class="s3d-group">
+                <div class="s3d-toggle-row">
+                  <span class="s3d-toggle-label">流动粒子特效</span>
+                  <label class="s3d-toggle"><input type="checkbox" id="s3dParticles" checked onchange="update3DSetting('particles',this.checked)"><span class="s3d-toggle-slider"></span></label>
+                </div>
+                <div class="s3d-toggle-row">
+                  <span class="s3d-toggle-label">方向箭头</span>
+                  <label class="s3d-toggle"><input type="checkbox" id="s3dArrows" onchange="update3DSetting('arrows',this.checked)"><span class="s3d-toggle-slider"></span></label>
+                </div>
+                <div class="s3d-row">
+                  <span class="s3d-label">节点透明度</span>
+                  <input type="range" class="s3d-slider" id="s3dNodeOpacity" min="0.3" max="1.0" step="0.05" value="0.92" oninput="update3DSetting('nodeOpacity',this.value)">
+                  <span class="s3d-value" id="s3dNodeOpacityVal">0.92</span>
+                </div>
+                <div class="s3d-row">
+                  <span class="s3d-label">边透明度</span>
+                  <input type="range" class="s3d-slider" id="s3dLinkOpacity" min="0.05" max="1.0" step="0.05" value="0.25" oninput="update3DSetting('linkOpacity',this.value)">
+                  <span class="s3d-value" id="s3dLinkOpacityVal">0.25</span>
+                </div>
+                <div class="s3d-color-row">
+                  <span class="s3d-color-label">背景色</span>
+                  <input type="color" class="s3d-color-input" id="s3dBgColor" value="#0a0e1a" oninput="update3DSetting('bgColor',this.value);document.getElementById('s3dBgColorHex').textContent=this.value;">
+                  <span class="s3d-color-hex" id="s3dBgColorHex">#0a0e1a</span>
+                </div>
+              </div>
+            </div>
+          </div>
+
+          <button class="s3d-reset-btn" onclick="reset3DSettings()">↩ 恢复默认设置</button>
+        </div>
+
+      </div>
+    </div>
+
+  </div>
+</div>
+
+<!-- Settings Toast -->
+<div class="settings-saved-toast" id="settingsSavedToast">✅ 引擎修改成功，正在重新加载页面...</div>
+
+<!-- Stats Modal -->
+<div class="stats-modal-overlay" id="statsModalOverlay">
+  <div class="stats-modal">
+    <div class="stats-modal-header">
+      <div><span class="stats-modal-title" id="statsModalTitle">列表</span><span class="stats-modal-count" id="statsModalCount"></span></div>
+      <button class="stats-modal-close" onclick="closeStatsModal()">&times;</button>
+    </div>
+    <div class="stats-modal-body" id="statsModalBody"></div>
+  </div>
+</div>
+`;
+}

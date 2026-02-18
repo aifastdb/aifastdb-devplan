@@ -1,0 +1,763 @@
+/**
+ * DevPlan 图可视化 — 页面模块
+ *
+ * 包含: 文档浏览页、RAG 聊天、统计仪表盘。
+ */
+
+export function getPagesScript(): string {
+  return `
+// ========== Docs Browser ==========
+var docsLoaded = false;
+var docsData = [];       // 全部文档列表
+var currentDocKey = '';  // 当前选中文档的 key (section|subSection)
+
+/** 根据 docKey 从 docsData 中查找文档标题 */
+function findDocTitle(docKey) {
+  for (var i = 0; i < docsData.length; i++) {
+    var d = docsData[i];
+    var key = d.section + (d.subSection ? '|' + d.subSection : '');
+    if (key === docKey) return d.title;
+  }
+  return null;
+}
+
+/** Section 类型的中文名称映射 */
+var SECTION_NAMES = {
+  overview: '概述', core_concepts: '核心概念', api_design: 'API 设计',
+  file_structure: '文件结构', config: '配置', examples: '使用示例',
+  technical_notes: '技术笔记', api_endpoints: 'API 端点',
+  milestones: '里程碑', changelog: '变更记录', custom: '自定义'
+};
+
+/** Section 图标映射（使用简洁符号替代 emoji） */
+var SECTION_ICONS = {
+  overview: '▸', core_concepts: '▸', api_design: '▸',
+  file_structure: '▸', config: '▸', examples: '▸',
+  technical_notes: '▸', api_endpoints: '▸',
+  milestones: '▸', changelog: '▸', custom: '▸'
+};
+
+function loadDocsPage() {
+  if (docsLoaded && docsData.length > 0) return;
+  var list = document.getElementById('docsGroupList');
+  if (list) list.innerHTML = '<div style="text-align:center;padding:40px;color:#6b7280;font-size:12px;"><div class="spinner" style="margin:0 auto 12px;width:24px;height:24px;border-width:3px;"></div>加载文档列表...</div>';
+
+  fetch('/api/docs').then(function(r) { return r.json(); }).then(function(data) {
+    docsData = data.docs || [];
+    docsLoaded = true;
+    renderDocsList(docsData);
+  }).catch(function(err) {
+    if (list) list.innerHTML = '<div style="text-align:center;padding:40px;color:#f87171;font-size:12px;">加载失败: ' + err.message + '<br><span style="cursor:pointer;color:#818cf8;text-decoration:underline;" onclick="docsLoaded=false;loadDocsPage();">重试</span></div>';
+  });
+}
+
+/** 获取文档的 key（唯一标识） */
+function docItemKey(item) {
+  return item.section + (item.subSection ? '|' + item.subSection : '');
+}
+
+/** 记录哪些父文档处于折叠状态（key → true 表示折叠） */
+var docsCollapsedState = {};
+
+/** 将文档列表按 section 分组渲染，支持 parentDoc 层级 */
+function renderDocsList(docs) {
+  var list = document.getElementById('docsGroupList');
+  if (!list) return;
+
+  // 建立 parentDoc → children 映射，区分顶级和子文档
+  var childrenMap = {};  // parentDocKey → [child items]
+  var childKeySet = {};  // 属于子文档的 key 集合
+  for (var i = 0; i < docs.length; i++) {
+    var d = docs[i];
+    if (d.parentDoc) {
+      if (!childrenMap[d.parentDoc]) childrenMap[d.parentDoc] = [];
+      childrenMap[d.parentDoc].push(d);
+      childKeySet[docItemKey(d)] = true;
+    }
+  }
+
+  // 按 section 分组（只放顶级文档）
+  var groups = {};
+  var groupOrder = [];
+  for (var i = 0; i < docs.length; i++) {
+    var d = docs[i];
+    var key = docItemKey(d);
+    if (childKeySet[key]) continue; // 跳过子文档（由父文档渲染）
+    var sec = d.section;
+    if (!groups[sec]) {
+      groups[sec] = [];
+      groupOrder.push(sec);
+    }
+    groups[sec].push(d);
+  }
+
+  // 每组内按 updatedAt 倒序排列（最新的在上方）
+  for (var gi = 0; gi < groupOrder.length; gi++) {
+    groups[groupOrder[gi]].sort(function(a, b) {
+      var ta = a.updatedAt || 0;
+      var tb = b.updatedAt || 0;
+      return tb - ta; // 降序
+    });
+  }
+
+  // 子文档也按 updatedAt 倒序
+  var parentKeys = Object.keys(childrenMap);
+  for (var pi = 0; pi < parentKeys.length; pi++) {
+    childrenMap[parentKeys[pi]].sort(function(a, b) {
+      var ta = a.updatedAt || 0;
+      var tb = b.updatedAt || 0;
+      return tb - ta;
+    });
+  }
+
+  // 分组按最新文档日期排序（最新的分组在上）
+  groupOrder.sort(function(secA, secB) {
+    var maxA = 0, maxB = 0;
+    var itemsA = groups[secA] || [];
+    var itemsB = groups[secB] || [];
+    for (var k = 0; k < itemsA.length; k++) {
+      if ((itemsA[k].updatedAt || 0) > maxA) maxA = itemsA[k].updatedAt || 0;
+    }
+    for (var k = 0; k < itemsB.length; k++) {
+      if ((itemsB[k].updatedAt || 0) > maxB) maxB = itemsB[k].updatedAt || 0;
+    }
+    return maxB - maxA;
+  });
+
+  if (groupOrder.length === 0) {
+    list.innerHTML = '<div style="text-align:center;padding:40px;color:#6b7280;font-size:12px;">暂无文档</div>';
+    return;
+  }
+
+  var html = '';
+  for (var gi = 0; gi < groupOrder.length; gi++) {
+    var sec = groupOrder[gi];
+    var items = groups[sec];
+    var secName = SECTION_NAMES[sec] || sec;
+    var secIcon = SECTION_ICONS[sec] || '▸';
+
+    // 计算此分组下文档总数（含子文档）
+    var totalCount = 0;
+    for (var ci = 0; ci < docs.length; ci++) {
+      if (docs[ci].section === sec) totalCount++;
+    }
+
+    html += '<div class="docs-group" data-section="' + sec + '">';
+    html += '<div class="docs-group-title" onclick="toggleDocsGroup(this)">';
+    html += '<span class="docs-group-arrow">▼</span>';
+    html += '<span>' + secName + '</span>';
+    html += '<span class="docs-group-count">' + totalCount + '</span>';
+    html += '</div>';
+    html += '<div class="docs-group-items">';
+
+    for (var ii = 0; ii < items.length; ii++) {
+      html += renderDocItemWithChildren(items[ii], childrenMap, secIcon);
+    }
+
+    html += '</div></div>';
+  }
+
+  list.innerHTML = html;
+}
+
+/** 递归渲染文档项及其子文档 */
+function renderDocItemWithChildren(item, childrenMap, secIcon) {
+  var docKey = docItemKey(item);
+  var isActive = docKey === currentDocKey ? ' active' : '';
+  var children = childrenMap[docKey] || [];
+  var hasChildren = children.length > 0;
+  var isCollapsed = docsCollapsedState[docKey] === true;
+
+  var html = '<div class="docs-item-wrapper">';
+
+  // 文档项本身
+  html += '<div class="docs-item' + isActive + '" data-key="' + escHtml(docKey) + '" onclick="selectDoc(\\x27' + docKey.replace(/'/g, "\\\\'") + '\\x27)">';
+
+  if (hasChildren) {
+    var toggleIcon = isCollapsed ? '+' : '−';
+    html += '<span class="docs-item-toggle" onclick="event.stopPropagation();toggleDocChildren(\\x27' + docKey.replace(/'/g, "\\\\'") + '\\x27)" title="' + (isCollapsed ? '展开子文档' : '收起子文档') + '">' + toggleIcon + '</span>';
+  }
+
+  // 不显示 emoji 图标，仅保留标题
+  html += '<span class="docs-item-text" title="' + escHtml(item.title) + '">' + escHtml(item.title) + '</span>';
+  if (hasChildren) {
+    html += '<span class="docs-item-sub" style="color:#818cf8;">' + children.length + ' 子文档</span>';
+  }
+  // 右侧显示日期（替代原来的 subSection 标签）
+  if (item.updatedAt) {
+    html += '<span class="docs-item-sub">' + fmtDateShort(item.updatedAt) + '</span>';
+  }
+  html += '</div>';
+
+  // 子文档列表
+  if (hasChildren) {
+    html += '<div class="docs-children' + (isCollapsed ? ' collapsed' : '') + '" data-parent="' + escHtml(docKey) + '">';
+    for (var ci = 0; ci < children.length; ci++) {
+      html += renderDocItemWithChildren(children[ci], childrenMap, secIcon);
+    }
+    html += '</div>';
+  }
+
+  html += '</div>';
+  return html;
+}
+
+/** 展开/折叠子文档 */
+function toggleDocChildren(docKey) {
+  docsCollapsedState[docKey] = !docsCollapsedState[docKey];
+  var container = document.querySelector('.docs-children[data-parent="' + docKey + '"]');
+  if (!container) return;
+  container.classList.toggle('collapsed');
+  // 更新切换按钮图标
+  var wrapper = container.previousElementSibling;
+  if (wrapper) {
+    var toggle = wrapper.querySelector('.docs-item-toggle');
+    if (toggle) {
+      toggle.textContent = docsCollapsedState[docKey] ? '+' : '−';
+      toggle.title = docsCollapsedState[docKey] ? '展开子文档' : '收起子文档';
+    }
+  }
+}
+
+/** 展开/折叠文档分组 */
+function toggleDocsGroup(el) {
+  var group = el.closest('.docs-group');
+  if (group) group.classList.toggle('collapsed');
+}
+
+/** 控制搜索框清除按钮的显示/隐藏 */
+function toggleSearchClear() {
+  var input = document.getElementById('docsSearch');
+  var btn = document.getElementById('docsSearchClear');
+  if (input && btn) {
+    if (input.value.length > 0) { btn.classList.add('show'); } else { btn.classList.remove('show'); }
+  }
+}
+
+/** 清空搜索框并重置列表 */
+function clearDocsSearch() {
+  var input = document.getElementById('docsSearch');
+  if (input) { input.value = ''; input.focus(); }
+  toggleSearchClear();
+  filterDocs();
+}
+
+/** 搜索过滤文档列表 */
+function filterDocs() {
+  var query = (document.getElementById('docsSearch').value || '').toLowerCase().trim();
+  if (!query) {
+    renderDocsList(docsData);
+    return;
+  }
+  var filtered = [];
+  for (var i = 0; i < docsData.length; i++) {
+    var d = docsData[i];
+    var text = (d.title || '') + ' ' + (d.section || '') + ' ' + (d.subSection || '');
+    if (text.toLowerCase().indexOf(query) >= 0) {
+      filtered.push(d);
+    }
+  }
+  renderDocsList(filtered);
+}
+
+/** 选中并加载文档内容 */
+function selectDoc(docKey) {
+  currentDocKey = docKey;
+
+  // 更新左侧选中状态
+  var items = document.querySelectorAll('.docs-item');
+  for (var i = 0; i < items.length; i++) {
+    items[i].classList.remove('active');
+    if (items[i].getAttribute('data-key') === docKey) {
+      items[i].classList.add('active');
+    }
+  }
+
+  // 解析 key
+  var parts = docKey.split('|');
+  var section = parts[0];
+  var subSection = parts[1] || null;
+
+  // 显示内容区，隐藏空状态
+  document.getElementById('docsEmptyState').style.display = 'none';
+  var contentView = document.getElementById('docsContentView');
+  contentView.style.display = 'flex';
+
+  // 显示加载状态
+  document.getElementById('docsContentTitle').textContent = '加载中...';
+  document.getElementById('docsContentMeta').innerHTML = '';
+  document.getElementById('docsContentInner').innerHTML = '<div style="text-align:center;padding:40px;color:#6b7280;"><div class="spinner" style="margin:0 auto 12px;width:24px;height:24px;border-width:3px;"></div></div>';
+
+  // 请求文档内容
+  var url = '/api/doc?section=' + encodeURIComponent(section);
+  if (subSection) url += '&subSection=' + encodeURIComponent(subSection);
+
+  fetch(url).then(function(r) {
+    if (!r.ok) throw new Error('HTTP ' + r.status);
+    return r.json();
+  }).then(function(doc) {
+    renderDocContent(doc, section, subSection);
+  }).catch(function(err) {
+    document.getElementById('docsContentTitle').textContent = '加载失败';
+    document.getElementById('docsContentInner').innerHTML = '<div style="text-align:center;padding:40px;color:#f87171;">加载失败: ' + escHtml(err.message) + '</div>';
+  });
+}
+
+/** 渲染文档内容到右侧面板 */
+function renderDocContent(doc, section, subSection) {
+  var secName = SECTION_NAMES[section] || section;
+
+  // 标题
+  document.getElementById('docsContentTitle').textContent = doc.title || secName;
+
+  // 元信息标签
+  var metaHtml = '<span class="docs-content-tag section">' + secName + '</span>';
+  if (subSection) {
+    metaHtml += '<span class="docs-content-tag section">' + escHtml(subSection) + '</span>';
+  }
+  if (doc.version) {
+    metaHtml += '<span class="docs-content-tag version">v' + escHtml(doc.version) + '</span>';
+  }
+  if (doc.updatedAt) {
+    metaHtml += '<span class="docs-content-tag">' + fmtTime(doc.updatedAt) + '</span>';
+  }
+  document.getElementById('docsContentMeta').innerHTML = metaHtml;
+
+  // Markdown 内容
+  var contentHtml = '';
+  if (doc.content) {
+    contentHtml = renderMarkdown(doc.content);
+  } else {
+    contentHtml = '<div style="text-align:center;padding:40px;color:#6b7280;">文档内容为空</div>';
+  }
+
+  // 父文档链接
+  if (doc.parentDoc) {
+    var parentTitle = findDocTitle(doc.parentDoc);
+    contentHtml += '<div class="docs-related" style="margin-top: 12px;">';
+    contentHtml += '<div class="docs-related-title">⬆️ 父文档</div>';
+    contentHtml += '<div class="docs-related-item" style="cursor:pointer;" onclick="selectDoc(\\x27' + doc.parentDoc.replace(/'/g, "\\\\'") + '\\x27)">';
+    contentHtml += '<span class="rel-icon" style="background:#1e3a5f;color:#93c5fd;">📄</span>';
+    contentHtml += '<span style="flex:1;color:#818cf8;">' + escHtml(parentTitle || doc.parentDoc) + '</span>';
+    contentHtml += '<span style="font-size:10px;color:#6b7280;font-family:monospace;">' + escHtml(doc.parentDoc) + '</span>';
+    contentHtml += '</div></div>';
+  }
+
+  // 子文档列表
+  var childDocs = doc.childDocs || [];
+  if (childDocs.length > 0) {
+    contentHtml += '<div class="docs-related" style="margin-top: 12px;">';
+    contentHtml += '<div class="docs-related-title">⬇️ 子文档 (' + childDocs.length + ')</div>';
+    for (var ci = 0; ci < childDocs.length; ci++) {
+      var childKey = childDocs[ci];
+      var childTitle = findDocTitle(childKey);
+      contentHtml += '<div class="docs-related-item" style="cursor:pointer;" onclick="selectDoc(\\x27' + childKey.replace(/'/g, "\\\\'") + '\\x27)">';
+      contentHtml += '<span class="rel-icon" style="background:#1e1b4b;color:#c084fc;">📄</span>';
+      contentHtml += '<span style="flex:1;color:#c084fc;">' + escHtml(childTitle || childKey) + '</span>';
+      contentHtml += '<span style="font-size:10px;color:#6b7280;font-family:monospace;">' + escHtml(childKey) + '</span>';
+      contentHtml += '</div>';
+    }
+    contentHtml += '</div>';
+  }
+
+  // 关联任务
+  var relatedTasks = doc.relatedTasks || [];
+  if (relatedTasks.length > 0) {
+    contentHtml += '<div class="docs-related">';
+    contentHtml += '<div class="docs-related-title">🔗 关联任务 (' + relatedTasks.length + ')</div>';
+    for (var i = 0; i < relatedTasks.length; i++) {
+      var t = relatedTasks[i];
+      var tStatus = t.status || 'pending';
+      var tIcon = tStatus === 'completed' ? '✓' : tStatus === 'in_progress' ? '▶' : '○';
+      var iconBg = tStatus === 'completed' ? '#064e3b' : tStatus === 'in_progress' ? '#1e3a5f' : '#374151';
+      var iconColor = tStatus === 'completed' ? '#6ee7b7' : tStatus === 'in_progress' ? '#93c5fd' : '#6b7280';
+      contentHtml += '<div class="docs-related-item">';
+      contentHtml += '<span class="rel-icon" style="background:' + iconBg + ';color:' + iconColor + ';">' + tIcon + '</span>';
+      contentHtml += '<span style="flex:1;">' + escHtml(t.title) + '</span>';
+      contentHtml += '<span style="font-size:10px;color:#6b7280;font-family:monospace;">' + escHtml(t.taskId) + '</span>';
+      if (t.priority) {
+        contentHtml += '<span class="status-badge priority-' + t.priority + '" style="font-size:10px;">' + t.priority + '</span>';
+      }
+      contentHtml += '</div>';
+    }
+    contentHtml += '</div>';
+  }
+
+  document.getElementById('docsContentInner').innerHTML = contentHtml;
+}
+
+
+// ========== RAG Chat ==========
+var chatHistory = []; // [{role:'user'|'assistant', content:string, results?:array}]
+var chatBusy = false;
+
+/** 点击推荐话题 */
+function chatSendTip(el) {
+  var input = document.getElementById('docsChatInput');
+  if (input) { input.value = el.textContent; chatSend(); }
+}
+
+/** Enter 发送（Shift+Enter 换行） */
+function chatInputKeydown(e) {
+  if (e.key === 'Enter' && !e.shiftKey) {
+    e.preventDefault();
+    chatSend();
+  }
+}
+
+/** 自动调整 textarea 高度 */
+function chatAutoResize(el) {
+  el.style.height = 'auto';
+  el.style.height = Math.min(el.scrollHeight, 120) + 'px';
+}
+
+/** 发送消息并搜索 */
+function chatSend() {
+  if (chatBusy) return;
+  var input = document.getElementById('docsChatInput');
+  var query = (input.value || '').trim();
+  if (!query) return;
+
+  // 隐藏欢迎信息
+  var welcome = document.getElementById('docsChatWelcome');
+  if (welcome) welcome.style.display = 'none';
+
+  // 添加用户消息
+  chatHistory.push({ role: 'user', content: query });
+  chatRenderBubble('user', query);
+  input.value = '';
+  chatAutoResize(input);
+
+  // 显示加载动画
+  chatBusy = true;
+  document.getElementById('docsChatSend').disabled = true;
+  var loadingId = 'chat-loading-' + Date.now();
+  var msgBox = document.getElementById('docsChatMessages');
+  var loadingHtml = '<div class="chat-bubble assistant" id="' + loadingId + '"><div class="chat-bubble-inner"><div class="chat-typing"><div class="chat-typing-dot"></div><div class="chat-typing-dot"></div><div class="chat-typing-dot"></div></div></div></div>';
+  msgBox.insertAdjacentHTML('beforeend', loadingHtml);
+  msgBox.scrollTop = msgBox.scrollHeight;
+
+  // 调用搜索 API
+  fetch('/api/chat', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ query: query, limit: 5 })
+  }).then(function(r) { return r.json(); }).then(function(data) {
+    // 移除加载动画
+    var loadEl = document.getElementById(loadingId);
+    if (loadEl) loadEl.remove();
+
+    var replyHtml = '';
+
+    if (data.type === 'meta') {
+      // ---- 元信息直接回答 ----
+      replyHtml = chatFormatMarkdown(data.answer || '');
+    } else {
+      // ---- 文档搜索结果 ----
+      var results = data.results || [];
+      if (results.length > 0) {
+        replyHtml += '<div style="margin-bottom:8px;color:#9ca3af;font-size:12px;">找到 <strong style="color:#a5b4fc;">' + results.length + '</strong> 篇相关文档';
+        if (data.mode === 'hybrid') replyHtml += ' <span style="font-size:10px;color:#6b7280;">(语义+字面混合)</span>';
+        else if (data.mode === 'semantic') replyHtml += ' <span style="font-size:10px;color:#6b7280;">(语义搜索)</span>';
+        else replyHtml += ' <span style="font-size:10px;color:#6b7280;">(字面搜索)</span>';
+        replyHtml += '</div>';
+
+        for (var i = 0; i < results.length; i++) {
+          var r = results[i];
+          var docKey = r.section + (r.subSection ? '|' + r.subSection : '');
+          replyHtml += '<div class="chat-result-card" onclick="chatOpenDoc(\\x27' + docKey.replace(/'/g, "\\\\'") + '\\x27)">';
+          replyHtml += '<div class="chat-result-title">';
+          replyHtml += '<span>📄 ' + escHtml(r.title) + '</span>';
+          if (r.score != null) replyHtml += '<span class="chat-result-score">' + r.score.toFixed(3) + '</span>';
+          replyHtml += '</div>';
+          if (r.snippet) replyHtml += '<div class="chat-result-snippet">' + escHtml(r.snippet) + '</div>';
+          var metaParts = [];
+          if (r.section) metaParts.push(r.section);
+          if (r.updatedAt) metaParts.push(fmtDateShort(r.updatedAt));
+          if (r.version) metaParts.push('v' + r.version);
+          if (metaParts.length > 0) replyHtml += '<div class="chat-result-meta">' + metaParts.join(' · ') + '</div>';
+          replyHtml += '</div>';
+        }
+      } else {
+        replyHtml += '<div class="chat-no-result">🤔 未找到高度相关的文档。</div>';
+        replyHtml += '<div style="margin-top:8px;font-size:12px;color:#6b7280;line-height:1.6;">';
+        replyHtml += '建议：<br>';
+        replyHtml += '• 尝试使用更具体的 <strong>关键词</strong>（如 "向量搜索"、"GPU"、"LanceDB"）<br>';
+        replyHtml += '• 问项目统计问题（如 "有多少篇文档"、"项目进度"、"有哪些阶段"）<br>';
+        replyHtml += '• 输入 <strong>"帮助"</strong> 查看我的全部能力';
+        replyHtml += '</div>';
+      }
+    }
+
+    chatHistory.push({ role: 'assistant', content: replyHtml, results: data.results || [] });
+    chatRenderBubble('assistant', replyHtml, true);
+
+  }).catch(function(err) {
+    var loadEl = document.getElementById(loadingId);
+    if (loadEl) loadEl.remove();
+    chatRenderBubble('assistant', '<span style="color:#f87171;">搜索出错: ' + escHtml(err.message) + '</span>', true);
+  }).finally(function() {
+    chatBusy = false;
+    document.getElementById('docsChatSend').disabled = false;
+    document.getElementById('docsChatInput').focus();
+  });
+}
+
+/** 简单 Markdown → HTML 转换（用于元信息回答） */
+function chatFormatMarkdown(text) {
+  return text
+    .replace(/\\*\\*(.+?)\\*\\*/g, '<strong style="color:#a5b4fc;">$1</strong>')
+    .replace(/\\n/g, '<br>');
+}
+
+/** 渲染一条消息气泡 */
+function chatRenderBubble(role, content, isHtml) {
+  var msgBox = document.getElementById('docsChatMessages');
+  var bubble = document.createElement('div');
+  bubble.className = 'chat-bubble ' + role;
+  var inner = document.createElement('div');
+  inner.className = 'chat-bubble-inner';
+  if (isHtml) { inner.innerHTML = content; }
+  else { inner.textContent = content; }
+  bubble.appendChild(inner);
+  msgBox.appendChild(bubble);
+  msgBox.scrollTop = msgBox.scrollHeight;
+}
+
+/** 从聊天结果中点击打开文档 */
+function chatOpenDoc(docKey) {
+  selectDoc(docKey);
+}
+
+/** 返回聊天视图 */
+function backToChat() {
+  document.getElementById('docsContentView').style.display = 'none';
+  document.getElementById('docsEmptyState').style.display = 'flex';
+  // 取消左侧选中
+  currentDocKey = '';
+  var items = document.querySelectorAll('.docs-item');
+  for (var i = 0; i < items.length; i++) items[i].classList.remove('active');
+  // 聚焦输入框
+  var input = document.getElementById('docsChatInput');
+  if (input) input.focus();
+}
+
+
+// ========== Stats Dashboard ==========
+var statsLoaded = false;
+
+function loadStatsPage() {
+  var container = document.getElementById('statsContent');
+  if (!container) return;
+  container.innerHTML = '<div style="text-align:center;padding:60px;color:#6b7280;"><div class="spinner" style="margin:0 auto 12px;"></div>加载统计数据...</div>';
+
+  fetch('/api/stats').then(function(r) { return r.json(); }).then(function(data) {
+    statsLoaded = true;
+    renderStatsPage(data);
+  }).catch(function(err) {
+    container.innerHTML = '<div style="text-align:center;padding:60px;color:#f87171;">加载失败: ' + err.message + '<br><button class="refresh-btn" onclick="loadStatsPage()" style="margin-top:12px;">重试</button></div>';
+  });
+}
+
+function renderStatsPage(data) {
+  var container = document.getElementById('statsContent');
+  if (!container) return;
+
+  var pct = data.overallPercent || 0;
+  var totalSub = data.subTaskCount || 0;
+  var doneSub = data.completedSubTasks || 0;
+  var totalMain = data.mainTaskCount || 0;
+  var doneMain = data.completedMainTasks || 0;
+  var docCount = data.docCount || 0;
+  var modCount = data.moduleCount || 0;
+
+  // 激励语
+  var motivate = '';
+  if (pct >= 100) motivate = '🎉 项目已全部完成！太棒了！';
+  else if (pct >= 75) motivate = '🚀 即将大功告成，冲刺阶段！';
+  else if (pct >= 50) motivate = '💪 已过半程，保持节奏！';
+  else if (pct >= 25) motivate = '🌱 稳步推进中，继续加油！';
+  else if (pct > 0) motivate = '🏗️ 万事开头难，已迈出第一步！';
+  else motivate = '📋 项目已规划就绪，开始行动吧！';
+
+  var html = '';
+
+  // ===== 总体进度环 =====
+  var ringR = 54;
+  var ringC = 2 * Math.PI * ringR;
+  var ringOffset = ringC - (pct / 100) * ringC;
+  html += '<div class="progress-ring-wrap">';
+  html += '<svg class="ring-svg" width="140" height="140" viewBox="0 0 140 140">';
+  html += '<circle cx="70" cy="70" r="' + ringR + '" stroke="#374151" stroke-width="10" fill="none"/>';
+  html += '<circle cx="70" cy="70" r="' + ringR + '" stroke="url(#ringGrad)" stroke-width="10" fill="none" stroke-linecap="round" stroke-dasharray="' + ringC + '" stroke-dashoffset="' + ringOffset + '" transform="rotate(-90 70 70)" style="transition:stroke-dashoffset 1s ease;"/>';
+  html += '<defs><linearGradient id="ringGrad" x1="0%" y1="0%" x2="100%" y2="0%"><stop offset="0%" stop-color="#10b981"/><stop offset="100%" stop-color="#3b82f6"/></linearGradient></defs>';
+  html += '<text x="70" y="65" text-anchor="middle" fill="#f3f4f6" font-size="28" font-weight="800">' + pct + '%</text>';
+  html += '<text x="70" y="84" text-anchor="middle" fill="#6b7280" font-size="11">完成率</text>';
+  html += '</svg>';
+  html += '<div class="progress-ring-info">';
+  html += '<h3>项目总体进度</h3>';
+  html += '<p>子任务完成 <strong style="color:#10b981;">' + doneSub + '</strong> / ' + totalSub + '，主任务完成 <strong style="color:#3b82f6;">' + doneMain + '</strong> / ' + totalMain + '</p>';
+  html += '<div class="motivate">' + motivate + '</div>';
+  html += '</div></div>';
+
+  // ===== 概览卡片 =====
+  html += '<div class="stats-grid">';
+  html += statCard('📋', totalMain, '主任务', doneMain + ' 已完成', 'blue');
+  html += statCard('✅', doneSub, '已完成子任务', '共 ' + totalSub + ' 个子任务', 'green');
+  html += statCard('📄', docCount, '文档', Object.keys(data.docBySection || {}).length + ' 种类型', 'purple');
+  html += statCard('🧩', modCount, '功能模块', '', 'amber');
+  var remainSub = totalSub - doneSub;
+  html += statCard('⏳', remainSub, '待完成子任务', remainSub > 0 ? '继续努力！' : '全部完成！', 'rose');
+  html += '</div>';
+
+  // ===== 按优先级统计 =====
+  var bp = data.byPriority || {};
+  html += '<div class="stats-section">';
+  html += '<div class="stats-section-title"><span class="sec-icon">🎯</span> 按优先级统计</div>';
+  html += '<div class="priority-bars">';
+  var priorities = ['P0', 'P1', 'P2'];
+  for (var pi = 0; pi < priorities.length; pi++) {
+    var pk = priorities[pi];
+    var pd = bp[pk] || { total: 0, completed: 0 };
+    var ppct = pd.total > 0 ? Math.round(pd.completed / pd.total * 100) : 0;
+    html += '<div class="priority-row">';
+    html += '<span class="priority-label ' + pk + '">' + pk + '</span>';
+    html += '<div class="priority-bar-track"><div class="priority-bar-fill ' + pk + '" style="width:' + ppct + '%"></div></div>';
+    html += '<span class="priority-nums">' + pd.completed + '/' + pd.total + ' (' + ppct + '%)</span>';
+    html += '</div>';
+  }
+  html += '</div></div>';
+
+  // ===== 进行中的任务 =====
+  var inProg = data.inProgressPhases || [];
+  if (inProg.length > 0) {
+    html += '<div class="stats-section">';
+    html += '<div class="stats-section-title"><span class="sec-icon">🔄</span> 进行中 (' + inProg.length + ')</div>';
+    html += '<div class="phase-list">';
+    for (var ii = 0; ii < inProg.length; ii++) {
+      html += phaseItem(inProg[ii], 'in_progress', '▶');
+    }
+    html += '</div></div>';
+  }
+
+  // ===== 已完成的里程碑 =====
+  var done = data.completedPhases || [];
+  if (done.length > 0) {
+    html += '<div class="stats-section">';
+    html += '<div class="stats-section-title"><span class="sec-icon">🏆</span> 已完成里程碑 (' + done.length + ')</div>';
+    html += '<div class="phase-list">';
+    for (var di = 0; di < done.length; di++) {
+      html += phaseItem(done[di], 'completed', '✓');
+    }
+    html += '</div></div>';
+  }
+
+  // ===== 待开始的任务 =====
+  var pending = data.pendingPhases || [];
+  if (pending.length > 0) {
+    html += '<div class="stats-section">';
+    html += '<div class="stats-section-title"><span class="sec-icon">📌</span> 待开始 (' + pending.length + ')</div>';
+    html += '<div class="phase-list">';
+    for (var qi = 0; qi < pending.length; qi++) {
+      html += phaseItem(pending[qi], 'pending', '○');
+    }
+    html += '</div></div>';
+  }
+
+  // ===== 模块概览 =====
+  var mods = data.moduleStats || [];
+  if (mods.length > 0) {
+    html += '<div class="stats-section">';
+    html += '<div class="stats-section-title"><span class="sec-icon">🧩</span> 模块概览</div>';
+    html += '<div class="module-grid">';
+    for (var mi = 0; mi < mods.length; mi++) {
+      var mod = mods[mi];
+      var mpct = mod.subTaskCount > 0 ? Math.round(mod.completedSubTaskCount / mod.subTaskCount * 100) : 0;
+      html += '<div class="module-card">';
+      html += '<div class="module-card-header"><div class="module-card-dot" style="background:' + (mpct >= 100 ? '#10b981' : mpct > 0 ? '#3b82f6' : '#4b5563') + ';"></div><span class="module-card-name">' + escHtml(mod.name) + '</span></div>';
+      html += '<div class="module-card-bar"><div class="module-card-bar-fill" style="width:' + mpct + '%"></div></div>';
+      html += '<div class="module-card-stats"><span>' + mod.completedSubTaskCount + '/' + mod.subTaskCount + ' 子任务</span><span>' + mpct + '%</span></div>';
+      html += '</div>';
+    }
+    html += '</div></div>';
+  }
+
+  // ===== 文档分布 =====
+  var docSec = data.docBySection || {};
+  var docKeys = Object.keys(docSec);
+  if (docKeys.length > 0) {
+    html += '<div class="stats-section">';
+    html += '<div class="stats-section-title"><span class="sec-icon">📚</span> 文档分布</div>';
+    html += '<div class="stats-grid">';
+    var secNames = { overview: '概述', core_concepts: '核心概念', api_design: 'API 设计', file_structure: '文件结构', config: '配置', examples: '示例', technical_notes: '技术笔记', api_endpoints: 'API 端点', milestones: '里程碑', changelog: '变更日志', custom: '自定义' };
+    for (var si = 0; si < docKeys.length; si++) {
+      var sk = docKeys[si];
+      html += '<div class="stat-card purple" style="padding:14px;">';
+      html += '<div style="font-size:20px;font-weight:800;color:#a5b4fc;">' + docSec[sk] + '</div>';
+      html += '<div style="font-size:11px;color:#9ca3af;margin-top:4px;">' + (secNames[sk] || sk) + '</div>';
+      html += '</div>';
+    }
+    html += '</div></div>';
+  }
+
+  container.innerHTML = html;
+}
+
+function statCard(icon, value, label, sub, color) {
+  return '<div class="stat-card ' + color + '"><div class="stat-card-icon">' + icon + '</div><div class="stat-card-value">' + value + '</div><div class="stat-card-label">' + label + '</div>' + (sub ? '<div class="stat-card-sub">' + sub + '</div>' : '') + '</div>';
+}
+
+function phaseItem(task, status, icon) {
+  var ppct = task.percent || 0;
+  var subText = task.total !== undefined ? (task.completed || 0) + '/' + task.total + ' 子任务' : task.taskId;
+  var subs = task.subTasks || [];
+  var rDocsCheck = task.relatedDocs || [];
+  var hasSubs = subs.length > 0 || rDocsCheck.length > 0;
+  var subIcons = { completed: '✓', in_progress: '◉', pending: '○', cancelled: '⊘' };
+  var mainTime = task.completedAt ? fmtTime(task.completedAt) : '';
+  var h = '<div class="phase-item-wrap">';
+  h += '<div class="phase-item-main" ' + (hasSubs ? 'onclick="togglePhaseExpand(this)"' : '') + '>';
+  if (hasSubs) { h += '<div class="phase-expand-icon">▶</div>'; }
+  h += '<div class="phase-status-icon ' + status + '">' + icon + '</div>';
+  h += '<div class="phase-info" style="flex:1;min-width:0;"><div class="phase-info-title">' + escHtml(task.title) + '</div>';
+  h += '<div class="phase-info-sub">' + escHtml(task.taskId) + ' · ' + subText;
+  if (mainTime) { h += ' · <span class="phase-time">✓ ' + mainTime + '</span>'; }
+  h += '</div></div>';
+  h += '<div class="phase-bar-mini"><div class="phase-bar-mini-fill" style="width:' + ppct + '%"></div></div>';
+  h += '<div class="phase-pct">' + ppct + '%</div>';
+  h += '</div>';
+  var rDocs = task.relatedDocs || [];
+  if (hasSubs || rDocs.length > 0) {
+    h += '<div class="phase-subtasks">';
+    for (var si = 0; si < subs.length; si++) {
+      var s = subs[si];
+      var ss = s.status || 'pending';
+      var subTime = s.completedAt ? fmtTime(s.completedAt) : '';
+      h += '<div class="phase-sub-item">';
+      h += '<div class="phase-sub-icon ' + ss + '">' + (subIcons[ss] || '○') + '</div>';
+      h += '<span class="phase-sub-name ' + ss + '">' + escHtml(s.title) + '</span>';
+      if (subTime) { h += '<span class="phase-sub-time">' + subTime + '</span>'; }
+      h += '<span class="phase-sub-id">' + escHtml(s.taskId) + '</span>';
+      h += '</div>';
+    }
+    if (rDocs.length > 0) {
+      h += '<div style="padding:6px 0 2px 8px;font-size:11px;color:#f59e0b;font-weight:600;">关联文档</div>';
+      for (var rd = 0; rd < rDocs.length; rd++) {
+        var rdoc = rDocs[rd];
+        var rdLabel = rdoc.section || '';
+        if (rdoc.subSection) rdLabel += ' / ' + rdoc.subSection;
+        h += '<div class="phase-sub-item">';
+        h += '<div class="phase-sub-icon" style="color:#f59e0b;">📄</div>';
+        h += '<span class="phase-sub-name">' + escHtml(rdoc.title) + '</span>';
+        h += '<span class="phase-sub-id">' + escHtml(rdLabel) + '</span>';
+        h += '</div>';
+      }
+    }
+    h += '</div>';
+  }
+  h += '</div>';
+  return h;
+}
+
+`;
+}
