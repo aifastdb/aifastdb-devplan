@@ -266,6 +266,19 @@ export interface IDevPlanStore {
    */
   syncWithGit(dryRun?: boolean): SyncGitResult;
 
+  /**
+   * Phase-21: 清理 WAL 中的重复 Entity
+   *
+   * 扫描所有实体类型，按业务键去重，删除多余（低优先级）的 Entity。
+   * 仅 DevPlanGraphStore（SocialGraphV2 模式）实现。
+   *
+   * @param dryRun - 若为 true，仅报告而不实际删除
+   */
+  cleanupDuplicates?(dryRun?: boolean): {
+    cleaned: number;
+    details: Array<{ entityType: string; propKey: string; duplicateId: string; keptId: string }>;
+  };
+
   // ==========================================================================
   // Document-Task Relationship Queries (仅 SocialGraphV2 实现完整支持)
   // ==========================================================================

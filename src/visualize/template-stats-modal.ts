@@ -184,14 +184,22 @@ function showPromptModal() {
 
         // 唯一展开 ID
         var expandId = 'prompt-expand-' + date + '-' + ii;
+        var chevronId = 'prompt-chevron-' + date + '-' + ii;
+        // 用于复制的数据 ID
+        var rawDataId = 'prompt-raw-' + date + '-' + ii;
+        var aiDataId = 'prompt-ai-' + date + '-' + ii;
 
-        html += '<div class="stats-modal-item" style="flex-direction:column;align-items:flex-start;gap:4px;padding:10px 20px;cursor:pointer;" onclick="togglePromptExpand(\\'' + expandId + '\\')">';
+        html += '<div class="stats-modal-item" style="flex-direction:column;align-items:flex-start;gap:4px;padding:0;cursor:default;">';
 
-        // 第一行：序号 + 摘要/预览 + 时间
+        // 可点击的头部区域（点击 toggle 折叠/展开）
+        html += '<div class="prompt-item-header" style="display:flex;flex-direction:column;gap:4px;width:100%;padding:10px 20px;cursor:pointer;" onclick="togglePromptExpand(\\'' + expandId + '\\',\\'' + chevronId + '\\')">';
+
+        // 第一行：序号 + 摘要/预览 + 时间 + 折叠指示器
         html += '<div style="display:flex;align-items:center;gap:8px;width:100%;">';
         html += '<span style="font-size:12px;font-weight:700;color:#ec4899;flex-shrink:0;">#' + (p.promptIndex || (ii + 1)) + '</span>';
         html += '<span class="stats-modal-item-name" title="' + escHtml(summaryText || contentPreview) + '" style="font-size:13px;">' + escHtml(summaryText || contentPreview) + '</span>';
         html += '<span style="font-size:10px;color:#6b7280;flex-shrink:0;margin-left:auto;white-space:nowrap;">' + timeStr + '</span>';
+        html += '<span id="' + chevronId + '" style="font-size:10px;color:#6b7280;flex-shrink:0;transition:transform 0.2s;display:inline-block;">▶</span>';
         html += '</div>';
 
         // 标签行
@@ -204,20 +212,26 @@ function showPromptModal() {
           html += '</div>';
         }
 
-        // 展开区域（默认隐藏）— 用户原始输入 + AI 理解
-        html += '<div id="' + expandId + '" style="display:none;width:100%;padding-top:6px;border-top:1px solid rgba(75,85,99,0.3);margin-top:4px;">';
+        html += '</div>'; // end header
+
+        // 展开区域（默认隐藏）— 用户原始输入 + AI 理解（点击内容区域不折叠）
+        html += '<div id="' + expandId + '" style="display:none;width:100%;padding:6px 20px 10px;border-top:1px solid rgba(75,85,99,0.3);">';
 
         // 用户原始输入
         html += '<div style="margin-bottom:8px;">';
-        html += '<div style="font-size:10px;font-weight:600;color:#9ca3af;margin-bottom:3px;display:flex;align-items:center;gap:4px;">💬 用户原始输入</div>';
-        html += '<div style="font-size:12px;color:#d1d5db;background:rgba(31,41,55,0.5);padding:8px 10px;border-radius:6px;border:1px solid rgba(75,85,99,0.3);white-space:pre-wrap;word-break:break-word;max-height:200px;overflow-y:auto;line-height:1.5;">' + escHtml(rawContent || '(未记录)') + '</div>';
+        html += '<div style="font-size:10px;font-weight:600;color:#9ca3af;margin-bottom:3px;display:flex;align-items:center;gap:4px;">💬 用户原始输入';
+        html += '<button class="prompt-copy-btn" onclick="event.stopPropagation();copyPromptText(\\'' + rawDataId + '\\')" title="复制原始输入" style="margin-left:auto;background:none;border:1px solid rgba(107,114,128,0.4);border-radius:4px;padding:1px 6px;cursor:pointer;color:#9ca3af;font-size:10px;display:flex;align-items:center;gap:3px;transition:all 0.15s;"><span style="font-size:11px;">📋</span> 复制</button>';
+        html += '</div>';
+        html += '<div id="' + rawDataId + '" style="font-size:12px;color:#d1d5db;background:rgba(31,41,55,0.5);padding:8px 10px;border-radius:6px;border:1px solid rgba(75,85,99,0.3);white-space:pre-wrap;word-break:break-word;max-height:200px;overflow-y:auto;line-height:1.5;">' + escHtml(rawContent || '(未记录)') + '</div>';
         html += '</div>';
 
         // AI 理解
         if (aiText) {
           html += '<div style="margin-bottom:4px;">';
-          html += '<div style="font-size:10px;font-weight:600;color:#9ca3af;margin-bottom:3px;display:flex;align-items:center;gap:4px;">🤖 AI 理解</div>';
-          html += '<div style="font-size:12px;color:#a5b4fc;background:rgba(67,56,202,0.12);padding:8px 10px;border-radius:6px;border:1px solid rgba(99,102,241,0.2);white-space:pre-wrap;word-break:break-word;max-height:200px;overflow-y:auto;line-height:1.5;">' + escHtml(aiText) + '</div>';
+          html += '<div style="font-size:10px;font-weight:600;color:#9ca3af;margin-bottom:3px;display:flex;align-items:center;gap:4px;">🤖 AI 理解';
+          html += '<button class="prompt-copy-btn" onclick="event.stopPropagation();copyPromptText(\\'' + aiDataId + '\\')" title="复制 AI 理解" style="margin-left:auto;background:none;border:1px solid rgba(107,114,128,0.4);border-radius:4px;padding:1px 6px;cursor:pointer;color:#9ca3af;font-size:10px;display:flex;align-items:center;gap:3px;transition:all 0.15s;"><span style="font-size:11px;">📋</span> 复制</button>';
+          html += '</div>';
+          html += '<div id="' + aiDataId + '" style="font-size:12px;color:#a5b4fc;background:rgba(67,56,202,0.12);padding:8px 10px;border-radius:6px;border:1px solid rgba(99,102,241,0.2);white-space:pre-wrap;word-break:break-word;max-height:200px;overflow-y:auto;line-height:1.5;">' + escHtml(aiText) + '</div>';
           html += '</div>';
         }
 
@@ -232,15 +246,61 @@ function showPromptModal() {
   });
 }
 
-/** 切换 Prompt 展开/折叠 */
-function togglePromptExpand(expandId) {
+/** 切换 Prompt 展开/折叠（带 chevron 旋转指示） */
+function togglePromptExpand(expandId, chevronId) {
   var el = document.getElementById(expandId);
   if (!el) return;
+  var chevron = chevronId ? document.getElementById(chevronId) : null;
   if (el.style.display === 'none') {
     el.style.display = 'block';
+    if (chevron) chevron.style.transform = 'rotate(90deg)';
   } else {
     el.style.display = 'none';
+    if (chevron) chevron.style.transform = 'rotate(0deg)';
   }
+}
+
+/** 复制 Prompt 文本到剪贴板（用户原始输入 / AI 理解） */
+function copyPromptText(elId) {
+  var el = document.getElementById(elId);
+  if (!el) return;
+  var text = el.textContent || el.innerText || '';
+  if (!text.trim()) return;
+
+  if (navigator.clipboard && navigator.clipboard.writeText) {
+    navigator.clipboard.writeText(text).then(function() {
+      showCopyFeedback(elId);
+    }).catch(function() {
+      fallbackCopy(text, elId);
+    });
+  } else {
+    fallbackCopy(text, elId);
+  }
+}
+
+/** 剪贴板 fallback（兼容旧浏览器） */
+function fallbackCopy(text, elId) {
+  var ta = document.createElement('textarea');
+  ta.value = text;
+  ta.style.position = 'fixed';
+  ta.style.left = '-9999px';
+  document.body.appendChild(ta);
+  ta.select();
+  try { document.execCommand('copy'); showCopyFeedback(elId); } catch(e) {}
+  document.body.removeChild(ta);
+}
+
+/** 复制成功提示：短暂高亮边框 */
+function showCopyFeedback(elId) {
+  var el = document.getElementById(elId);
+  if (!el) return;
+  var origBorder = el.style.borderColor;
+  el.style.borderColor = '#34d399';
+  el.style.boxShadow = '0 0 0 1px rgba(52,211,153,0.3)';
+  setTimeout(function() {
+    el.style.borderColor = origBorder;
+    el.style.boxShadow = 'none';
+  }, 800);
 }
 
 function closeStatsModal() {

@@ -285,17 +285,14 @@ export class DevPlanGraphStore implements IDevPlanStore {
   // ==========================================================================
 
   private ensureProjectEntity(): void {
-    const existing = this.findProjectEntity();
-    if (existing) {
-      this.projectEntityId = existing.id;
-    } else {
-      const entity = this.graph.addEntity(this.projectName, ET.PROJECT, {
+    const entity = this.graph.upsertEntityByProp(
+      ET.PROJECT, 'projectName', this.projectName, this.projectName, {
         projectName: this.projectName,
         createdAt: Date.now(),
-      });
-      this.projectEntityId = entity.id;
-      this.graph.flush();
-    }
+      }
+    );
+    this.projectEntityId = entity.id;
+    this.graph.flush();
   }
 
   private findProjectEntity(): Entity | null {
@@ -316,6 +313,83 @@ export class DevPlanGraphStore implements IDevPlanStore {
   // Generic Entity Helpers
   // ==========================================================================
 
+  /** 任务状态优先级映射（用于去重时选择"胜出"实体） */
+  private static readonly STATUS_PRIORITY: Record<string, number> = {
+    cancelled: 0,
+    pending: 1,
+    in_progress: 2,
+    completed: 3,
+  };
+
+  /**
+   * 通用 Entity 去重：按指定 property key 分组，每组只保留"最优"实体。
+   *
+   * 胜出规则：
+   * 1. status 优先级高者胜（completed > in_progress > pending > cancelled）
+   * 2. 同 status 时 updatedAt 最新者胜
+   *
+   * 适用于 mainTask（按 taskId 去重）、subTask（按 taskId 去重）、
+   * module（按 moduleId 去重）等场景。
+   */
+  private deduplicateEntities(entities: Entity[], propKey: string): Entity[] {
+    const bestMap = new Map<string, Entity>();
+    for (const e of entities) {
+      const key = (e.properties as any)?.[propKey] as string;
+      if (!key) {
+        // 无 key 的 entity 直接保留
+        bestMap.set(e.id, e);
+        continue;
+      }
+      const existing = bestMap.get(key);
+      if (!existing) {
+        bestMap.set(key, e);
+        continue;
+      }
+      // 比较状态优先级
+      const existStatus = DevPlanGraphStore.STATUS_PRIORITY[(existing.properties as any)?.status] ?? 1;
+      const newStatus = DevPlanGraphStore.STATUS_PRIORITY[(e.properties as any)?.status] ?? 1;
+      if (newStatus > existStatus) {
+        bestMap.set(key, e);
+      } else if (newStatus === existStatus) {
+        // 同状态：updatedAt 更大者胜
+        const existUpdated = Number((existing.properties as any)?.updatedAt) || 0;
+        const newUpdated = Number((e.properties as any)?.updatedAt) || 0;
+        if (newUpdated > existUpdated) {
+          bestMap.set(key, e);
+        }
+      }
+    }
+    return Array.from(bestMap.values());
+  }
+
+  /**
+   * 查找所有重复 Entity（按指定 property key 分组，返回非胜出者列表）。
+   * 用于清理 WAL 中的冗余记录。
+   */
+  private findDuplicateEntities(entityType: string, propKey: string): Entity[] {
+    const entities = this.findEntitiesByType(entityType);
+    const groups = new Map<string, Entity[]>();
+    for (const e of entities) {
+      const key = (e.properties as any)?.[propKey] as string;
+      if (!key) continue;
+      if (!groups.has(key)) groups.set(key, []);
+      groups.get(key)!.push(e);
+    }
+
+    const duplicates: Entity[] = [];
+    for (const [, group] of groups) {
+      if (group.length <= 1) continue;
+      // 找出胜者（deduplicateEntities 返回的唯一值）
+      const winner = this.deduplicateEntities(group, propKey)[0];
+      for (const e of group) {
+        if (e.id !== winner.id) {
+          duplicates.push(e);
+        }
+      }
+    }
+    return duplicates;
+  }
+
   /** 按 entityType 列出所有实体并按属性过滤 */
   private findEntitiesByType(entityType: string): Entity[] {
     return this.graph.listEntitiesByType(entityType).filter(
@@ -323,10 +397,19 @@ export class DevPlanGraphStore implements IDevPlanStore {
     );
   }
 
-  /** 按属性在指定类型中查找唯一实体 */
+  /**
+   * 按属性在指定类型中查找唯一实体。
+   *
+   * Phase-21 改进：当同一 key+value 有多个 Entity（WAL 重复），
+   * 选择状态优先级最高 + updatedAt 最新的那个（而非随机第一个）。
+   */
   private findEntityByProp(entityType: string, key: string, value: string): Entity | null {
     const entities = this.findEntitiesByType(entityType);
-    return entities.find((e) => (e.properties as any)?.[key] === value) || null;
+    const matches = entities.filter((e) => (e.properties as any)?.[key] === value);
+    if (matches.length === 0) return null;
+    if (matches.length === 1) return matches[0];
+    // 多个匹配 → 去重取最优
+    return this.deduplicateEntities(matches, key)[0] || null;
   }
 
   /** 获取实体的出向关系 */
@@ -530,21 +613,27 @@ export class DevPlanGraphStore implements IDevPlanStore {
       return existing.id;
     }
 
-    // 新建文档
-    const entity = this.graph.addEntity(input.title, ET.DOC, {
-      projectName: this.projectName,
-      section: input.section,
-      title: input.title,
-      content: input.content,
-      version,
-      subSection: input.subSection || null,
-      relatedSections: input.relatedSections || [],
-      relatedTaskIds: input.relatedTaskIds || [],
-      moduleId: finalModuleId || null,
-      parentDoc: finalParentDoc || null,
-      createdAt: now,
-      updatedAt: now,
-    });
+    // 新建文档 — upsert by sectionKey 防止重复
+    const sectionKey = input.subSection
+      ? `${input.section}|${input.subSection}`
+      : input.section;
+    const entity = this.graph.upsertEntityByProp(
+      ET.DOC, 'sectionKey', sectionKey, input.title, {
+        projectName: this.projectName,
+        section: input.section,
+        sectionKey,
+        title: input.title,
+        content: input.content,
+        version,
+        subSection: input.subSection || null,
+        relatedSections: input.relatedSections || [],
+        relatedTaskIds: input.relatedTaskIds || [],
+        moduleId: finalModuleId || null,
+        parentDoc: finalParentDoc || null,
+        createdAt: now,
+        updatedAt: now,
+      }
+    );
 
     // 子文档不直接连接项目节点，仅通过 doc_has_child 连接父文档
     if (finalParentDoc) {
@@ -599,7 +688,9 @@ export class DevPlanGraphStore implements IDevPlanStore {
   }
 
   listSections(): DevPlanDoc[] {
-    return this.findEntitiesByType(ET.DOC).map((e) => this.entityToDevPlanDoc(e));
+    const entities = this.findEntitiesByType(ET.DOC);
+    // Phase-23: 引擎层 upsertEntityByProp(sectionKey) 已保证不会新增重复，无需上层去重
+    return entities.map((e) => this.entityToDevPlanDoc(e));
   }
 
   updateSection(section: DevPlanSection, content: string, subSection?: string): string {
@@ -777,30 +868,33 @@ export class DevPlanGraphStore implements IDevPlanStore {
   createMainTask(input: MainTaskInput): MainTask {
     const existing = this.getMainTask(input.taskId);
     if (existing) {
-      throw new Error(`Main task "${input.taskId}" already exists for project "${this.projectName}"`);
+      // 已存在 → 返回现有任务（幂等）
+      return existing;
     }
 
     const now = Date.now();
     // 如果未指定 order，自动分配为当前最大 order + 1
     const order = input.order != null ? input.order : this.getNextMainTaskOrder();
-    const entity = this.graph.addEntity(input.title, ET.MAIN_TASK, {
-      projectName: this.projectName,
-      taskId: input.taskId,
-      title: input.title,
-      priority: input.priority,
-      description: input.description || '',
-      estimatedHours: input.estimatedHours || 0,
-      relatedSections: input.relatedSections || [],
-      relatedPromptIds: input.relatedPromptIds || [],
-      moduleId: input.moduleId || null,
-      totalSubtasks: 0,
-      completedSubtasks: 0,
-      status: 'pending',
-      order,
-      createdAt: now,
-      updatedAt: now,
-      completedAt: null,
-    });
+    const entity = this.graph.upsertEntityByProp(
+      ET.MAIN_TASK, 'taskId', input.taskId, input.title, {
+        projectName: this.projectName,
+        taskId: input.taskId,
+        title: input.title,
+        priority: input.priority,
+        description: input.description || '',
+        estimatedHours: input.estimatedHours || 0,
+        relatedSections: input.relatedSections || [],
+        relatedPromptIds: input.relatedPromptIds || [],
+        moduleId: input.moduleId || null,
+        totalSubtasks: 0,
+        completedSubtasks: 0,
+        status: 'pending',
+        order,
+        createdAt: now,
+        updatedAt: now,
+        completedAt: null,
+      }
+    );
 
     // project -> main task 关系
     this.graph.putRelation(this.getProjectId(), entity.id, RT.HAS_MAIN_TASK);
@@ -927,6 +1021,8 @@ export class DevPlanGraphStore implements IDevPlanStore {
   }): MainTask[] {
     let entities = this.findEntitiesByType(ET.MAIN_TASK);
 
+    // Phase-23: 引擎层 upsertEntityByProp 已保证不会新增重复，无需上层去重
+
     if (filter?.status) {
       entities = entities.filter((e) => (e.properties as any).status === filter.status);
     }
@@ -968,7 +1064,8 @@ export class DevPlanGraphStore implements IDevPlanStore {
   addSubTask(input: SubTaskInput): SubTask {
     const existing = this.getSubTask(input.taskId);
     if (existing) {
-      throw new Error(`Sub task "${input.taskId}" already exists for project "${this.projectName}"`);
+      // 已存在 → 返回现有子任务（幂等）
+      return existing;
     }
 
     const mainTask = this.getMainTask(input.parentTaskId);
@@ -979,20 +1076,22 @@ export class DevPlanGraphStore implements IDevPlanStore {
     const now = Date.now();
     // 如果未指定 order，自动分配为当前父任务下最大 order + 1
     const order = input.order != null ? input.order : this.getNextSubTaskOrder(input.parentTaskId);
-    const entity = this.graph.addEntity(input.title, ET.SUB_TASK, {
-      projectName: this.projectName,
-      taskId: input.taskId,
-      parentTaskId: input.parentTaskId,
-      title: input.title,
-      estimatedHours: input.estimatedHours || 0,
-      relatedFiles: input.relatedFiles || [],
-      description: input.description || '',
-      status: 'pending',
-      order,
-      createdAt: now,
-      updatedAt: now,
-      completedAt: null,
-    });
+    const entity = this.graph.upsertEntityByProp(
+      ET.SUB_TASK, 'taskId', input.taskId, input.title, {
+        projectName: this.projectName,
+        taskId: input.taskId,
+        parentTaskId: input.parentTaskId,
+        title: input.title,
+        estimatedHours: input.estimatedHours || 0,
+        relatedFiles: input.relatedFiles || [],
+        description: input.description || '',
+        status: 'pending',
+        order,
+        createdAt: now,
+        updatedAt: now,
+        completedAt: null,
+      }
+    );
 
     // main task -> sub task 关系
     this.graph.putRelation(mainTask.id, entity.id, RT.HAS_SUB_TASK);
@@ -1020,20 +1119,22 @@ export class DevPlanGraphStore implements IDevPlanStore {
 
       const now = Date.now();
       const order = input.order != null ? input.order : this.getNextSubTaskOrder(input.parentTaskId);
-      const entity = this.graph.addEntity(input.title, ET.SUB_TASK, {
-        projectName: this.projectName,
-        taskId: input.taskId,
-        parentTaskId: input.parentTaskId,
-        title: input.title,
-        estimatedHours: input.estimatedHours || 0,
-        relatedFiles: input.relatedFiles || [],
-        description: input.description || '',
-        status: targetStatus,
-        order,
-        createdAt: now,
-        updatedAt: now,
-        completedAt: targetStatus === 'completed' ? now : null,
-      });
+      const entity = this.graph.upsertEntityByProp(
+        ET.SUB_TASK, 'taskId', input.taskId, input.title, {
+          projectName: this.projectName,
+          taskId: input.taskId,
+          parentTaskId: input.parentTaskId,
+          title: input.title,
+          estimatedHours: input.estimatedHours || 0,
+          relatedFiles: input.relatedFiles || [],
+          description: input.description || '',
+          status: targetStatus,
+          order,
+          createdAt: now,
+          updatedAt: now,
+          completedAt: targetStatus === 'completed' ? now : null,
+        }
+      );
 
       this.graph.putRelation(mainTask.id, entity.id, RT.HAS_SUB_TASK);
       this.refreshMainTaskCounts(input.parentTaskId);
@@ -1100,6 +1201,8 @@ export class DevPlanGraphStore implements IDevPlanStore {
     let entities = this.findEntitiesByType(ET.SUB_TASK).filter(
       (e) => (e.properties as any).parentTaskId === parentTaskId
     );
+
+    // Phase-23: 引擎层 upsertEntityByProp 已保证不会新增重复，无需上层去重
 
     if (filter?.status) {
       entities = entities.filter((e) => (e.properties as any).status === filter.status);
@@ -1310,21 +1413,24 @@ export class DevPlanGraphStore implements IDevPlanStore {
   createModule(input: ModuleInput): Module {
     const existing = this.getModule(input.moduleId);
     if (existing) {
-      throw new Error(`Module "${input.moduleId}" already exists for project "${this.projectName}"`);
+      // 已存在 → 返回现有模块（幂等）
+      return existing;
     }
 
     const now = Date.now();
     const status = input.status || 'active';
 
-    const entity = this.graph.addEntity(input.name, ET.MODULE, {
-      projectName: this.projectName,
-      moduleId: input.moduleId,
-      name: input.name,
-      description: input.description || '',
-      status,
-      createdAt: now,
-      updatedAt: now,
-    });
+    const entity = this.graph.upsertEntityByProp(
+      ET.MODULE, 'moduleId', input.moduleId, input.name, {
+        projectName: this.projectName,
+        moduleId: input.moduleId,
+        name: input.name,
+        description: input.description || '',
+        status,
+        createdAt: now,
+        updatedAt: now,
+      }
+    );
 
     // project -> module (通过类型区分即可，不需要额外关系)
     this.graph.flush();
@@ -1352,6 +1458,7 @@ export class DevPlanGraphStore implements IDevPlanStore {
 
   listModules(filter?: { status?: ModuleStatus }): Module[] {
     let entities = this.findEntitiesByType(ET.MODULE);
+    // Phase-23: 引擎层 upsertEntityByProp 已保证不会新增重复，无需上层去重
     if (filter?.status) {
       entities = entities.filter((e) => (e.properties as any).status === filter.status);
     }
@@ -1644,6 +1751,94 @@ export class DevPlanGraphStore implements IDevPlanStore {
   // ==========================================================================
   // Utility
   // ==========================================================================
+
+  /**
+   * Phase-21: 清理 WAL 中的重复 Entity。
+   *
+   * 扫描所有实体类型，按业务键去重，删除多余（低优先级）的 Entity。
+   * 返回被清理的 Entity 数量和详情。
+   *
+   * @param dryRun - 若为 true，仅报告而不实际删除
+   */
+  cleanupDuplicates(dryRun: boolean = false): {
+    cleaned: number;
+    details: Array<{ entityType: string; propKey: string; duplicateId: string; keptId: string }>;
+  } {
+    const details: Array<{ entityType: string; propKey: string; duplicateId: string; keptId: string }> = [];
+
+    // 定义各实体类型的去重键
+    const typeKeyMap: Array<{ entityType: string; propKey: string }> = [
+      { entityType: ET.MAIN_TASK, propKey: 'taskId' },
+      { entityType: ET.SUB_TASK, propKey: 'taskId' },
+      { entityType: ET.MODULE, propKey: 'moduleId' },
+    ];
+
+    for (const { entityType, propKey } of typeKeyMap) {
+      const duplicates = this.findDuplicateEntities(entityType, propKey);
+      for (const dup of duplicates) {
+        const propVal = (dup.properties as any)?.[propKey] || 'unknown';
+        // 找出胜者
+        const entities = this.findEntitiesByType(entityType).filter(
+          (e) => (e.properties as any)?.[propKey] === propVal
+        );
+        const winner = this.deduplicateEntities(entities, propKey)[0];
+
+        details.push({
+          entityType,
+          propKey: `${propKey}=${propVal}`,
+          duplicateId: dup.id,
+          keptId: winner?.id || 'unknown',
+        });
+
+        if (!dryRun) {
+          // 删除重复 Entity 的所有关系
+          const relations = this.graph.getEntityRelations(dup.id);
+          for (const rel of relations) {
+            this.graph.deleteRelation(rel.id);
+          }
+          // 删除重复 Entity
+          this.graph.deleteEntity(dup.id);
+        }
+      }
+    }
+
+    // 文档去重（按 section+subSection 组合键）
+    const docEntities = this.findEntitiesByType(ET.DOC);
+    const docGroups = new Map<string, Entity[]>();
+    for (const e of docEntities) {
+      const p = e.properties as any;
+      const key = sectionKey(p.section, p.subSection || undefined);
+      if (!docGroups.has(key)) docGroups.set(key, []);
+      docGroups.get(key)!.push(e);
+    }
+    for (const [key, group] of docGroups) {
+      if (group.length <= 1) continue;
+      // 保留 updatedAt 最新的
+      group.sort((a, b) => (Number((b.properties as any)?.updatedAt) || 0) - (Number((a.properties as any)?.updatedAt) || 0));
+      const winner = group[0];
+      for (let i = 1; i < group.length; i++) {
+        details.push({
+          entityType: ET.DOC,
+          propKey: `section=${key}`,
+          duplicateId: group[i].id,
+          keptId: winner.id,
+        });
+        if (!dryRun) {
+          const relations = this.graph.getEntityRelations(group[i].id);
+          for (const rel of relations) {
+            this.graph.deleteRelation(rel.id);
+          }
+          this.graph.deleteEntity(group[i].id);
+        }
+      }
+    }
+
+    if (!dryRun && details.length > 0) {
+      this.graph.flush();
+    }
+
+    return { cleaned: details.length, details };
+  }
 
   sync(): void {
     this.graph.flush();

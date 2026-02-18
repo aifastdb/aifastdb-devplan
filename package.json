@@ -23,7 +23,7 @@
   },
   "dependencies": {
     "@modelcontextprotocol/sdk": "^1.0.0",
-    "aifastdb": "^2.5.1"
+    "aifastdb": "^2.6.7"
   },
   "devDependencies": {
     "@types/node": "^20.11.0",

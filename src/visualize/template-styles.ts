@@ -481,5 +481,9 @@ export function getStyles(): string {
     .stats-modal-item-badge.cancelled { background: rgba(146,64,14,0.15); color: #fbbf24; }
     .stats-modal-item-badge.active { background: rgba(16,185,129,0.15); color: #6ee7b7; }
     .stats-modal-item-sub { font-size: 11px; color: #6b7280; flex-shrink: 0; font-family: monospace; }
+
+    /* Prompt 日志弹层 — 头部 hover + 复制按钮 */
+    .prompt-item-header:hover { background: rgba(40,51,68,0.6); }
+    .prompt-copy-btn:hover { background: rgba(107,114,128,0.25) !important; color: #d1d5db !important; border-color: rgba(107,114,128,0.6) !important; }
 `;
 }

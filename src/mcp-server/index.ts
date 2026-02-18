@@ -460,6 +460,24 @@ const TOOLS = [
     },
   },
   {
+    name: 'devplan_cleanup_duplicates',
+    description: 'Phase-21: Scan and cleanup duplicate entities in the WAL. Deduplicates main tasks (by taskId), sub-tasks (by taskId), modules (by moduleId), and documents (by section+subSection). Keeps the entity with the highest status priority (completed > in_progress > pending > cancelled) and latest updatedAt. Use dryRun=true to preview without changes.\nPhase-21: 扫描并清理 WAL 中的重复 Entity。按业务键去重（mainTask 按 taskId，subTask 按 taskId，module 按 moduleId，doc 按 section+subSection）。保留状态优先级最高 + updatedAt 最新的 Entity。使用 dryRun=true 可预览而不实际修改。',
+    inputSchema: {
+      type: 'object' as const,
+      properties: {
+        projectName: {
+          type: 'string',
+          description: `Project name (default: "${DEFAULT_PROJECT_NAME}")\n项目名称（默认："${DEFAULT_PROJECT_NAME}"）`,
+        },
+        dryRun: {
+          type: 'boolean',
+          description: 'If true, only report which duplicates would be cleaned without actually deleting them (default: false)\n为 true 时仅报告哪些重复 Entity 会被清理，不实际删除（默认 false）',
+        },
+      },
+      required: ['projectName'],
+    },
+  },
+  {
     name: 'devplan_create_module',
     description: 'Create/register a feature module in the dev plan. Modules represent independent functional areas of the project (e.g., "vector-store", "permission-system"). Main tasks and documents can be associated with modules.\n在开发计划中创建/注册功能模块。模块代表项目的独立功能区域（如 "vector-store"、"permission-system"）。主任务和文档可以关联到模块。',
     inputSchema: {
@@ -1111,6 +1129,7 @@ async function handleToolCall(name: string, args: ToolArgs): Promise<string> {
 
       const plan = getDevPlan(args.projectName);
       try {
+        // Phase-23: createMainTask 内部已幂等处理（upsertEntityByProp），无需额外检查
         const mainTask = plan.createMainTask({
           projectName: args.projectName,
           taskId: args.taskId,
@@ -1147,6 +1166,7 @@ async function handleToolCall(name: string, args: ToolArgs): Promise<string> {
 
       const plan = getDevPlan(args.projectName);
       try {
+        // Phase-23: addSubTask 内部已幂等处理（upsertEntityByProp），无需额外检查
         const subTask = plan.addSubTask({
           projectName: args.projectName,
           taskId: args.taskId,
@@ -1491,6 +1511,41 @@ async function handleToolCall(name: string, args: ToolArgs): Promise<string> {
               : dryRun
                 ? `⚠️ ${result.reverted.length} of ${result.checked} tasks would be reverted (dry run, no changes made)`
                 : `🔄 ${result.reverted.length} of ${result.checked} tasks reverted to pending due to Git rollback`,
+        });
+      } catch (err) {
+        throw new McpError(ErrorCode.InternalError,
+          err instanceof Error ? err.message : String(err));
+      }
+    }
+
+    case 'devplan_cleanup_duplicates': {
+      if (!args.projectName) {
+        throw new McpError(ErrorCode.InvalidParams, 'Missing required: projectName');
+      }
+
+      const plan = getDevPlan(args.projectName);
+      const dryRun = args.dryRun ?? false;
+
+      if (typeof (plan as any).cleanupDuplicates !== 'function') {
+        throw new McpError(
+          ErrorCode.InvalidRequest,
+          `Duplicate cleanup requires "graph" engine. Project "${args.projectName}" uses a different engine.`
+        );
+      }
+
+      try {
+        const result = (plan as any).cleanupDuplicates(dryRun);
+
+        return JSON.stringify({
+          success: true,
+          dryRun,
+          cleaned: result.cleaned,
+          details: result.details,
+          summary: result.cleaned === 0
+            ? '✅ No duplicate entities found. WAL is clean.'
+            : dryRun
+              ? `⚠️ Found ${result.cleaned} duplicate entities (dry run, no changes made)`
+              : `🧹 Cleaned ${result.cleaned} duplicate entities from WAL`,
         });
       } catch (err) {
         throw new McpError(ErrorCode.InternalError,
