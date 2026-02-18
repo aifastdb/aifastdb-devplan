@@ -180,6 +180,139 @@ function updateGraphSetting(key, value) {
   if (el) el.checked = !!s.showProjectEdges;
 })();
 
+// ========== 统一节点颜色配置 (适用于所有渲染引擎) ==========
+function darkenHex(hex, amount) {
+  try {
+    var r = parseInt(hex.slice(1,3), 16);
+    var g = parseInt(hex.slice(3,5), 16);
+    var b = parseInt(hex.slice(5,7), 16);
+    r = Math.max(0, Math.round(r * (1 - amount)));
+    g = Math.max(0, Math.round(g * (1 - amount)));
+    b = Math.max(0, Math.round(b * (1 - amount)));
+    return '#' + ((1 << 24) + (r << 16) + (g << 8) + b).toString(16).slice(1);
+  } catch(e) { return hex; }
+}
+
+var NODE_COLORS_KEY = 'devplan_node_colors';
+var NODE_COLORS_VERSION_KEY = 'devplan_node_colors_v';
+var NODE_COLORS_VERSION = 2;  // 递增此值可强制重置用户缓存到新默认值
+var NODE_COLORS_DEFAULTS = {
+  colorProject: '#f59e0b',
+  colorModule: '#ff6600',
+  colorMainTask: '#22c55e',
+  colorSubTask: '#047857',
+  colorDocument: '#3b82f6'
+};
+
+function getNodeColors() {
+  var colors = {};
+  for (var k in NODE_COLORS_DEFAULTS) colors[k] = NODE_COLORS_DEFAULTS[k];
+  try {
+    // 版本检查: 默认值变更时强制重置缓存
+    var savedVer = parseInt(localStorage.getItem(NODE_COLORS_VERSION_KEY) || '0', 10);
+    if (savedVer < NODE_COLORS_VERSION) {
+      // 默认值已更新, 清除旧缓存
+      localStorage.removeItem(NODE_COLORS_KEY);
+      localStorage.setItem(NODE_COLORS_VERSION_KEY, String(NODE_COLORS_VERSION));
+      return colors;
+    }
+    var saved = localStorage.getItem(NODE_COLORS_KEY);
+    if (saved) {
+      var parsed = JSON.parse(saved);
+      for (var k in parsed) {
+        if (NODE_COLORS_DEFAULTS.hasOwnProperty(k)) colors[k] = parsed[k];
+      }
+    }
+  } catch(e) {}
+  return colors;
+}
+
+function saveNodeColors(colors) {
+  try { localStorage.setItem(NODE_COLORS_KEY, JSON.stringify(colors)); } catch(e) {}
+}
+
+function updateNodeColor(nodeType, colorValue) {
+  var keyMap = { 'project': 'colorProject', 'module': 'colorModule', 'main-task': 'colorMainTask', 'sub-task': 'colorSubTask', 'document': 'colorDocument' };
+  var key = keyMap[nodeType];
+  if (!key) return;
+  var colors = getNodeColors();
+  colors[key] = colorValue;
+  saveNodeColors(colors);
+  // Update hex display
+  var hexMap = { 'project': 'ncColorProjectHex', 'module': 'ncColorModuleHex', 'main-task': 'ncColorMainTaskHex', 'sub-task': 'ncColorSubTaskHex', 'document': 'ncColorDocumentHex' };
+  var hexEl = document.getElementById(hexMap[nodeType]);
+  if (hexEl) hexEl.textContent = colorValue;
+  // Update dot color
+  var dotMap = { 'project': 'ncColorProject', 'module': 'ncColorModule', 'main-task': 'ncColorMainTask', 'sub-task': 'ncColorSubTask', 'document': 'ncColorDocument' };
+  var input = document.getElementById(dotMap[nodeType]);
+  if (input) {
+    var dot = input.parentElement.querySelector('.s3d-dot');
+    if (dot) dot.style.background = colorValue;
+  }
+  showSettingsToast('✅ 节点颜色已保存 (适用于所有渲染引擎)，刷新图谱页面生效');
+}
+
+/** 获取统一节点样式配置 — 所有渲染引擎共享 */
+function getUnifiedNodeStyle() {
+  var nc = getNodeColors();
+  return {
+    project:  { bg: nc.colorProject, border: darkenHex(nc.colorProject, 0.15), font: '#fff' },
+    module:   { bg: nc.colorModule, border: darkenHex(nc.colorModule, 0.2), font: '#fff3e0' },
+    document: { bg: nc.colorDocument, border: darkenHex(nc.colorDocument, 0.15), font: '#dbeafe' },
+    // 主任务: 亮绿色系 (pending=亮绿, completed=略深)
+    mainTask: {
+      'pending':     { bg: nc.colorMainTask, border: darkenHex(nc.colorMainTask, 0.15), font: '#052e16' },
+      'completed':   { bg: darkenHex(nc.colorMainTask, 0.20), border: darkenHex(nc.colorMainTask, 0.35), font: '#d1fae5' },
+      'in_progress': { bg: '#7c3aed', border: '#6d28d9', font: '#ddd6fe' },
+      'cancelled':   { bg: '#92400e', border: '#78350f', font: '#fde68a' }
+    },
+    // 子任务: 深绿色系 (pending=深绿, completed=更深)
+    subTask: {
+      'pending':     { bg: nc.colorSubTask, border: darkenHex(nc.colorSubTask, 0.15), font: '#d1fae5' },
+      'completed':   { bg: darkenHex(nc.colorSubTask, 0.20), border: darkenHex(nc.colorSubTask, 0.35), font: '#a7f3d0' },
+      'in_progress': { bg: '#7c3aed', border: '#6d28d9', font: '#ddd6fe' },
+      'cancelled':   { bg: '#92400e', border: '#78350f', font: '#fde68a' }
+    },
+    // 通用状态颜色 (用于状态饼图等)
+    statusGeneric: {
+      completed:   { bg: '#059669', border: '#047857', font: '#d1fae5' },
+      in_progress: { bg: '#7c3aed', border: '#6d28d9', font: '#ddd6fe' },
+      pending:     { bg: '#4b5563', border: '#374151', font: '#d1d5db' },
+      cancelled:   { bg: '#92400e', border: '#78350f', font: '#fde68a' }
+    }
+  };
+}
+
+function initNodeColorsUI() {
+  var nc = getNodeColors();
+  var colorMap = {
+    'ncColorProject': 'colorProject',
+    'ncColorModule': 'colorModule',
+    'ncColorMainTask': 'colorMainTask',
+    'ncColorSubTask': 'colorSubTask',
+    'ncColorDocument': 'colorDocument'
+  };
+  for (var id in colorMap) {
+    var el = document.getElementById(id);
+    var hexEl = document.getElementById(id + 'Hex');
+    var v = nc[colorMap[id]];
+    if (el) el.value = v;
+    if (hexEl) hexEl.textContent = v;
+    if (el) {
+      var dot = el.parentElement.querySelector('.s3d-dot');
+      if (dot) dot.style.background = v;
+    }
+  }
+}
+
+function resetNodeColors() {
+  try { localStorage.removeItem(NODE_COLORS_KEY); } catch(e) {}
+  initNodeColorsUI();
+  showSettingsToast('↩ 已恢复默认节点颜色，刷新图谱页面生效');
+}
+
+initNodeColorsUI();
+
 // ========== 3D Force Graph 自定义设置 ==========
 var S3D_DEFAULTS = {
   gravity: 0.05,
@@ -187,19 +320,24 @@ var S3D_DEFAULTS = {
   linkDistance: 40,
   velocityDecay: 0.30,
   alphaDecay: 0.020,
-  colorProject: '#fbbf24',
-  colorModule: '#ff6600',
-  colorMainTask: '#15803d',
-  colorSubTask: '#22c55e',
-  colorDocument: '#38bdf8',
-  sizeProject: 40,
-  sizeModule: 18,
-  sizeMainTask: 10,
-  sizeSubTask: 3,
-  sizeDocument: 4,
+  // 类型分层 (力导向模式): 不同类型节点保持不同轨道距离
+  typeSeparation: true,         // 启用类型间空间分层
+  typeSepStrength: 0.8,         // 分层力强度 (0=关闭, 1=强)
+  typeSepSpacing: 80,           // 层间间距 (模块@80, 文档@160, 主任务@240, 子任务@320)
+  // 布局模式: 'force' (力导向) | 'orbital' (行星轨道)
+  layoutMode: 'force',
+  orbitSpacing: 80,       // 轨道间距 (行星轨道模式)
+  orbitStrength: 0.8,     // 轨道吸引力强度
+  orbitFlatten: 0.6,      // Z 轴压平力度 (0=不压平/球壳, 1=完全压平/圆盘)
+  showOrbits: true,       // 显示轨道环线
+  sizeProject: 50,
+  sizeModule: 25,
+  sizeMainTask: 15,
+  sizeSubTask: 8,
+  sizeDocument: 10,
   particles: true,
   arrows: false,
-  nodeOpacity: 0.92,
+  nodeOpacity: 0.90,
   linkOpacity: 0.25,
   bgColor: '#0a0e1a'
 };
@@ -243,25 +381,18 @@ function update3DSetting(key, value) {
   showSettingsToast('✅ 3D 参数已保存，刷新图谱页面生效');
 }
 
+// 兼容旧调用: 重定向到统一颜色管理
 function update3DColor(nodeType, colorValue) {
-  var keyMap = { 'project': 'colorProject', 'module': 'colorModule', 'main-task': 'colorMainTask', 'sub-task': 'colorSubTask', 'document': 'colorDocument' };
-  var key = keyMap[nodeType];
-  if (!key) return;
+  updateNodeColor(nodeType, colorValue);
+}
+
+function updateLayoutMode(mode) {
   var settings = get3DSettings();
-  settings[key] = colorValue;
+  settings.layoutMode = mode;
   save3DSettings(settings);
-  // Update hex display
-  var hexMap = { 'project': 's3dColorProjectHex', 'module': 's3dColorModuleHex', 'main-task': 's3dColorMainTaskHex', 'sub-task': 's3dColorSubTaskHex', 'document': 's3dColorDocumentHex' };
-  var hexEl = document.getElementById(hexMap[nodeType]);
-  if (hexEl) hexEl.textContent = colorValue;
-  // Update dot color
-  var dotMap = { 'project': 's3dColorProject', 'module': 's3dColorModule', 'main-task': 's3dColorMainTask', 'sub-task': 's3dColorSubTask', 'document': 's3dColorDocument' };
-  var input = document.getElementById(dotMap[nodeType]);
-  if (input) {
-    var dot = input.parentElement.querySelector('.s3d-dot');
-    if (dot) dot.style.background = colorValue;
-  }
-  showSettingsToast('✅ 节点颜色已保存，刷新图谱页面生效');
+  var orbitalSettings = document.getElementById('s3dOrbitalSettings');
+  if (orbitalSettings) orbitalSettings.style.display = mode === 'orbital' ? 'block' : 'none';
+  showSettingsToast('✅ 布局模式已切换为 ' + (mode === 'orbital' ? '🪐 行星轨道' : '⚡ 力导向') + '，刷新图谱页面生效');
 }
 
 function reset3DSettings() {
@@ -299,7 +430,12 @@ function init3DSettingsUI() {
     's3dSizeSubTask': { key: 'sizeSubTask', fmt: 0 },
     's3dSizeDocument': { key: 'sizeDocument', fmt: 0 },
     's3dNodeOpacity': { key: 'nodeOpacity', fmt: 2 },
-    's3dLinkOpacity': { key: 'linkOpacity', fmt: 2 }
+    's3dLinkOpacity': { key: 'linkOpacity', fmt: 2 },
+    's3dTypeSepStrength': { key: 'typeSepStrength', fmt: 2 },
+    's3dTypeSepSpacing': { key: 'typeSepSpacing', fmt: 0 },
+    's3dOrbitSpacing': { key: 'orbitSpacing', fmt: 0 },
+    's3dOrbitStrength': { key: 'orbitStrength', fmt: 2 },
+    's3dOrbitFlatten': { key: 'orbitFlatten', fmt: 2 }
   };
   for (var id in sliderMap) {
     var el = document.getElementById(id);
@@ -310,33 +446,27 @@ function init3DSettingsUI() {
     if (valEl) valEl.textContent = cfg.fmt > 0 ? parseFloat(v).toFixed(cfg.fmt) : Math.round(v);
   }
 
-  // Colors
-  var colorMap = {
-    's3dColorProject': 'colorProject',
-    's3dColorModule': 'colorModule',
-    's3dColorMainTask': 'colorMainTask',
-    's3dColorSubTask': 'colorSubTask',
-    's3dColorDocument': 'colorDocument',
-    's3dBgColor': 'bgColor'
-  };
-  for (var id in colorMap) {
-    var el = document.getElementById(id);
-    var hexEl = document.getElementById(id + 'Hex');
-    var v = s[colorMap[id]];
-    if (el) el.value = v;
-    if (hexEl) hexEl.textContent = v;
-    if (el) {
-      var dot = el.parentElement.querySelector('.s3d-dot');
-      if (dot) dot.style.background = v;
-    }
-  }
+  // Background color (3D only)
+  var bgEl = document.getElementById('s3dBgColor');
+  var bgHexEl = document.getElementById('s3dBgColorHex');
+  if (bgEl) bgEl.value = s.bgColor || '#0a0e1a';
+  if (bgHexEl) bgHexEl.textContent = s.bgColor || '#0a0e1a';
 
   // Toggles
-  var toggleMap = { 's3dParticles': 'particles', 's3dArrows': 'arrows' };
+  var toggleMap = { 's3dParticles': 'particles', 's3dArrows': 'arrows', 's3dShowOrbits': 'showOrbits', 's3dTypeSeparation': 'typeSeparation' };
   for (var id in toggleMap) {
     var el = document.getElementById(id);
     if (el) el.checked = !!s[toggleMap[id]];
   }
+
+  // Layout mode radio
+  var layoutRadios = document.querySelectorAll('input[name="s3dLayoutMode"]');
+  for (var i = 0; i < layoutRadios.length; i++) {
+    layoutRadios[i].checked = (layoutRadios[i].value === s.layoutMode);
+  }
+  // Show/hide orbital-specific settings
+  var orbitalSettings = document.getElementById('s3dOrbitalSettings');
+  if (orbitalSettings) orbitalSettings.style.display = s.layoutMode === 'orbital' ? 'block' : 'none';
 }
 
 // Initialize 3D settings UI on page load

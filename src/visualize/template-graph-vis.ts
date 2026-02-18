@@ -440,13 +440,9 @@ document.addEventListener('keyup', function(e) { if (e.key === 'Control') ctrlPr
 window.addEventListener('blur', function() { ctrlPressed = false; });
 
 
-// ========== Node Styles ==========
-var STATUS_COLORS = {
-  completed:   { bg: '#059669', border: '#047857', font: '#d1fae5' },
-  in_progress: { bg: '#7c3aed', border: '#6d28d9', font: '#ddd6fe' },
-  pending:     { bg: '#4b5563', border: '#374151', font: '#d1d5db' },
-  cancelled:   { bg: '#92400e', border: '#78350f', font: '#fde68a' }
-};
+// ========== Node Styles (统一颜色配置) ==========
+var _visUniStyle = getUnifiedNodeStyle();
+var STATUS_COLORS = _visUniStyle.statusGeneric;
 
 
 // ========== 节点动态大小规则 ==========
@@ -487,19 +483,26 @@ function nodeStyle(node, degree) {
   var ns = calcNodeSize(t, degree || 0);
 
   if (t === 'project') {
-    return { shape: 'star', size: ns.size, color: { background: '#f59e0b', border: '#d97706', highlight: { background: '#fbbf24', border: '#fff' } }, font: { size: ns.fontSize, color: '#fff' }, borderWidth: 3 };
+    var _pc = _visUniStyle.project;
+    return { shape: 'star', size: ns.size, color: { background: _pc.bg, border: _pc.border, highlight: { background: _pc.bg, border: '#fff' } }, font: { size: ns.fontSize, color: _pc.font }, borderWidth: 3 };
   }
   if (t === 'module') {
-    return { shape: 'diamond', size: ns.size, color: { background: '#059669', border: '#047857', highlight: { background: '#10b981', border: '#fff' } }, font: { size: ns.fontSize, color: '#d1fae5' }, borderWidth: 2 };
+    var _mc = _visUniStyle.module;
+    return { shape: 'diamond', size: ns.size, color: { background: _mc.bg, border: _mc.border, highlight: { background: _mc.bg, border: '#fff' } }, font: { size: ns.fontSize, color: _mc.font }, borderWidth: 2 };
   }
   if (t === 'main-task') {
-    return { shape: 'dot', size: ns.size, color: { background: sc.bg, border: sc.border, highlight: { background: sc.bg, border: '#fff' } }, font: { size: ns.fontSize, color: sc.font }, borderWidth: 2 };
+    // 主任务: 从统一配置读取状态颜色 (深绿色系)
+    var mtc = _visUniStyle.mainTask[status] || _visUniStyle.mainTask.pending;
+    return { shape: 'dot', size: ns.size, color: { background: mtc.bg, border: mtc.border, highlight: { background: mtc.bg, border: '#fff' } }, font: { size: ns.fontSize, color: mtc.font }, borderWidth: 2 };
   }
   if (t === 'sub-task') {
-    return { shape: 'dot', size: ns.size, color: { background: sc.bg, border: sc.border, highlight: { background: sc.bg, border: '#fff' } }, font: { size: ns.fontSize, color: sc.font }, borderWidth: 1 };
+    // 子任务: 从统一配置读取状态颜色 (pending=暖肤色, completed=亮绿)
+    var stc = _visUniStyle.subTask[status] || _visUniStyle.subTask.pending;
+    return { shape: 'dot', size: ns.size, color: { background: stc.bg, border: stc.border, highlight: { background: stc.bg, border: '#fff' } }, font: { size: ns.fontSize, color: stc.font }, borderWidth: 1 };
   }
   if (t === 'document') {
-    return { shape: 'box', size: ns.size, color: { background: '#2563eb', border: '#1d4ed8', highlight: { background: '#3b82f6', border: '#fff' } }, font: { size: ns.fontSize, color: '#dbeafe' }, borderWidth: 1 };
+    var _dc = _visUniStyle.document;
+    return { shape: 'box', size: ns.size, color: { background: _dc.bg, border: _dc.border, highlight: { background: _dc.bg, border: '#fff' } }, font: { size: ns.fontSize, color: _dc.font }, borderWidth: 1 };
   }
   return { shape: 'dot', size: ns.size, color: { background: '#6b7280', border: '#4b5563' }, font: { size: ns.fontSize, color: '#9ca3af' } };
 }
@@ -512,8 +515,8 @@ function edgeStyle(edge) {
   if (label === 'has_main_task') return { width: 2, color: { color: EDGE_GRAY, highlight: '#93c5fd', hover: '#93c5fd' }, dashes: false, arrows: { to: { enabled: true, scaleFactor: 0.6 } }, _highlightColor: '#93c5fd' };
   if (label === 'has_sub_task') return { width: 1, color: { color: EDGE_GRAY, highlight: '#818cf8', hover: '#818cf8' }, dashes: false, arrows: { to: { enabled: true, scaleFactor: 0.4 } }, _highlightColor: '#818cf8' };
   if (label === 'has_document') return { width: 1, color: { color: EDGE_GRAY, highlight: '#60a5fa', hover: '#60a5fa' }, dashes: [5, 5], arrows: { to: { enabled: true, scaleFactor: 0.4 } }, _highlightColor: '#60a5fa' };
-  if (label === 'has_module') return { width: 1.5, color: { color: EDGE_GRAY, highlight: '#34d399', hover: '#34d399' }, dashes: [3, 3], arrows: { to: { enabled: true, scaleFactor: 0.5 } }, _highlightColor: '#34d399' };
-  if (label === 'module_has_task') return { width: 1.5, color: { color: EDGE_GRAY, highlight: '#34d399', hover: '#34d399' }, dashes: [2, 4], arrows: { to: { enabled: true, scaleFactor: 0.5 } }, _highlightColor: '#34d399' };
+  if (label === 'has_module') return { width: 1.5, color: { color: EDGE_GRAY, highlight: '#ff8533', hover: '#ff8533' }, dashes: [3, 3], arrows: { to: { enabled: true, scaleFactor: 0.5 } }, _highlightColor: '#ff8533' };
+  if (label === 'module_has_task') return { width: 1.5, color: { color: EDGE_GRAY, highlight: '#ff8533', hover: '#ff8533' }, dashes: [2, 4], arrows: { to: { enabled: true, scaleFactor: 0.5 } }, _highlightColor: '#ff8533' };
   if (label === 'task_has_doc') return { width: 1.5, color: { color: EDGE_GRAY, highlight: '#f59e0b', hover: '#f59e0b' }, dashes: [4, 3], arrows: { to: { enabled: true, scaleFactor: 0.5 } }, _highlightColor: '#f59e0b' };
   if (label === 'doc_has_child') return { width: 1.5, color: { color: EDGE_GRAY, highlight: '#c084fc', hover: '#c084fc' }, dashes: [6, 3], arrows: { to: { enabled: true, scaleFactor: 0.5 } }, _highlightColor: '#c084fc' };
   return { width: 1, color: { color: EDGE_GRAY, highlight: '#9ca3af', hover: '#9ca3af' }, dashes: false, _highlightColor: '#9ca3af' };

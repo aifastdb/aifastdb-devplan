@@ -694,11 +694,13 @@ RenderPipeline.prototype._drawStatusPie = function(ctx, cluster) {
   var breakdown = cluster.statusBreakdown;
   if (!breakdown) return;
 
+  // 从统一配置读取状态颜色
+  var _uniSC = (typeof getUnifiedNodeStyle === 'function') ? getUnifiedNodeStyle().statusGeneric : null;
   var STATUS_COLORS = {
-    completed: '#059669',
-    in_progress: '#7c3aed',
-    pending: '#4b5563',
-    cancelled: '#92400e',
+    completed: _uniSC ? _uniSC.completed.bg : '#059669',
+    in_progress: _uniSC ? _uniSC.in_progress.bg : '#7c3aed',
+    pending: _uniSC ? _uniSC.pending.bg : '#4b5563',
+    cancelled: _uniSC ? _uniSC.cancelled.bg : '#92400e',
   };
 
   var total = cluster.count;

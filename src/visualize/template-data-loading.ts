@@ -357,7 +357,7 @@ function enterOverviewMode() {
     // Build super-nodes: one per entity type group
     var groups = data.groups;
     var typeNames = { 'devplan-project': '项目', 'devplan-module': '模块', 'devplan-main-task': '主任务', 'devplan-sub-task': '子任务', 'devplan-document': '文档' };
-    var typeColors = { 'devplan-project': '#f59e0b', 'devplan-module': '#059669', 'devplan-main-task': '#3b82f6', 'devplan-sub-task': '#8b5cf6', 'devplan-document': '#2563eb' };
+    var typeColors = { 'devplan-project': '#f59e0b', 'devplan-module': '#ff6600', 'devplan-main-task': '#047857', 'devplan-sub-task': '#e8956a', 'devplan-document': '#2563eb' };
     var typeShapes = { 'devplan-project': 'star', 'devplan-module': 'diamond', 'devplan-main-task': 'dot', 'devplan-sub-task': 'dot', 'devplan-document': 'box' };
 
     var overviewNodes = [];

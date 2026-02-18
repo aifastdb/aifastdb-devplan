@@ -15,13 +15,19 @@ export function getStylesScript(): string {
 // ============================================================================
 
 function StyleManager() {
-  // Status colors (same as original vis-network styles)
-  this.STATUS_COLORS = {
+  // 从统一配置加载颜色 (如果 getUnifiedNodeStyle 可用)
+  var _uni = (typeof getUnifiedNodeStyle === 'function') ? getUnifiedNodeStyle() : null;
+
+  // Status colors
+  this.STATUS_COLORS = _uni ? _uni.statusGeneric : {
     completed:   { bg: '#059669', border: '#047857', font: '#d1fae5' },
     in_progress: { bg: '#7c3aed', border: '#6d28d9', font: '#ddd6fe' },
     pending:     { bg: '#4b5563', border: '#374151', font: '#d1d5db' },
     cancelled:   { bg: '#92400e', border: '#78350f', font: '#fde68a' },
   };
+
+  // 统一样式缓存 (供 getNodeStyle 使用)
+  this._uniStyle = _uni;
 
   // Node sizing rules by type
   this.NODE_SIZE_RULES = {
@@ -41,10 +47,14 @@ function StyleManager() {
     'document': 'box',
   };
 
-  // Node type colors (for non-status-based types)
-  this.NODE_COLORS = {
+  // Node type colors (for non-status-based types) — 从统一配置读取
+  this.NODE_COLORS = _uni ? {
+    'project': _uni.project,
+    'module':  _uni.module,
+    'document': _uni.document,
+  } : {
     'project': { bg: '#f59e0b', border: '#d97706', font: '#fff' },
-    'module':  { bg: '#059669', border: '#047857', font: '#d1fae5' },
+    'module':  { bg: '#ff6600', border: '#cc5200', font: '#fff3e0' },
     'document': { bg: '#2563eb', border: '#1d4ed8', font: '#dbeafe' },
   };
 
@@ -53,7 +63,7 @@ function StyleManager() {
     'has_main_task':  { width: 2, color: '#4b5563', highlightColor: '#93c5fd', dashes: null, arrows: true },
     'has_sub_task':   { width: 1, color: '#4b5563', highlightColor: '#818cf8', dashes: null, arrows: true },
     'has_document':   { width: 1, color: '#4b5563', highlightColor: '#60a5fa', dashes: [5, 5], arrows: true },
-    'module_has_task':{ width: 1.5, color: '#4b5563', highlightColor: '#34d399', dashes: [2, 4], arrows: true },
+    'module_has_task':{ width: 1.5, color: '#4b5563', highlightColor: '#ff8533', dashes: [2, 4], arrows: true },
     'task_has_doc':   { width: 1.5, color: '#4b5563', highlightColor: '#f59e0b', dashes: [4, 3], arrows: true },
     'doc_has_child':  { width: 1.5, color: '#4b5563', highlightColor: '#c084fc', dashes: [6, 3], arrows: true },
   };
@@ -87,13 +97,18 @@ StyleManager.prototype.getNodeStyle = function(node) {
   var ns = this._calcNodeSize(type, degree);
   var shape = this.NODE_SHAPES[type] || 'circle';
 
-  // Determine colors
+  // Determine colors — 从统一配置读取
   var colors;
   if (type === 'project' || type === 'module' || type === 'document') {
     colors = this.NODE_COLORS[type] || this.STATUS_COLORS.pending;
+  } else if (type === 'main-task') {
+    // 主任务: 从统一配置读取状态颜色
+    var _mt = this._uniStyle ? this._uniStyle.mainTask : null;
+    colors = (_mt && _mt[status]) || (_mt && _mt.pending) || this.STATUS_COLORS[status] || this.STATUS_COLORS.pending;
   } else {
-    // main-task and sub-task use status colors
-    colors = this.STATUS_COLORS[status] || this.STATUS_COLORS.pending;
+    // 子任务: 从统一配置读取状态颜色 (completed=亮绿色)
+    var _st = this._uniStyle ? this._uniStyle.subTask : null;
+    colors = (_st && _st[status]) || (_st && _st.pending) || this.STATUS_COLORS[status] || this.STATUS_COLORS.pending;
   }
 
   return {

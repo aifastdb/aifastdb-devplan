@@ -98,7 +98,7 @@ export function getStyles(): string {
     .panel-resize-handle:hover::after, .panel-resize-handle.active::after { opacity: 1; background: #6366f1; }
     .panel-header { padding: 12px 16px; display: flex; align-items: center; justify-content: space-between; flex-shrink: 0; cursor: default; user-select: none; }
     .panel-header.project { background: linear-gradient(135deg, #d97706, #f59e0b); }
-    .panel-header.module { background: linear-gradient(135deg, #059669, #10b981); }
+    .panel-header.module { background: linear-gradient(135deg, #cc5200, #ff6600); }
     .panel-header.main-task { background: linear-gradient(135deg, #4f46e5, #6366f1); }
     .panel-header.sub-task { background: linear-gradient(135deg, #7c3aed, #8b5cf6); }
     .panel-header.document { background: linear-gradient(135deg, #1d4ed8, #3b82f6); }
@@ -159,9 +159,9 @@ export function getStyles(): string {
     .legend-item { display: flex; align-items: center; gap: 6px; }
     .legend-icon { width: 12px; height: 12px; }
     .legend-icon.star { background: #f59e0b; clip-path: polygon(50% 0%,61% 35%,98% 35%,68% 57%,79% 91%,50% 70%,21% 91%,32% 57%,2% 35%,39% 35%); }
-    .legend-icon.diamond { background: #10b981; clip-path: polygon(50% 0%,100% 50%,50% 100%,0% 50%); }
-    .legend-icon.circle { background: #6366f1; border-radius: 50%; }
-    .legend-icon.dot { background: #8b5cf6; border-radius: 50%; width: 8px; height: 8px; }
+    .legend-icon.diamond { background: #ff6600; clip-path: polygon(50% 0%,100% 50%,50% 100%,0% 50%); }
+    .legend-icon.circle { background: #22c55e; border-radius: 50%; }
+    .legend-icon.dot { background: #047857; border-radius: 50%; width: 8px; height: 8px; }
     .legend-icon.square { background: #3b82f6; border-radius: 2px; width: 10px; height: 10px; }
     .legend-line { width: 24px; height: 2px; }
     .legend-line.solid { background: #6b7280; }

@@ -6,16 +6,18 @@
 
 export function getGraph3DScript(): string {
   return `
-// ========== 3D Force Graph Rendering ==========
-// 从自定义设置中加载颜色和大小 (用户可在项目设置页修改)
+// ========== 3D Force Graph Rendering (统一颜色配置) ==========
+// 从统一节点颜色配置加载 (适用于所有引擎)
+var _3dUniStyle = getUnifiedNodeStyle();
+var _3dNodeColors = getNodeColors();
 function load3DColorsFromSettings() {
-  var s = get3DSettings();
+  var nc = getNodeColors();
   return {
-    'project':   s.colorProject,
-    'module':    s.colorModule,
-    'main-task': s.colorMainTask,
-    'sub-task':  s.colorSubTask,
-    'document':  s.colorDocument
+    'project':   nc.colorProject,
+    'module':    nc.colorModule,
+    'main-task': nc.colorMainTask,
+    'sub-task':  nc.colorSubTask,
+    'document':  nc.colorDocument
   };
 }
 function load3DSizesFromSettings() {
@@ -30,21 +32,31 @@ function load3DSizesFromSettings() {
 }
 var NODE_3D_COLORS = load3DColorsFromSettings();
 var NODE_3D_SIZES = load3DSizesFromSettings();
-// 状态 → 颜色覆盖 (主任务/子任务)
-var STATUS_3D_COLORS = {
-  'completed':   '#22c55e',
-  'in_progress': '#f59e0b',
-  'pending':     null,  // 使用默认类型色
-  'cancelled':   '#6b7280'
+// 主任务状态颜色 (从统一配置)
+var MAIN_TASK_STATUS_COLORS = {
+  'pending':     _3dUniStyle.mainTask.pending.bg,
+  'completed':   _3dUniStyle.mainTask.completed.bg,
+  'in_progress': _3dUniStyle.mainTask.in_progress.bg,
+  'cancelled':   _3dUniStyle.mainTask.cancelled.bg
+};
+// 子任务状态颜色 (从统一配置, completed=亮绿色)
+var SUB_TASK_STATUS_COLORS = {
+  'pending':     _3dUniStyle.subTask.pending.bg,
+  'completed':   _3dUniStyle.subTask.completed.bg,
+  'in_progress': _3dUniStyle.subTask.in_progress.bg,
+  'cancelled':   _3dUniStyle.subTask.cancelled.bg
 };
 
 function get3DNodeColor(node) {
   var t = node._type || 'sub-task';
-  // 任务类型根据状态着色
-  if (t === 'main-task' || t === 'sub-task') {
-    var status = (node._props || {}).status || 'pending';
-    var sc = STATUS_3D_COLORS[status];
-    if (sc) return sc;
+  var status = (node._props || {}).status || 'pending';
+  // 主任务: 深绿色系
+  if (t === 'main-task') {
+    return MAIN_TASK_STATUS_COLORS[status] || MAIN_TASK_STATUS_COLORS.pending;
+  }
+  // 子任务: pending=暖肤色, completed=亮绿色
+  if (t === 'sub-task') {
+    return SUB_TASK_STATUS_COLORS[status] || SUB_TASK_STATUS_COLORS.pending;
   }
   return NODE_3D_COLORS[t] || '#6b7280';
 }
@@ -54,8 +66,8 @@ function get3DLinkColor(link) {
   if (label === 'has_main_task') return 'rgba(147,197,253,0.18)';
   if (label === 'has_sub_task')  return 'rgba(129,140,248,0.12)';
   if (label === 'has_document')  return 'rgba(96,165,250,0.10)';
-  if (label === 'has_module')    return 'rgba(52,211,153,0.18)';
-  if (label === 'module_has_task') return 'rgba(52,211,153,0.15)';
+  if (label === 'has_module')    return 'rgba(255,102,0,0.18)';
+  if (label === 'module_has_task') return 'rgba(255,102,0,0.15)';
   if (label === 'doc_has_child') return 'rgba(192,132,252,0.12)';
   return 'rgba(75,85,99,0.10)';
 }
@@ -121,8 +133,8 @@ function render3DGraph(container, visibleNodes, visibleEdges) {
     'has_main_task':   '#93c5fd',
     'has_sub_task':    '#818cf8',
     'has_document':    '#60a5fa',
-    'has_module':      '#34d399',
-    'module_has_task': '#34d399',
+    'has_module':      '#ff8533',
+    'module_has_task': '#ff8533',
     'task_has_doc':    '#f59e0b',
     'doc_has_child':   '#c084fc'
   };
@@ -211,11 +223,7 @@ function render3DGraph(container, visibleNodes, visibleEdges) {
         + '</div>';
     })
     .nodeColor(function(n) {
-      // 有选中节点时: 选中节点+邻居正常颜色，其他节点变暗
-      if (_3dSelectedNodeId) {
-        if (_3dHighlightNodes.has(n.id)) return n._color;
-        return 'rgba(60,60,80,0.4)'; // 未关联节点变暗
-      }
+      // 所有节点始终保持原色（不变暗），仅通过连线变化体现选中关系
       return n._color;
     })
     .nodeVal(function(n) { return n._val; })
@@ -227,8 +235,8 @@ function render3DGraph(container, visibleNodes, visibleEdges) {
 
       var t = n._type || 'sub-task';
       var color = n._color;
-      var isDimmed = _3dSelectedNodeId && !_3dHighlightNodes.has(n.id);
-      if (isDimmed) color = 'rgba(60,60,80,0.4)';
+      // 节点始终保持原色（不变暗），仅通过连线变化体现选中关系
+      var isHighlighted = _3dSelectedNodeId && _3dHighlightNodes.has(n.id);
 
       // ── 创建容器 Group ──
       var group = new THREE.Group();
@@ -236,21 +244,21 @@ function render3DGraph(container, visibleNodes, visibleEdges) {
       // ── 节点几何体 (核心实体) ──
       var coreMesh;
       if (t === 'module') {
-        var size = 7;
+        var size = 10;
         var geo = new THREE.BoxGeometry(size, size, size);
         var mat = new THREE.MeshLambertMaterial({ color: color, transparent: true, opacity: _s3d.nodeOpacity, emissive: color, emissiveIntensity: 0.3 });
         coreMesh = new THREE.Mesh(geo, mat);
       } else if (t === 'project') {
-        var geo = new THREE.OctahedronGeometry(10);
+        var geo = new THREE.OctahedronGeometry(14);
         var mat = new THREE.MeshLambertMaterial({ color: color, transparent: true, opacity: _s3d.nodeOpacity, emissive: color, emissiveIntensity: 0.4 });
         coreMesh = new THREE.Mesh(geo, mat);
       } else if (t === 'document') {
-        var geo = new THREE.BoxGeometry(5, 6, 1.5);
+        var geo = new THREE.BoxGeometry(7, 8.5, 2);
         var mat = new THREE.MeshLambertMaterial({ color: color, transparent: true, opacity: _s3d.nodeOpacity * 0.92, emissive: color, emissiveIntensity: 0.25 });
         coreMesh = new THREE.Mesh(geo, mat);
       } else {
         // 主任务 / 子任务 → 球体
-        var radius = t === 'main-task' ? 3.5 : 1.8;
+        var radius = t === 'main-task' ? 5.5 : 3.5;
         var geo = new THREE.SphereGeometry(radius, 16, 12);
         var mat = new THREE.MeshLambertMaterial({ color: color, transparent: true, opacity: _s3d.nodeOpacity, emissive: color, emissiveIntensity: 0.3 });
         coreMesh = new THREE.Mesh(geo, mat);
@@ -258,8 +266,8 @@ function render3DGraph(container, visibleNodes, visibleEdges) {
       group.add(coreMesh);
 
       // ── 发光光晕 Sprite (Glow Aura) ──
-      if (!isDimmed) {
-        var glowSize = { 'project': 50, 'module': 30, 'main-task': 18, 'sub-task': 10, 'document': 16 }[t] || 12;
+      if (true) {
+        var glowSize = { 'project': 60, 'module': 40, 'main-task': 26, 'sub-task': 18, 'document': 22 }[t] || 16;
 
         // 获取或创建缓存的 glow texture
         var cacheKey = color + '_' + glowSize;
@@ -356,13 +364,9 @@ function render3DGraph(container, visibleNodes, visibleEdges) {
       closePanel();
     });
 
-  /** 刷新所有视觉样式（节点颜色/形状/光晕、边颜色/宽度/粒子） */
+  /** 刷新连线视觉样式（节点不变，仅刷新边的颜色/宽度/粒子） */
   function refresh3DStyles() {
-    // 清空 glow 纹理缓存，以便重新生成（高亮/暗化需要不同纹理）
-    _glowTextureCache = {};
-    graph3d.nodeColor(graph3d.nodeColor())
-           .nodeThreeObject(graph3d.nodeThreeObject()) // 刷新自定义形状 + 光晕
-           .linkColor(graph3d.linkColor())
+    graph3d.linkColor(graph3d.linkColor())
            .linkWidth(graph3d.linkWidth())
            .linkOpacity(graph3d.linkOpacity())
            .linkDirectionalParticles(graph3d.linkDirectionalParticles())
@@ -397,41 +401,305 @@ function render3DGraph(container, visibleNodes, visibleEdges) {
     }
   } catch(e) { console.warn('Scene lighting setup error:', e); }
 
-  // 设置力导向参数 (来自自定义设置)
-  var _repulsion = _s3d.repulsion; // 基准排斥力 (负数)
-  graph3d.d3Force('charge').strength(function(n) {
-    // 大节点排斥力按比例放大
-    var t = n._type || 'sub-task';
-    if (t === 'project') return _repulsion * 5;      // 项目: 5x
-    if (t === 'module') return _repulsion * 2;        // 模块: 2x
-    if (t === 'main-task') return _repulsion * 1;     // 主任务: 1x (基准)
-    return _repulsion * 0.35;                         // 子任务/文档: 0.35x
-  });
-  var _linkDist = _s3d.linkDistance; // 基准连接距离
-  graph3d.d3Force('link').distance(function(l) {
-    var label = l._label || '';
-    if (label === 'has_main_task') return _linkDist * 1.25;
-    if (label === 'has_module') return _linkDist * 1.12;
-    if (label === 'has_sub_task') return _linkDist * 0.625;
-    if (label === 'module_has_task') return _linkDist * 1.0;
-    if (label === 'has_document') return _linkDist * 0.875;
-    return _linkDist * 0.75;
-  }).strength(function(l) {
-    var label = l._label || '';
-    if (label === 'has_main_task' || label === 'has_module' || label === 'module_has_task') return 0.7;
-    return 0.5;
-  });
+  // ========== 布局模式分支 ==========
+  var _isOrbital = (_s3d.layoutMode === 'orbital');
 
-  // ── 中心引力 (来自自定义设置) ──
-  try {
-    var fg = graph3d.d3Force;
-    if (fg('x')) fg('x').strength(_s3d.gravity);
-    if (fg('y')) fg('y').strength(_s3d.gravity);
-    if (fg('z')) fg('z').strength(_s3d.gravity);
-  } catch(e) { /* 可能不支持，忽略 */ }
+  if (_isOrbital) {
+    // ╔══════════════════════════════════════════════════════╗
+    // ║  🪐 行星轨道布局 (Solar System Orbital Layout)      ║
+    // ║  节点按类型排列在固定间距的同心轨道上                ║
+    // ╚══════════════════════════════════════════════════════╝
+    var _orbitSpacing = _s3d.orbitSpacing;     // 轨道间距
+    var _orbitStrength = _s3d.orbitStrength;   // 轨道引力
+    var _orbitFlatten = _s3d.orbitFlatten;     // Z 轴压平力度
+
+    // 节点类型 → 轨道编号 (类似: 太阳→水星→金星→地球→火星)
+    var ORBIT_MAP = {
+      'project':   0,   // ☀ 太阳 — 中心
+      'module':    1,   // ☿ 水星 — 第 1 轨道
+      'main-task': 2,   // ♀ 金星 — 第 2 轨道
+      'sub-task':  3,   // ♂ 火星 — 第 3 轨道
+      'document':  4    // ♃ 木星 — 第 4 轨道
+    };
+    var _maxOrbit = 4;
+
+    // 为每个节点计算目标轨道半径
+    for (var i = 0; i < nodes3d.length; i++) {
+      var orbitIdx = ORBIT_MAP[nodes3d[i]._type] || 3;
+      nodes3d[i]._orbitRadius = orbitIdx * _orbitSpacing;
+      nodes3d[i]._orbitIndex = orbitIdx;
+    }
+
+    // ── 减弱排斥力 (轨道模式下不需要强排斥) ──
+    graph3d.d3Force('charge').strength(function(n) {
+      var t = n._type || 'sub-task';
+      if (t === 'project') return -5;   // 几乎不排斥
+      if (t === 'module') return -15;
+      return -8;
+    });
+
+    // ── 连接距离使用轨道间距 ──
+    graph3d.d3Force('link').distance(function(l) {
+      return _orbitSpacing * 0.8;
+    }).strength(0.3); // 较弱的连接力，让轨道力主导
+
+    // ── 关闭默认中心引力 (由轨道力取代) ──
+    try {
+      var fg = graph3d.d3Force;
+      if (fg('x')) fg('x').strength(0);
+      if (fg('y')) fg('y').strength(0);
+      if (fg('z')) fg('z').strength(0);
+    } catch(e) {}
+
+    // ── 自定义行星轨道力 ──
+    // 将节点拉向其目标轨道半径，同时压平 Z 轴形成太阳系圆盘
+    var orbitalForce = (function() {
+      var _nodes;
+      function force(alpha) {
+        for (var i = 0; i < _nodes.length; i++) {
+          var n = _nodes[i];
+          var targetR = n._orbitRadius || 0;
+          var dx = n.x || 0;
+          var dy = n.y || 0;
+          var dz = n.z || 0;
+
+          if (targetR === 0) {
+            // 项目节点 (太阳): 强力拉向原点
+            n.vx = (n.vx || 0) - dx * 0.1 * alpha;
+            n.vy = (n.vy || 0) - dy * 0.1 * alpha;
+            n.vz = (n.vz || 0) - dz * 0.1 * alpha;
+            continue;
+          }
+
+          // XY 平面径向距离
+          var xyDist = Math.sqrt(dx * dx + dy * dy);
+          if (xyDist > 0.001) {
+            // 径向力: 将节点拉向目标轨道半径
+            var radialK = (targetR - xyDist) / xyDist * _orbitStrength * alpha;
+            n.vx = (n.vx || 0) + dx * radialK;
+            n.vy = (n.vy || 0) + dy * radialK;
+          } else {
+            // 节点几乎在原点: 给一个随机方向的推力
+            var angle = Math.random() * Math.PI * 2;
+            n.vx = (n.vx || 0) + Math.cos(angle) * _orbitStrength * alpha * targetR * 0.1;
+            n.vy = (n.vy || 0) + Math.sin(angle) * _orbitStrength * alpha * targetR * 0.1;
+          }
+
+          // Z 轴压平力: 越大越扁 (0=球壳, 1=完全平面)
+          n.vz = (n.vz || 0) - dz * _orbitFlatten * _orbitStrength * alpha * 2;
+        }
+      }
+      force.initialize = function(nodes) { _nodes = nodes; };
+      return force;
+    })();
+
+    graph3d.d3Force('orbital', orbitalForce);
+
+    log('🪐 行星轨道布局: 间距=' + _orbitSpacing + ', 强度=' + _orbitStrength + ', 压平=' + _orbitFlatten, true);
+
+  } else {
+    // ╔══════════════════════════════════════════════════════╗
+    // ║  ⚡ 力导向布局 (默认 Force-directed)                ║
+    // ╚══════════════════════════════════════════════════════╝
+    var _repulsion = _s3d.repulsion; // 基准排斥力 (负数)
+    graph3d.d3Force('charge').strength(function(n) {
+      // 大节点排斥力按比例放大
+      var t = n._type || 'sub-task';
+      if (t === 'project') return _repulsion * 5;      // 项目: 5x
+      if (t === 'module') return _repulsion * 2;        // 模块: 2x
+      if (t === 'main-task') return _repulsion * 1;     // 主任务: 1x (基准)
+      return _repulsion * 0.35;                         // 子任务/文档: 0.35x
+    });
+    var _linkDist = _s3d.linkDistance; // 基准连接距离
+    graph3d.d3Force('link').distance(function(l) {
+      var label = l._label || '';
+      if (label === 'has_main_task') return _linkDist * 1.25;
+      if (label === 'has_module') return _linkDist * 1.12;
+      if (label === 'has_sub_task') return _linkDist * 0.625;
+      if (label === 'module_has_task') return _linkDist * 1.0;
+      if (label === 'has_document') return _linkDist * 0.875;
+      return _linkDist * 0.75;
+    }).strength(function(l) {
+      var label = l._label || '';
+      if (label === 'has_main_task' || label === 'has_module' || label === 'module_has_task') return 0.7;
+      return 0.5;
+    });
+
+    // ── 中心引力 (来自自定义设置) ──
+    try {
+      var fg = graph3d.d3Force;
+      if (fg('x')) fg('x').strength(_s3d.gravity);
+      if (fg('y')) fg('y').strength(_s3d.gravity);
+      if (fg('z')) fg('z').strength(_s3d.gravity);
+    } catch(e) { /* 可能不支持，忽略 */ }
+
+    // ── 🌍 类型分层力 (Type Separation) ──
+    // 不同类型节点按固定间距分布在不同轨道层上，类似天体间距
+    // project(中心) → module(层1) → document(层2) → main-task(层3) → sub-task(层4)
+    if (_s3d.typeSeparation && _s3d.typeSepStrength > 0) {
+      var _typeSepSpacing = _s3d.typeSepSpacing;
+      var _typeSepK = _s3d.typeSepStrength;  // 0~1 控制力强度
+
+      // 节点类型 → 轨道层编号
+      var TYPE_BAND = {
+        'project':   0,   // ☀ 中心
+        'module':    1,   // 层 1 — 功能模块 (最近)
+        'document':  2,   // 层 2 — 文档
+        'main-task': 3,   // 层 3 — 主任务
+        'sub-task':  4    // 层 4 — 子任务 (最远)
+      };
+
+      // 为每个节点计算目标轨道半径
+      for (var i = 0; i < nodes3d.length; i++) {
+        var band = TYPE_BAND[nodes3d[i]._type];
+        if (band === undefined) band = 4;
+        nodes3d[i]._targetBand = band;
+        nodes3d[i]._targetRadius = band * _typeSepSpacing;
+      }
+
+      // 开启分层时: 保留较强排斥力让同层节点互相散开（尤其子任务数量多）
+      // 分层力控制径向距离，排斥力控制同层内散布
+      graph3d.d3Force('charge').strength(function(n) {
+        var t = n._type || 'sub-task';
+        if (t === 'project') return _repulsion * 3;      // 项目: 3x
+        if (t === 'module') return _repulsion * 1.5;      // 模块: 1.5x
+        if (t === 'main-task') return _repulsion * 1;     // 主任务: 1x
+        if (t === 'sub-task') return _repulsion * 0.8;    // 子任务: 0.8x (数量多，需要足够散开)
+        return _repulsion * 0.6;                          // 文档: 0.6x
+      });
+
+      // 削弱连接力，避免连线把不同层的节点拽到一起
+      graph3d.d3Force('link').strength(function(l) {
+        var label = l._label || '';
+        if (label === 'has_main_task' || label === 'has_module' || label === 'module_has_task') return 0.15;
+        return 0.1;
+      });
+
+      // 自定义 D3 力: 强径向弹簧，将节点拉向目标轨道半径
+      var typeSepForce = (function() {
+        var _nodes;
+        function force(alpha) {
+          // 找到项目节点（太阳/中心）
+          var cx = 0, cy = 0, cz = 0, projectFound = false;
+          for (var i = 0; i < _nodes.length; i++) {
+            if (_nodes[i]._type === 'project') {
+              cx = _nodes[i].x || 0;
+              cy = _nodes[i].y || 0;
+              cz = _nodes[i].z || 0;
+              projectFound = true;
+              break;
+            }
+          }
+          if (!projectFound) {
+            // 无项目节点: 使用质心
+            for (var i = 0; i < _nodes.length; i++) {
+              cx += (_nodes[i].x || 0);
+              cy += (_nodes[i].y || 0);
+              cz += (_nodes[i].z || 0);
+            }
+            cx /= _nodes.length; cy /= _nodes.length; cz /= _nodes.length;
+          }
+
+          for (var i = 0; i < _nodes.length; i++) {
+            var n = _nodes[i];
+            var targetR = n._targetRadius || 0;
+
+            if (targetR === 0) {
+              // 项目节点: 强力锚定在原点
+              n.vx = (n.vx || 0) - (n.x || 0) * 0.1 * alpha;
+              n.vy = (n.vy || 0) - (n.y || 0) * 0.1 * alpha;
+              n.vz = (n.vz || 0) - (n.z || 0) * 0.1 * alpha;
+              continue;
+            }
+
+            var dx = (n.x || 0) - cx;
+            var dy = (n.y || 0) - cy;
+            var dz = (n.z || 0) - cz;
+            var dist = Math.sqrt(dx * dx + dy * dy + dz * dz);
+
+            if (dist < 0.5) {
+              // 节点太靠近中心: 随机方向推出去
+              var angle = Math.random() * Math.PI * 2;
+              var phi = (Math.random() - 0.5) * Math.PI * 0.3;
+              n.vx = (n.vx || 0) + Math.cos(angle) * Math.cos(phi) * targetR * _typeSepK * alpha * 0.5;
+              n.vy = (n.vy || 0) + Math.sin(angle) * Math.cos(phi) * targetR * _typeSepK * alpha * 0.5;
+              n.vz = (n.vz || 0) + Math.sin(phi) * targetR * _typeSepK * alpha * 0.2;
+              continue;
+            }
+
+            // 径向弹簧力: F = k * (targetR - dist) / dist * direction
+            // 这是一个真正的弹簧——偏差越大推力越大，没有上限截断
+            var diff = targetR - dist;
+            var k = _typeSepK * alpha;
+            var radialAccel = diff * k;
+
+            var invDist = 1 / dist;
+            n.vx = (n.vx || 0) + dx * invDist * radialAccel;
+            n.vy = (n.vy || 0) + dy * invDist * radialAccel;
+            n.vz = (n.vz || 0) + dz * invDist * radialAccel;
+          }
+        }
+        force.initialize = function(nodes) { _nodes = nodes; };
+        return force;
+      })();
+
+      graph3d.d3Force('typeSeparation', typeSepForce);
+      log('🌍 类型分层: 模块@' + _typeSepSpacing + ' 文档@' + (_typeSepSpacing*2) + ' 主任务@' + (_typeSepSpacing*3) + ' 子任务@' + (_typeSepSpacing*4) + ' 强度=' + _typeSepK, true);
+    }
+  }
 
   // 注入数据
   graph3d.graphData({ nodes: nodes3d, links: links3d });
+
+  // ── 🪐 行星轨道: 绘制轨道环线 (Three.js) ──
+  if (_isOrbital && _s3d.showOrbits) {
+    try {
+      var scene = graph3d.scene();
+      if (scene && typeof THREE !== 'undefined') {
+        var orbitColors = [
+          null,          // orbit 0 (project = center, no ring)
+          '#ff6600',     // orbit 1 (module) — 橙色
+          '#2563eb',     // orbit 2 (document) — 蓝色
+          '#047857',     // orbit 3 (main-task) — 深绿
+          '#e8956a'      // orbit 4 (sub-task) — 暖肤色
+        ];
+        var orbitLabels = ['', '模块', '文档', '主任务', '子任务'];
+        for (var oi = 1; oi <= _maxOrbit; oi++) {
+          var radius = oi * _s3d.orbitSpacing;
+          // 使用 THREE.RingGeometry 创建环形 (内径 略小于 外径)
+          var ringGeo = new THREE.RingGeometry(radius - 0.3, radius + 0.3, 128);
+          var ringColor = orbitColors[oi] || '#334466';
+          var ringMat = new THREE.MeshBasicMaterial({
+            color: ringColor,
+            transparent: true,
+            opacity: 0.12,
+            side: THREE.DoubleSide,
+            depthWrite: false
+          });
+          var ringMesh = new THREE.Mesh(ringGeo, ringMat);
+          // 将环放到 XY 平面 (z=0)，不需要旋转因为 RingGeometry 默认在 XY 平面
+          ringMesh.renderOrder = -1; // 渲染在节点之后
+          scene.add(ringMesh);
+
+          // 添加虚线发光效果 (第二层更宽的半透明环)
+          var glowGeo = new THREE.RingGeometry(radius - 1.5, radius + 1.5, 128);
+          var glowMat = new THREE.MeshBasicMaterial({
+            color: ringColor,
+            transparent: true,
+            opacity: 0.04,
+            side: THREE.DoubleSide,
+            depthWrite: false
+          });
+          var glowMesh = new THREE.Mesh(glowGeo, glowMat);
+          glowMesh.renderOrder = -2;
+          scene.add(glowMesh);
+        }
+        log('轨道环线: ' + _maxOrbit + ' 条轨道已绘制', true);
+      }
+    } catch(e) {
+      console.warn('Orbit rings error:', e);
+    }
+  }
 
   // ── 离群节点修正: 力导向稳定后检查并拉回远离的节点 ──
   setTimeout(function() {
