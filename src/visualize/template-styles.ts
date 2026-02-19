@@ -262,6 +262,103 @@ export function getStyles(): string {
     .s3d-reset-btn { margin-top: 8px; padding: 6px 14px; border: 1px solid #374151; border-radius: 6px; background: transparent; color: #9ca3af; font-size: 11px; cursor: pointer; transition: all 0.2s; align-self: flex-start; }
     .s3d-reset-btn:hover { background: #1e293b; color: #e5e7eb; border-color: #4b5563; }
 
+    /* ===== Memory Browser ===== */
+    .memory-page { padding: 24px 32px; overflow-y: auto; background: #111827; flex: 1; display: flex; flex-direction: column; }
+    .memory-header { display: flex; align-items: flex-start; justify-content: space-between; margin-bottom: 20px; }
+    .memory-header-left h2 { font-size: 22px; font-weight: 700; color: #f3f4f6; margin-bottom: 4px; }
+    .memory-header-desc { font-size: 13px; color: #6b7280; }
+    .memory-count { font-size: 13px; color: #9ca3af; background: #1f2937; border: 1px solid #374151; border-radius: 8px; padding: 6px 14px; white-space: nowrap; }
+    .memory-filters { display: flex; gap: 6px; margin-bottom: 16px; flex-wrap: wrap; }
+    .memory-filter-btn { background: #1f2937; border: 1px solid #374151; border-radius: 8px; padding: 6px 14px; color: #9ca3af; font-size: 12px; cursor: pointer; transition: all 0.2s; white-space: nowrap; }
+    .memory-filter-btn:hover { background: #374151; color: #e5e7eb; }
+    .memory-filter-btn.active { background: #312e81; border-color: #6366f1; color: #a5b4fc; }
+    .memory-list { flex: 1; display: flex; flex-direction: column; gap: 10px; overflow-y: auto; }
+    .memory-card { background: #1f2937; border: 1px solid #374151; border-radius: 10px; padding: 16px 20px; transition: all 0.2s; position: relative; overflow: hidden; }
+    .memory-card:hover { border-color: #4b5563; background: #1e293b; }
+    .memory-card::before { content: ''; position: absolute; top: 0; left: 0; bottom: 0; width: 3px; }
+    .memory-card.type-decision::before { background: linear-gradient(180deg, #6366f1, #818cf8); }
+    .memory-card.type-bugfix::before { background: linear-gradient(180deg, #ef4444, #f87171); }
+    .memory-card.type-pattern::before { background: linear-gradient(180deg, #06b6d4, #22d3ee); }
+    .memory-card.type-insight::before { background: linear-gradient(180deg, #f59e0b, #fbbf24); }
+    .memory-card.type-preference::before { background: linear-gradient(180deg, #8b5cf6, #a78bfa); }
+    .memory-card.type-summary::before { background: linear-gradient(180deg, #10b981, #34d399); }
+    .memory-card-header { display: flex; align-items: center; gap: 8px; margin-bottom: 8px; }
+    .memory-type-badge { font-size: 10px; font-weight: 600; padding: 2px 8px; border-radius: 4px; text-transform: uppercase; letter-spacing: 0.5px; }
+    .memory-type-badge.decision { background: #312e81; color: #a5b4fc; }
+    .memory-type-badge.bugfix { background: #7f1d1d; color: #fca5a5; }
+    .memory-type-badge.pattern { background: #164e63; color: #67e8f9; }
+    .memory-type-badge.insight { background: #78350f; color: #fde68a; }
+    .memory-type-badge.preference { background: #4c1d95; color: #c4b5fd; }
+    .memory-type-badge.summary { background: #064e3b; color: #6ee7b7; }
+    .memory-importance { display: flex; align-items: center; gap: 3px; font-size: 10px; color: #6b7280; margin-left: auto; }
+    .memory-importance-bar { width: 40px; height: 4px; background: #374151; border-radius: 2px; overflow: hidden; }
+    .memory-importance-fill { height: 100%; border-radius: 2px; background: linear-gradient(90deg, #6366f1, #a78bfa); }
+    .memory-card-content { font-size: 13px; color: #d1d5db; line-height: 1.6; word-break: break-word; }
+    .memory-card-footer { display: flex; align-items: center; gap: 12px; margin-top: 10px; flex-wrap: wrap; }
+    .memory-tag { font-size: 10px; padding: 2px 8px; border-radius: 4px; background: #1e293b; color: #64748b; border: 1px solid #334155; }
+    .memory-meta { font-size: 10px; color: #4b5563; margin-left: auto; display: flex; gap: 12px; }
+    .memory-empty { text-align: center; padding: 60px; color: #6b7280; font-size: 13px; }
+    .memory-empty-icon { font-size: 48px; margin-bottom: 12px; opacity: 0.5; }
+
+    /* Memory Generate Button Group */
+    .memory-generate-group { display: inline-flex; position: relative; margin-right: 10px; }
+    .memory-generate-btn { background: linear-gradient(135deg, #6366f1, #8b5cf6); color: #fff; border: none; border-radius: 8px 0 0 8px; padding: 7px 16px; font-size: 12px; font-weight: 600; cursor: pointer; transition: all 0.2s; white-space: nowrap; }
+    .memory-generate-btn:hover { background: linear-gradient(135deg, #4f46e5, #7c3aed); box-shadow: 0 0 16px rgba(99, 102, 241, 0.4); }
+    .memory-generate-dropdown-btn { background: #4f46e5; color: #c7d2fe; border: none; border-left: 1px solid rgba(255,255,255,0.15); border-radius: 0 8px 8px 0; padding: 7px 8px; font-size: 10px; cursor: pointer; transition: all 0.2s; }
+    .memory-generate-dropdown-btn:hover { background: #4338ca; }
+    .memory-generate-dropdown { display: none; position: absolute; top: 100%; right: 0; margin-top: 4px; min-width: 220px; background: #1f2937; border: 1px solid #374151; border-radius: 10px; box-shadow: 0 12px 40px rgba(0,0,0,0.5); z-index: 200; overflow: hidden; }
+    .memory-generate-dropdown.show { display: block; }
+    .memory-generate-dropdown-item { padding: 10px 16px; font-size: 12px; color: #d1d5db; cursor: pointer; display: flex; align-items: center; gap: 8px; transition: background 0.15s; }
+    .memory-generate-dropdown-item:hover { background: #374151; }
+    .memory-generate-dropdown-item .mg-icon { font-size: 14px; width: 18px; text-align: center; }
+    .memory-generate-dropdown-sep { height: 1px; background: #374151; margin: 2px 0; }
+
+    /* Memory Generate Overlay (Candidate Preview Modal) */
+    .mem-gen-overlay { position: fixed; inset: 0; background: rgba(0,0,0,0.65); backdrop-filter: blur(4px); z-index: 1000; display: flex; align-items: center; justify-content: center; }
+    .mem-gen-modal { background: #111827; border: 1px solid #374151; border-radius: 16px; width: 90%; max-width: 900px; max-height: 85vh; display: flex; flex-direction: column; box-shadow: 0 24px 80px rgba(0,0,0,0.6); }
+    .mem-gen-modal-header { display: flex; align-items: center; gap: 12px; padding: 20px 24px 12px; border-bottom: 1px solid #1f2937; }
+    .mem-gen-modal-header h3 { font-size: 18px; font-weight: 700; color: #f3f4f6; margin: 0; }
+    .mem-gen-modal-stats { font-size: 11px; color: #6b7280; margin-left: auto; }
+    .mem-gen-close-btn { background: none; border: none; color: #6b7280; font-size: 18px; cursor: pointer; padding: 4px 8px; border-radius: 6px; transition: all 0.2s; margin-left: 8px; }
+    .mem-gen-close-btn:hover { background: #1f2937; color: #f87171; }
+    .mem-gen-modal-actions { display: flex; gap: 8px; padding: 12px 24px; border-bottom: 1px solid #1f2937; flex-wrap: wrap; }
+    .mem-gen-action-btn { background: #1f2937; border: 1px solid #374151; border-radius: 8px; padding: 6px 14px; color: #9ca3af; font-size: 11px; cursor: pointer; transition: all 0.2s; white-space: nowrap; }
+    .mem-gen-action-btn:hover { background: #374151; color: #e5e7eb; }
+    .mem-gen-action-btn.primary { background: linear-gradient(135deg, #059669, #10b981); border-color: transparent; color: #fff; font-weight: 600; }
+    .mem-gen-action-btn.primary:hover { background: linear-gradient(135deg, #047857, #059669); box-shadow: 0 0 12px rgba(16, 185, 129, 0.3); }
+    .mem-gen-action-btn.primary:disabled { opacity: 0.5; cursor: default; box-shadow: none; }
+    .mem-gen-sep { width: 1px; height: 20px; background: #374151; margin: 0 4px; }
+    .mem-gen-limit-label { display: flex; align-items: center; gap: 4px; color: #9ca3af; font-size: 11px; white-space: nowrap; }
+    .mem-gen-limit-label input[type="checkbox"] { accent-color: #10b981; width: 14px; height: 14px; cursor: pointer; }
+    .mem-gen-limit-select { background: #1f2937; border: 1px solid #374151; border-radius: 6px; color: #e5e7eb; font-size: 11px; padding: 3px 6px; cursor: pointer; outline: none; }
+    .mem-gen-limit-select:focus { border-color: #6366f1; }
+    .mem-gen-candidate-list { flex: 1; overflow-y: auto; padding: 16px 24px; display: flex; flex-direction: column; gap: 8px; }
+
+    /* Candidate Card */
+    .mem-gen-candidate { background: #1f2937; border: 1px solid #374151; border-radius: 10px; padding: 14px 16px; display: flex; gap: 12px; transition: all 0.2s; cursor: pointer; }
+    .mem-gen-candidate:hover { border-color: #4b5563; background: #1e293b; }
+    .mem-gen-candidate.selected { border-color: #6366f1; background: #1e1b4b; }
+    .mem-gen-candidate.has-memory { opacity: 0.5; }
+    .mem-gen-candidate.has-memory.selected { opacity: 1; }
+    .mem-gen-candidate-check { flex-shrink: 0; width: 20px; height: 20px; border-radius: 5px; border: 2px solid #4b5563; display: flex; align-items: center; justify-content: center; font-size: 12px; transition: all 0.2s; margin-top: 2px; }
+    .mem-gen-candidate.selected .mem-gen-candidate-check { background: #6366f1; border-color: #6366f1; color: #fff; }
+    .mem-gen-candidate-body { flex: 1; min-width: 0; }
+    .mem-gen-candidate-title { font-size: 13px; font-weight: 600; color: #e5e7eb; margin-bottom: 4px; display: flex; align-items: center; gap: 6px; }
+    .mem-gen-candidate-source { font-size: 10px; padding: 1px 6px; border-radius: 3px; }
+    .mem-gen-candidate-source.task { background: #064e3b; color: #6ee7b7; }
+    .mem-gen-candidate-source.document { background: #1e3a5f; color: #93c5fd; }
+    .mem-gen-candidate-preview { font-size: 11px; color: #9ca3af; line-height: 1.5; max-height: 60px; overflow: hidden; word-break: break-word; }
+    .mem-gen-candidate-meta { display: flex; gap: 8px; margin-top: 6px; align-items: center; flex-wrap: wrap; }
+    .mem-gen-candidate-type { font-size: 10px; padding: 1px 6px; border-radius: 3px; }
+    .mem-gen-candidate-type.decision { background: #312e81; color: #a5b4fc; }
+    .mem-gen-candidate-type.bugfix { background: #7f1d1d; color: #fca5a5; }
+    .mem-gen-candidate-type.pattern { background: #164e63; color: #67e8f9; }
+    .mem-gen-candidate-type.insight { background: #78350f; color: #fde68a; }
+    .mem-gen-candidate-type.preference { background: #4c1d95; color: #c4b5fd; }
+    .mem-gen-candidate-type.summary { background: #064e3b; color: #6ee7b7; }
+    .mem-gen-candidate-existing { font-size: 9px; color: #f59e0b; }
+    .mem-gen-candidate-importance { font-size: 10px; color: #6b7280; }
+
     /* Stats Dashboard */
     .stats-page { padding: 24px; overflow-y: auto; background: #111827; flex: 1; }
     .stats-header { margin-bottom: 24px; }

@@ -14,6 +14,7 @@
  * - template-detail-panel.ts — 共享详情面板、Markdown 渲染
  * - template-stats-modal.ts  — 统计弹层、手动刷新
  * - template-pages.ts        — 文档浏览、RAG 聊天、统计仪表盘
+ * - template-md-viewer.ts    — Markdown 预览器（CDN marked.js + highlight.js）
  */
 
 import { getStyles } from './template-styles';
@@ -25,6 +26,7 @@ import { getGraph3DScript } from './template-graph-3d';
 import { getDetailPanelScript } from './template-detail-panel';
 import { getStatsModalScript } from './template-stats-modal';
 import { getPagesScript } from './template-pages';
+import { getMdViewerStyles, getMdViewerScript } from './template-md-viewer';
 
 export function getVisualizationHTML(projectName: string): string {
   return `<!DOCTYPE html>
@@ -35,6 +37,7 @@ export function getVisualizationHTML(projectName: string): string {
   <title>DevPlan - ${projectName}</title>
   <style>
 ${getStyles()}
+${getMdViewerStyles()}
   </style>
 </head>
 ${getHTML(projectName)}
@@ -46,6 +49,7 @@ ${getGraph3DScript()}
 ${getDetailPanelScript()}
 ${getStatsModalScript()}
 ${getPagesScript()}
+${getMdViewerScript()}
 
 // ========== App Start ==========
 function startApp() {
@@ -55,6 +59,8 @@ function startApp() {
     log('vis-network 就绪, 开始加载数据...', true);
   }
   loadData();
+  // 预加载 Markdown 渲染引擎 (marked.js + hljs)，供文档库/详情面板使用
+  if (typeof mdvLoadCDN === 'function') mdvLoadCDN();
 }
 
 

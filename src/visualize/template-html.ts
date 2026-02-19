@@ -3,8 +3,10 @@
  *
  * 从 template.ts 拆分出的全部 HTML 结构定义。
  * 包含: 侧边栏、图谱容器、详情面板、文档浏览、RAG 聊天、
- * 统计仪表盘、项目设置、统计弹层等 HTML 结构。
+ * 统计仪表盘、MD 预览器、项目设置、统计弹层等 HTML 结构。
  */
+
+import { getMdViewerPageHTML } from './template-md-viewer';
 
 export function getHTML(projectName: string): string {
   return `
@@ -32,6 +34,16 @@ export function getHTML(projectName: string): string {
         <span class="nav-item-icon">📄</span>
         <span class="nav-item-text">文档库</span>
         <span class="nav-tooltip">文档库</span>
+      </div>
+      <div class="nav-item" data-page="memory" onclick="navTo('memory')">
+        <span class="nav-item-icon">🧠</span>
+        <span class="nav-item-text">记忆</span>
+        <span class="nav-tooltip">长期记忆</span>
+      </div>
+      <div class="nav-item" data-page="md-viewer" onclick="navTo('md-viewer')">
+        <span class="nav-item-icon">📝</span>
+        <span class="nav-item-text">MD 预览</span>
+        <span class="nav-tooltip">Markdown 预览</span>
       </div>
       <div class="nav-item" data-page="stats" onclick="navTo('stats')">
         <span class="nav-item-icon">📊</span>
@@ -174,13 +186,104 @@ export function getHTML(projectName: string): string {
               </div>
               <button style="flex-shrink:0;background:none;border:1px solid #374151;border-radius:6px;padding:4px 10px;color:#9ca3af;font-size:11px;cursor:pointer;transition:all 0.15s;" onmouseover="this.style.borderColor='#6366f1';this.style.color='#a5b4fc'" onmouseout="this.style.borderColor='#374151';this.style.color='#9ca3af'" onclick="backToChat()" title="返回对话搜索">← 返回搜索</button>
             </div>
-            <div class="docs-content-body" id="docsContentBody">
-              <div class="doc-content" id="docsContentInner"></div>
+            <div class="docs-reader-wrap">
+              <div class="docs-content-body" id="docsContentBody">
+                <div class="docs-reader-inner">
+                  <div class="mdv-body" id="docsContentInner"></div>
+                </div>
+              </div>
+              <nav class="mdv-toc-panel docs-toc-panel" id="docsTocPanel" style="display:none;">
+                <div class="mdv-toc-title">📑 目录导航</div>
+                <ul class="mdv-toc-list" id="docsTocList"></ul>
+              </nav>
             </div>
           </div>
         </div>
       </div>
     </div>
+
+    <!-- ===== PAGE: Memory Browser ===== -->
+    <div class="page-view" id="pageMemory">
+      <div class="memory-page">
+        <div class="memory-header">
+          <div class="memory-header-left">
+            <h2>🧠 长期记忆 — ${projectName}</h2>
+            <p class="memory-header-desc">跨会话积累的开发知识：决策、模式、Bug 修复、洞察</p>
+          </div>
+          <div class="memory-header-right">
+            <div class="memory-generate-group">
+              <button class="memory-generate-btn" onclick="generateMemories('both')" title="从文档和任务中提取记忆候选项">
+                ✨ 生成记忆
+              </button>
+              <button class="memory-generate-dropdown-btn" id="memGenDropdownBtn" onclick="toggleMemGenDropdown(event)">▾</button>
+              <div class="memory-generate-dropdown" id="memGenDropdown">
+                <div class="memory-generate-dropdown-item" onclick="generateMemories('both')">
+                  <span class="mg-icon">📦</span> 全部（文档 + 任务）
+                </div>
+                <div class="memory-generate-dropdown-item" onclick="generateMemories('tasks')">
+                  <span class="mg-icon">✅</span> 仅从任务历史
+                </div>
+                <div class="memory-generate-dropdown-item" onclick="generateMemories('docs')">
+                  <span class="mg-icon">📄</span> 仅从文档库
+                </div>
+                <div class="memory-generate-dropdown-sep"></div>
+                <div class="memory-generate-dropdown-item" onclick="showPhasePickerForGenerate()">
+                  <span class="mg-icon">🎯</span> 从指定阶段...
+                </div>
+              </div>
+            </div>
+            <span class="memory-count" id="memoryCount">0 条记忆</span>
+          </div>
+        </div>
+        <div class="memory-filters" id="memoryFilters">
+          <button class="memory-filter-btn active" data-type="all" onclick="filterMemories('all')">全部</button>
+          <button class="memory-filter-btn" data-type="decision" onclick="filterMemories('decision')">🏗️ 决策</button>
+          <button class="memory-filter-btn" data-type="bugfix" onclick="filterMemories('bugfix')">🐛 Bug 修复</button>
+          <button class="memory-filter-btn" data-type="pattern" onclick="filterMemories('pattern')">📐 模式</button>
+          <button class="memory-filter-btn" data-type="insight" onclick="filterMemories('insight')">💡 洞察</button>
+          <button class="memory-filter-btn" data-type="preference" onclick="filterMemories('preference')">⚙️ 偏好</button>
+          <button class="memory-filter-btn" data-type="summary" onclick="filterMemories('summary')">📝 摘要</button>
+        </div>
+        <div class="memory-list" id="memoryList">
+          <div style="text-align:center;padding:60px;color:#6b7280;font-size:13px;">加载中...</div>
+        </div>
+      </div>
+
+      <!-- 记忆候选项预览弹层 -->
+      <div class="mem-gen-overlay" id="memGenOverlay" style="display:none;">
+        <div class="mem-gen-modal">
+          <div class="mem-gen-modal-header">
+            <h3>✨ 记忆候选项预览</h3>
+            <div class="mem-gen-modal-stats" id="memGenStats"></div>
+            <button class="mem-gen-close-btn" onclick="closeMemGenOverlay()">✕</button>
+          </div>
+          <div class="mem-gen-modal-actions">
+            <button class="mem-gen-action-btn primary" onclick="saveSelectedCandidates()" id="memGenSaveBtn">
+              💾 保存选中 (<span id="memGenSelectedCount">0</span>)
+            </button>
+            <button class="mem-gen-action-btn" onclick="toggleAllCandidates(true)">☑ 全选</button>
+            <button class="mem-gen-action-btn" onclick="toggleAllCandidates(false)">☐ 全不选</button>
+            <span class="mem-gen-sep"></span>
+            <label class="mem-gen-limit-label">每批:
+              <select id="memGenLimitSelect" class="mem-gen-limit-select" onchange="onMemGenLimitChange()">
+                <option value="50" selected>50 条</option>
+                <option value="100">100 条</option>
+                <option value="200">200 条</option>
+                <option value="0">不限制</option>
+              </select>
+            </label>
+            <label class="mem-gen-limit-label" style="cursor:pointer;" title="保存完当前批次后自动加载下一批，直到全部处理完">
+              <input type="checkbox" id="memGenAutoNext" checked /> 自动续载
+            </label>
+          </div>
+          <div class="mem-gen-candidate-list" id="memGenCandidateList">
+            <div style="text-align:center;padding:40px;color:#6b7280;">加载中...</div>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    ${getMdViewerPageHTML()}
 
     <!-- ===== PAGE: Stats Dashboard ===== -->
     <div class="page-view" id="pageStats">

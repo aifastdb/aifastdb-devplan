@@ -32,7 +32,7 @@ function updateStatsModalPosition() {
 }
 
 var currentPage = 'graph';
-var pageMap = { graph: 'pageGraph', stats: 'pageStats', docs: 'pageDocs', settings: 'pageSettings' };
+var pageMap = { graph: 'pageGraph', stats: 'pageStats', docs: 'pageDocs', memory: 'pageMemory', 'md-viewer': 'pageMdViewer', settings: 'pageSettings' };
 
 function navTo(page) {
   // 仅支持已实现的页面
@@ -60,6 +60,8 @@ function navTo(page) {
   // 按需加载页面数据
   if (page === 'stats') loadStatsPage();
   if (page === 'docs') loadDocsPage();
+  if (page === 'memory') loadMemoryPage();
+  if (page === 'md-viewer') loadMdViewerPage();
   if (page === 'graph' && network) {
     setTimeout(function() { network.redraw(); network.fit(); }, 100);
   }

@@ -835,6 +835,182 @@ const TOOLS = [
       required: ['projectName'],
     },
   },
+  // ========================================================================
+  // Memory Tools (Cursor 长期记忆)
+  // ========================================================================
+  {
+    name: 'devplan_memory_save',
+    description: 'Save a memory entry to the dev plan for long-term Cursor context. Memories are automatically embedded for semantic recall. Types: decision (architecture decisions), pattern (code patterns), bugfix (bug fixes), insight (learnings), preference (user/project preferences), summary (session summaries).\n保存一条记忆到开发计划，为 Cursor 提供长期上下文。记忆会自动向量化以支持语义召回。类型：decision（架构决策）、pattern（代码模式）、bugfix（Bug修复）、insight（开发洞察）、preference（偏好约定）、summary（会话摘要）。',
+    inputSchema: {
+      type: 'object' as const,
+      properties: {
+        projectName: {
+          type: 'string',
+          description: `Project name (default: "${DEFAULT_PROJECT_NAME}")\n项目名称（默认："${DEFAULT_PROJECT_NAME}"）`,
+        },
+        memoryType: {
+          type: 'string',
+          enum: ['decision', 'pattern', 'bugfix', 'insight', 'preference', 'summary'],
+          description: 'Memory type\n记忆类型',
+        },
+        content: {
+          type: 'string',
+          description: 'Memory content (Markdown supported)\n记忆内容（支持 Markdown）',
+        },
+        tags: {
+          type: 'array',
+          items: { type: 'string' },
+          description: 'Optional: Custom tags for categorization\n可选：分类标签',
+        },
+        relatedTaskId: {
+          type: 'string',
+          description: 'Optional: Related main task ID (e.g., "phase-24")\n可选：关联的主任务 ID',
+        },
+        importance: {
+          type: 'number',
+          description: 'Optional: Importance score 0~1 (default: 0.5)\n可选：重要性评分 0~1（默认 0.5）',
+        },
+      },
+      required: ['projectName', 'memoryType', 'content'],
+    },
+  },
+  {
+    name: 'devplan_memory_recall',
+    description: 'Intelligently recall memories relevant to a query using semantic vector search. Automatically updates hit counts for recalled memories. Falls back to literal matching when semantic search is unavailable.\n通过语义向量搜索智能召回与查询相关的记忆。自动更新被召回记忆的命中次数。语义搜索不可用时退化为字面匹配。\n\n**Unified Recall (统一召回)**: By default, also searches document sections and merges results via RRF fusion. Each result includes `sourceKind` ("memory" or "doc") to indicate its origin. Set `includeDocs=false` to search memories only.',
+    inputSchema: {
+      type: 'object' as const,
+      properties: {
+        projectName: {
+          type: 'string',
+          description: `Project name (default: "${DEFAULT_PROJECT_NAME}")\n项目名称（默认："${DEFAULT_PROJECT_NAME}"）`,
+        },
+        query: {
+          type: 'string',
+          description: 'Search query text\n搜索查询文本',
+        },
+        memoryType: {
+          type: 'string',
+          enum: ['decision', 'pattern', 'bugfix', 'insight', 'preference', 'summary'],
+          description: 'Optional: Filter by memory type\n可选：按记忆类型过滤',
+        },
+        limit: {
+          type: 'number',
+          description: 'Optional: Maximum results (default: 10)\n可选：最大返回数（默认 10）',
+        },
+        minScore: {
+          type: 'number',
+          description: 'Optional: Minimum relevance score 0~1 (default: 0)\n可选：最低相关性评分（默认 0）',
+        },
+        includeDocs: {
+          type: 'boolean',
+          description: 'Whether to include document sections in recall results via unified search (default: true). Set to false to search memories only.\n是否通过统一召回包含文档搜索结果（默认 true）。设为 false 仅搜索记忆。',
+        },
+      },
+      required: ['projectName', 'query'],
+    },
+  },
+  {
+    name: 'devplan_memory_list',
+    description: 'List saved memories with optional filters.\n列出已保存的记忆，支持过滤。',
+    inputSchema: {
+      type: 'object' as const,
+      properties: {
+        projectName: {
+          type: 'string',
+          description: `Project name (default: "${DEFAULT_PROJECT_NAME}")\n项目名称（默认："${DEFAULT_PROJECT_NAME}"）`,
+        },
+        memoryType: {
+          type: 'string',
+          enum: ['decision', 'pattern', 'bugfix', 'insight', 'preference', 'summary'],
+          description: 'Optional: Filter by memory type\n可选：按记忆类型过滤',
+        },
+        relatedTaskId: {
+          type: 'string',
+          description: 'Optional: Filter by related task ID\n可选：按关联任务 ID 过滤',
+        },
+        limit: {
+          type: 'number',
+          description: 'Optional: Maximum results (default: all)\n可选：最大返回数（默认全部）',
+        },
+      },
+      required: ['projectName'],
+    },
+  },
+  {
+    name: 'devplan_memory_delete',
+    description: 'Delete a specific memory entry by ID.\n按 ID 删除一条记忆。',
+    inputSchema: {
+      type: 'object' as const,
+      properties: {
+        projectName: {
+          type: 'string',
+          description: `Project name (default: "${DEFAULT_PROJECT_NAME}")\n项目名称（默认："${DEFAULT_PROJECT_NAME}"）`,
+        },
+        memoryId: {
+          type: 'string',
+          description: 'Memory ID to delete\n要删除的记忆 ID',
+        },
+      },
+      required: ['projectName', 'memoryId'],
+    },
+  },
+  {
+    name: 'devplan_memory_context',
+    description: 'Get comprehensive project context for a new Cursor session. Aggregates recent tasks, relevant memories (via semantic search), project preferences, and recent decisions. This is the PRIMARY tool for session initialization.\n获取新 Cursor 会话的综合项目上下文。聚合最近任务、相关记忆（语义搜索）、项目偏好和最近决策。这是会话初始化的核心工具。\n\n**Unified Recall**: When a query is provided, automatically searches both memories AND documents, returning merged results. Also includes `relatedDocs` field with key document summaries (overview, core_concepts).',
+    inputSchema: {
+      type: 'object' as const,
+      properties: {
+        projectName: {
+          type: 'string',
+          description: `Project name (default: "${DEFAULT_PROJECT_NAME}")\n项目名称（默认："${DEFAULT_PROJECT_NAME}"）`,
+        },
+        query: {
+          type: 'string',
+          description: 'Optional: Query text for semantic memory recall\n可选：用于语义召回的查询文本',
+        },
+        maxMemories: {
+          type: 'number',
+          description: 'Optional: Maximum memories to include (default: 10)\n可选：最大记忆数（默认 10）',
+        },
+      },
+      required: ['projectName'],
+    },
+  },
+  {
+    name: 'devplan_memory_generate',
+    description: 'Generate memory candidates from existing documents and completed tasks. Returns structured candidates that the AI can review and selectively save as memories via devplan_memory_save. This tool aggregates raw data; the AI provides the intelligence to extract meaningful memories.\n从已有文档和已完成任务中生成记忆候选项。返回结构化候选项供 AI 审查后通过 devplan_memory_save 批量保存为记忆。此工具聚合原始数据，AI 负责提取有意义的记忆。',
+    inputSchema: {
+      type: 'object' as const,
+      properties: {
+        projectName: {
+          type: 'string',
+          description: `Project name (default: "${DEFAULT_PROJECT_NAME}")\n项目名称（默认："${DEFAULT_PROJECT_NAME}"）`,
+        },
+        source: {
+          type: 'string',
+          enum: ['tasks', 'docs', 'both'],
+          description: 'Data source: "tasks" for completed phases, "docs" for documents, "both" for all (default: "both")\n数据源："tasks" 已完成阶段、"docs" 文档、"both" 全部（默认 "both"）',
+        },
+        taskId: {
+          type: 'string',
+          description: 'Optional: Extract from a specific phase only (e.g., "phase-7")\n可选：仅从指定阶段提取（如 "phase-7"）',
+        },
+        section: {
+          type: 'string',
+          description: 'Optional: Extract from a specific document section only\n可选：仅从指定文档章节提取',
+        },
+        subSection: {
+          type: 'string',
+          description: 'Optional: Extract from a specific document sub-section\n可选：仅从指定子章节提取',
+        },
+        limit: {
+          type: 'number',
+          description: 'Optional: Maximum candidates to return (default: 50)\n可选：最大候选项数（默认 50）',
+        },
+      },
+      required: ['projectName'],
+    },
+  },
 ];
 
 // ============================================================================
@@ -909,6 +1085,18 @@ interface ToolArgs {
   date?: string;
   /** devplan_create_main_task / devplan_upsert_task: 关联 Prompt ID 列表 */
   relatedPromptIds?: string[];
+  /** devplan_memory_save: 记忆类型 */
+  memoryType?: string;
+  /** devplan_memory_save: 重要性评分 (0~1) */
+  importance?: number;
+  /** devplan_memory_delete: 记忆 ID */
+  memoryId?: string;
+  /** devplan_memory_context: 最大记忆数 */
+  maxMemories?: number;
+  /** devplan_memory_save: 记忆来源 */
+  source?: string;
+  /** devplan_memory_recall: 是否包含文档统一召回 */
+  includeDocs?: boolean;
 }
 
 /**
@@ -2081,6 +2269,173 @@ async function handleToolCall(name: string, args: ToolArgs): Promise<string> {
         },
         prompts,
       }, null, 2);
+    }
+
+    // ==================================================================
+    // Memory Tools (Cursor 长期记忆)
+    // ==================================================================
+
+    case 'devplan_memory_save': {
+      const projectName = args.projectName!;
+      const content = args.content;
+      const memoryType = args.memoryType;
+
+      if (!content) {
+        throw new McpError(ErrorCode.InvalidParams, 'Missing required: content');
+      }
+      if (!memoryType) {
+        throw new McpError(ErrorCode.InvalidParams, 'Missing required: memoryType');
+      }
+
+      const validTypes = ['decision', 'pattern', 'bugfix', 'insight', 'preference', 'summary'];
+      if (!validTypes.includes(memoryType)) {
+        throw new McpError(ErrorCode.InvalidParams,
+          `Invalid memoryType: "${memoryType}". Must be one of: ${validTypes.join(', ')}`);
+      }
+
+      const plan = createDevPlan(projectName);
+      if (typeof (plan as any).saveMemory !== 'function') {
+        throw new McpError(ErrorCode.InvalidRequest,
+          `Memory features require "graph" engine. Project "${projectName}" uses a different engine.`);
+      }
+
+      const memory = (plan as any).saveMemory({
+        projectName,
+        content,
+        memoryType: memoryType as any,
+        importance: args.importance,
+        tags: args.tags,
+        relatedTaskId: args.relatedTaskId,
+        source: args.source || 'cursor',
+      });
+
+      return JSON.stringify({
+        status: 'saved',
+        memory,
+      }, null, 2);
+    }
+
+    case 'devplan_memory_recall': {
+      const projectName = args.projectName!;
+      const query = args.query;
+
+      if (!query) {
+        throw new McpError(ErrorCode.InvalidParams, 'Missing required: query');
+      }
+
+      const plan = createDevPlan(projectName);
+      if (typeof (plan as any).recallMemory !== 'function') {
+        throw new McpError(ErrorCode.InvalidRequest,
+          `Memory features require "graph" engine. Project "${projectName}" uses a different engine.`);
+      }
+
+      const includeDocs = args.includeDocs !== undefined ? args.includeDocs : true;
+      const memories = (plan as any).recallMemory(query, {
+        memoryType: args.memoryType as any,
+        limit: args.limit,
+        minScore: args.minScore,
+        includeDocs,
+      });
+
+      // 统计来源分布
+      const memoryCount = memories.filter((m: any) => m.sourceKind === 'memory' || !m.sourceKind).length;
+      const docCount = memories.filter((m: any) => m.sourceKind === 'doc').length;
+
+      return JSON.stringify({
+        projectName,
+        query,
+        count: memories.length,
+        memoryCount,
+        docCount,
+        unifiedRecall: includeDocs,
+        memories,
+      }, null, 2);
+    }
+
+    case 'devplan_memory_list': {
+      const projectName = args.projectName!;
+
+      const plan = createDevPlan(projectName);
+      if (typeof (plan as any).listMemories !== 'function') {
+        throw new McpError(ErrorCode.InvalidRequest,
+          `Memory features require "graph" engine. Project "${projectName}" uses a different engine.`);
+      }
+
+      const memories = (plan as any).listMemories({
+        memoryType: args.memoryType as any,
+        limit: args.limit,
+      });
+
+      return JSON.stringify({
+        projectName,
+        count: memories.length,
+        filter: {
+          memoryType: args.memoryType || null,
+          limit: args.limit || null,
+        },
+        memories,
+      }, null, 2);
+    }
+
+    case 'devplan_memory_delete': {
+      const projectName = args.projectName!;
+      const memoryId = args.memoryId;
+
+      if (!memoryId) {
+        throw new McpError(ErrorCode.InvalidParams, 'Missing required: memoryId');
+      }
+
+      const plan = createDevPlan(projectName);
+      if (typeof (plan as any).deleteMemory !== 'function') {
+        throw new McpError(ErrorCode.InvalidRequest,
+          `Memory features require "graph" engine. Project "${projectName}" uses a different engine.`);
+      }
+
+      const success = (plan as any).deleteMemory(memoryId);
+      return JSON.stringify({
+        status: success ? 'deleted' : 'not_found',
+        memoryId,
+      }, null, 2);
+    }
+
+    case 'devplan_memory_context': {
+      const projectName = args.projectName!;
+
+      const plan = createDevPlan(projectName);
+      if (typeof (plan as any).getMemoryContext !== 'function') {
+        throw new McpError(ErrorCode.InvalidRequest,
+          `Memory features require "graph" engine. Project "${projectName}" uses a different engine.`);
+      }
+
+      const context = (plan as any).getMemoryContext(
+        args.query,
+        args.maxMemories,
+      );
+
+      return JSON.stringify({
+        projectName,
+        context,
+      }, null, 2);
+    }
+
+    case 'devplan_memory_generate': {
+      const projectName = args.projectName!;
+
+      const plan = createDevPlan(projectName);
+      if (typeof (plan as any).generateMemoryCandidates !== 'function') {
+        throw new McpError(ErrorCode.InvalidRequest,
+          `Memory generation requires "graph" engine. Project "${projectName}" uses a different engine.`);
+      }
+
+      const result = (plan as any).generateMemoryCandidates({
+        source: args.source as any,
+        taskId: args.taskId,
+        section: args.section,
+        subSection: args.subSection,
+        limit: args.limit,
+      });
+
+      return JSON.stringify(result, null, 2);
     }
 
     default:

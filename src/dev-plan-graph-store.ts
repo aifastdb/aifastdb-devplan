@@ -58,6 +58,13 @@ import type {
   RebuildIndexResult,
   PromptInput,
   Prompt,
+  MemoryInput,
+  Memory,
+  MemoryType,
+  ScoredMemory,
+  MemoryContext,
+  MemoryCandidate,
+  MemoryGenerateResult,
 } from './types';
 
 // ============================================================================
@@ -72,6 +79,7 @@ const ET = {
   SUB_TASK: 'devplan-sub-task',
   MODULE: 'devplan-module',
   PROMPT: 'devplan-prompt',
+  MEMORY: 'devplan-memory',
 } as const;
 
 /** Relation 类型常量 */
@@ -86,6 +94,8 @@ const RT = {
   DOC_HAS_CHILD: 'doc_has_child',
   TASK_HAS_PROMPT: 'task_has_prompt',
   HAS_PROMPT: 'has_prompt',
+  HAS_MEMORY: 'has_memory',
+  MEMORY_FROM_TASK: 'memory_from_task',
 } as const;
 
 // ============================================================================
@@ -152,6 +162,7 @@ export class DevPlanGraphStore implements IDevPlanStore {
         'devplan-doc': 2,          // 文档片段   → docs shard
         'devplan-module': 3,       // 功能模块   → modules shard
         'devplan-prompt': 4,       // Prompt 日志 → prompts shard
+        'devplan-memory': 4,       // 记忆实体   → prompts shard (复用)
         '_default': 0,             // 未知类型   → tasks shard (fallback)
       },
       relationShardId: 1,          // 所有关系   → relations shard
@@ -1749,6 +1760,722 @@ export class DevPlanGraphStore implements IDevPlanStore {
   }
 
   // ==========================================================================
+  // Memory Operations (Cursor 长期记忆)
+  // ==========================================================================
+
+  /**
+   * 保存一条记忆
+   *
+   * - 记忆存储为 devplan-memory 实体
+   * - 如启用语义搜索，自动 embed content 并索引到 HNSW
+   * - 关联 project → memory 和可选的 memory → task 关系
+   */
+  saveMemory(input: MemoryInput): Memory {
+    const now = Date.now();
+
+    // ---- 去重检测 ----
+    const existingDup = this.findDuplicateMemory(input);
+    if (existingDup) {
+      // 已存在相同记忆 → 更新而非新建
+      const oldProps = existingDup.properties as any;
+      this.graph.updateEntity(existingDup.id, {
+        properties: {
+          ...oldProps,
+          content: input.content,
+          memoryType: input.memoryType,
+          tags: input.tags || oldProps.tags || [],
+          importance: input.importance ?? oldProps.importance ?? 0.5,
+          updatedAt: now,
+        },
+      });
+
+      // 重新索引向量
+      if (this.semanticSearchReady && this.synapse) {
+        try {
+          const embedding = this.synapse.embed(input.content);
+          this.graph.indexEntity(existingDup.id, embedding);
+        } catch (e) {
+          console.warn(`[DevPlan] Failed to re-index memory ${existingDup.id}: ${e instanceof Error ? e.message : String(e)}`);
+        }
+      }
+
+      this.graph.flush();
+      const updated = this.graph.getEntity(existingDup.id);
+      return this.entityToMemory(updated || existingDup);
+    }
+
+    // ---- 新建记忆 ----
+    const entityName = `Memory: ${input.memoryType} — ${input.content.slice(0, 40)}`;
+
+    const entity = this.graph.addEntity(entityName, ET.MEMORY, {
+      projectName: this.projectName,
+      memoryType: input.memoryType,
+      content: input.content,
+      tags: input.tags || [],
+      relatedTaskId: input.relatedTaskId || null,
+      importance: input.importance ?? 0.5,
+      hitCount: 0,
+      lastAccessedAt: null,
+      createdAt: now,
+      updatedAt: now,
+    });
+
+    // project → memory 关系
+    this.graph.putRelation(this.getProjectId(), entity.id, RT.HAS_MEMORY);
+
+    // memory → task 关系（可选）
+    if (input.relatedTaskId) {
+      const taskEntity = this.findEntityByProp(ET.MAIN_TASK, 'taskId', input.relatedTaskId);
+      if (taskEntity) {
+        this.graph.putRelation(entity.id, taskEntity.id, RT.MEMORY_FROM_TASK);
+      }
+    }
+
+    // 向量索引（如启用语义搜索）
+    if (this.semanticSearchReady && this.synapse) {
+      try {
+        const embedding = this.synapse.embed(input.content);
+        this.graph.indexEntity(entity.id, embedding);
+      } catch (e) {
+        console.warn(
+          `[DevPlan] Failed to index memory ${entity.id}: ${
+            e instanceof Error ? e.message : String(e)
+          }`
+        );
+      }
+    }
+
+    this.graph.flush();
+    return this.entityToMemory(entity);
+  }
+
+  /**
+   * 查找重复记忆 — 按 relatedTaskId + memoryType 或内容指纹去重
+   *
+   * 匹配规则（任一命中即视为重复）：
+   * 1. 相同 relatedTaskId + 相同 memoryType
+   * 2. 内容前 80 字符指纹相同 + 相同 memoryType
+   */
+  private findDuplicateMemory(input: MemoryInput): Entity | null {
+    const allMemories = this.findEntitiesByType(ET.MEMORY);
+    const inputFingerprint = input.content.slice(0, 80).toLowerCase().trim();
+
+    for (const e of allMemories) {
+      const p = e.properties as any;
+      if (p.projectName !== this.projectName) continue;
+      if (p.memoryType !== input.memoryType) continue;
+
+      // 规则 1: 相同 relatedTaskId
+      if (input.relatedTaskId && p.relatedTaskId === input.relatedTaskId) {
+        return e;
+      }
+
+      // 规则 2: 内容指纹相同
+      const existingFingerprint = (p.content || '').slice(0, 80).toLowerCase().trim();
+      if (inputFingerprint.length > 10 && existingFingerprint === inputFingerprint) {
+        return e;
+      }
+    }
+
+    return null;
+  }
+
+  /**
+   * 智能召回记忆 — 语义向量搜索 + 字面过滤
+   *
+   * 如语义搜索不可用，退化为字面匹配。
+   * 命中的记忆自动更新 hitCount 和 lastAccessedAt。
+   */
+  recallMemory(query: string, options?: {
+    memoryType?: MemoryType;
+    limit?: number;
+    minScore?: number;
+    /** 是否包含文档搜索（统一召回，默认 true） */
+    includeDocs?: boolean;
+  }): ScoredMemory[] {
+    const limit = options?.limit || 10;
+    const minScore = options?.minScore || 0;
+    const includeDocs = options?.includeDocs !== false; // 默认 true
+    const now = Date.now();
+
+    // ---- 1. 记忆召回 ----
+    let memoryResults: ScoredMemory[] = [];
+
+    // 尝试语义搜索
+    if (this.semanticSearchReady && this.synapse) {
+      try {
+        const embedding = this.synapse.embed(query);
+        const hits = this.graph.searchEntitiesByVector(embedding, limit * 3, ET.MEMORY);
+
+        for (const hit of hits) {
+          if (minScore > 0 && hit.score < minScore) continue;
+          const entity = this.graph.getEntity(hit.entityId);
+          if (!entity) continue;
+          const p = entity.properties as any;
+          if (p.projectName !== this.projectName) continue;
+          if (options?.memoryType && p.memoryType !== options.memoryType) continue;
+
+          // 更新访问统计
+          this.graph.updateEntity(entity.id, {
+            properties: {
+              ...p,
+              hitCount: (p.hitCount || 0) + 1,
+              lastAccessedAt: now,
+            },
+          });
+
+          memoryResults.push({
+            ...this.entityToMemory(entity),
+            hitCount: (p.hitCount || 0) + 1,
+            lastAccessedAt: now,
+            score: hit.score,
+            sourceKind: 'memory',
+          });
+          if (memoryResults.length >= limit) break;
+        }
+
+        if (memoryResults.length > 0) {
+          this.graph.flush();
+        }
+      } catch (e) {
+        console.warn(`[DevPlan] Semantic memory recall failed: ${e instanceof Error ? e.message : String(e)}`);
+      }
+    }
+
+    // 如果语义搜索无结果，fallback 到字面匹配
+    if (memoryResults.length === 0) {
+      const entities = this.findEntitiesByType(ET.MEMORY);
+      const queryLower = query.toLowerCase();
+
+      for (const e of entities) {
+        const p = e.properties as any;
+        if (p.projectName !== this.projectName) continue;
+        if (options?.memoryType && p.memoryType !== options.memoryType) continue;
+
+        const content = (p.content || '').toLowerCase();
+        const tags = (p.tags || []).join(' ').toLowerCase();
+        if (content.includes(queryLower) || tags.includes(queryLower)) {
+          this.graph.updateEntity(e.id, {
+            properties: {
+              ...p,
+              hitCount: (p.hitCount || 0) + 1,
+              lastAccessedAt: now,
+            },
+          });
+
+          memoryResults.push({
+            ...this.entityToMemory(e),
+            hitCount: (p.hitCount || 0) + 1,
+            lastAccessedAt: now,
+            score: 0.5,
+            sourceKind: 'memory',
+          });
+        }
+      }
+
+      memoryResults.sort((a, b) => b.importance - a.importance);
+      memoryResults = memoryResults.slice(0, limit);
+      if (memoryResults.length > 0) {
+        this.graph.flush();
+      }
+    }
+
+    // ---- 2. 文档召回（统一召回） ----
+    if (!includeDocs || options?.memoryType) {
+      // 如果不需要文档或指定了 memoryType 过滤，直接返回记忆结果
+      return memoryResults;
+    }
+
+    let docResults: ScoredMemory[] = [];
+    try {
+      const docHits = this.searchSectionsAdvanced(query, {
+        mode: this.semanticSearchReady ? 'hybrid' : 'literal',
+        limit: Math.max(5, Math.floor(limit / 2)),
+        minScore: minScore > 0 ? minScore : undefined,
+      });
+
+      for (const doc of docHits) {
+        // 将文档结果包装为 ScoredMemory 格式（统一接口）
+        const contentSnippet = (doc.content || '').substring(0, 300);
+        docResults.push({
+          id: `doc:${doc.section}${doc.subSection ? '|' + doc.subSection : ''}`,
+          projectName: this.projectName,
+          memoryType: this.docSectionToMemoryType(doc.section),
+          content: contentSnippet + (doc.content && doc.content.length > 300 ? '...' : ''),
+          tags: [doc.section, ...(doc.subSection ? [doc.subSection] : [])],
+          relatedTaskId: undefined,
+          importance: 0.6,
+          hitCount: 0,
+          lastAccessedAt: null,
+          createdAt: doc.updatedAt || 0,
+          updatedAt: doc.updatedAt || 0,
+          score: doc.score || 0.4,
+          sourceKind: 'doc',
+          docSection: doc.section,
+          docSubSection: doc.subSection || undefined,
+          docTitle: doc.title,
+        });
+      }
+    } catch (e) {
+      console.warn(`[DevPlan] Document recall failed: ${e instanceof Error ? e.message : String(e)}`);
+    }
+
+    // ---- 3. RRF 融合排序 ----
+    if (docResults.length === 0) return memoryResults;
+    if (memoryResults.length === 0) return docResults.slice(0, limit);
+
+    return this.rrfMergeResults(memoryResults, docResults, limit);
+  }
+
+  /**
+   * 文档 section 类型 → 建议的 memoryType 映射
+   */
+  private docSectionToMemoryType(section: string): MemoryType {
+    const mapping: Record<string, MemoryType> = {
+      overview: 'summary',
+      core_concepts: 'insight',
+      api_design: 'pattern',
+      technical_notes: 'insight',
+      config: 'preference',
+      examples: 'pattern',
+      changelog: 'summary',
+      milestones: 'summary',
+    };
+    return mapping[section] || 'insight';
+  }
+
+  /**
+   * RRF (Reciprocal Rank Fusion) 合并记忆和文档结果
+   *
+   * 记忆权重略高（rank 常数更小），因为记忆是经过提炼的知识。
+   */
+  private rrfMergeResults(
+    memoryResults: ScoredMemory[],
+    docResults: ScoredMemory[],
+    limit: number,
+  ): ScoredMemory[] {
+    const k_memory = 30;  // 记忆 RRF 常数（越小权重越高）
+    const k_doc = 50;     // 文档 RRF 常数
+
+    const scoreMap = new Map<string, { item: ScoredMemory; rrfScore: number }>();
+
+    for (let i = 0; i < memoryResults.length; i++) {
+      const item = memoryResults[i];
+      const rrfScore = 1.0 / (k_memory + i + 1);
+      scoreMap.set(item.id, { item, rrfScore });
+    }
+
+    for (let i = 0; i < docResults.length; i++) {
+      const item = docResults[i];
+      const rrfScore = 1.0 / (k_doc + i + 1);
+      const existing = scoreMap.get(item.id);
+      if (existing) {
+        existing.rrfScore += rrfScore;
+      } else {
+        scoreMap.set(item.id, { item, rrfScore });
+      }
+    }
+
+    const merged = Array.from(scoreMap.values())
+      .sort((a, b) => b.rrfScore - a.rrfScore)
+      .slice(0, limit)
+      .map(({ item, rrfScore }) => ({ ...item, score: rrfScore }));
+
+    return merged;
+  }
+
+  /**
+   * 列出记忆（支持过滤）
+   */
+  listMemories(filter?: {
+    memoryType?: MemoryType;
+    relatedTaskId?: string;
+    limit?: number;
+  }): Memory[] {
+    // 如果按关联任务过滤，通过关系查询
+    if (filter?.relatedTaskId) {
+      return this.getTaskRelatedMemories(filter.relatedTaskId, filter);
+    }
+
+    const entities = this.findEntitiesByType(ET.MEMORY);
+    let memories = entities
+      .filter((e) => {
+        const p = e.properties as any;
+        if (p.projectName !== this.projectName) return false;
+        if (filter?.memoryType && p.memoryType !== filter.memoryType) return false;
+        return true;
+      })
+      .map((e) => this.entityToMemory(e));
+
+    // 按 updatedAt 降序排列（最新的在前）
+    memories.sort((a, b) => b.updatedAt - a.updatedAt);
+
+    if (filter?.limit && filter.limit > 0) {
+      memories = memories.slice(0, filter.limit);
+    }
+
+    return memories;
+  }
+
+  /**
+   * 删除一条记忆
+   */
+  deleteMemory(memoryId: string): boolean {
+    try {
+      const entity = this.graph.getEntity(memoryId);
+      if (!entity || entity.entity_type !== ET.MEMORY) return false;
+      const p = entity.properties as any;
+      if (p.projectName !== this.projectName) return false;
+
+      this.graph.deleteEntity(memoryId);
+      this.graph.flush();
+      return true;
+    } catch {
+      return false;
+    }
+  }
+
+  /**
+   * 获取新会话上下文 — 核心工具
+   *
+   * 聚合以下信息为 Cursor 提供全面的项目上下文：
+   * 1. 最近的 in_progress / completed 主任务
+   * 2. 与查询相关的记忆（语义召回）
+   * 3. 所有 preference 类型记忆
+   * 4. 最近的 decision 类型记忆
+   */
+  getMemoryContext(query?: string, maxMemories?: number): MemoryContext {
+    const limit = maxMemories || 10;
+
+    // 1. 最近任务
+    const allTasks = this.listMainTasks();
+    const recentTasks = allTasks
+      .filter((t) => t.status === 'in_progress' || t.status === 'completed')
+      .sort((a, b) => (b.completedAt || b.updatedAt) - (a.completedAt || a.updatedAt))
+      .slice(0, 5)
+      .map((t) => ({
+        taskId: t.taskId,
+        title: t.title,
+        status: t.status,
+        completedAt: t.completedAt,
+      }));
+
+    // 2. 相关记忆（统一召回：同时搜索记忆 + 文档）
+    let relevantMemories: ScoredMemory[] = [];
+    if (query) {
+      relevantMemories = this.recallMemory(query, { limit, includeDocs: true });
+    }
+
+    // 3. 项目偏好
+    const projectPreferences = this.listMemories({ memoryType: 'preference' });
+
+    // 4. 最近决策
+    const recentDecisions = this.listMemories({ memoryType: 'decision', limit: 5 });
+
+    // 5. 总记忆数
+    const allMemories = this.findEntitiesByType(ET.MEMORY);
+    const totalMemories = allMemories.filter(
+      (e) => (e.properties as any).projectName === this.projectName
+    ).length;
+
+    // 6. 关键文档摘要（自动纳入 overview / core_concepts）
+    const relatedDocs: MemoryContext['relatedDocs'] = [];
+    const KEY_SECTIONS = ['overview', 'core_concepts'];
+    const DOC_SUMMARY_MAX_LEN = 500;
+
+    try {
+      const allSections = this.listSections();
+      for (const sec of allSections) {
+        if (KEY_SECTIONS.includes(sec.section)) {
+          const doc = this.getSection(sec.section, sec.subSection);
+          if (doc && doc.content) {
+            const summary = doc.content.length > DOC_SUMMARY_MAX_LEN
+              ? doc.content.substring(0, DOC_SUMMARY_MAX_LEN) + '...'
+              : doc.content;
+            relatedDocs.push({
+              section: doc.section,
+              subSection: doc.subSection || undefined,
+              title: doc.title,
+              summary,
+            });
+          }
+        }
+      }
+    } catch (e) {
+      // 非关键路径，忽略错误
+    }
+
+    return {
+      projectName: this.projectName,
+      recentTasks,
+      relevantMemories,
+      projectPreferences,
+      recentDecisions,
+      totalMemories,
+      relatedDocs: relatedDocs.length > 0 ? relatedDocs : undefined,
+    };
+  }
+
+  /**
+   * 获取任务关联的记忆
+   */
+  private getTaskRelatedMemories(taskId: string, filter?: { memoryType?: MemoryType }): Memory[] {
+    const taskEntity = this.findEntityByProp(ET.MAIN_TASK, 'taskId', taskId);
+    if (!taskEntity) return [];
+
+    // 查找所有指向该任务的 memory_from_task 关系（反向查询）
+    const allMemories = this.findEntitiesByType(ET.MEMORY);
+    const memories: Memory[] = [];
+
+    for (const e of allMemories) {
+      const p = e.properties as any;
+      if (p.projectName !== this.projectName) continue;
+      if (p.relatedTaskId !== taskId) continue;
+      if (filter?.memoryType && p.memoryType !== filter.memoryType) continue;
+      memories.push(this.entityToMemory(e));
+    }
+
+    memories.sort((a, b) => b.updatedAt - a.updatedAt);
+    return memories;
+  }
+
+  /**
+   * Entity → Memory 转换
+   */
+  private entityToMemory(e: Entity): Memory {
+    const p = e.properties as any;
+    return {
+      id: e.id,
+      projectName: this.projectName,
+      memoryType: p.memoryType || 'insight',
+      content: p.content || '',
+      tags: p.tags || [],
+      relatedTaskId: p.relatedTaskId || undefined,
+      importance: p.importance ?? 0.5,
+      hitCount: p.hitCount || 0,
+      lastAccessedAt: p.lastAccessedAt || null,
+      createdAt: p.createdAt || e.created_at,
+      updatedAt: p.updatedAt || p.createdAt || e.created_at,
+    };
+  }
+
+  // ==========================================================================
+  // Memory Generation (从文档/任务提取记忆候选项)
+  // ==========================================================================
+
+  /**
+   * 记忆生成器 — 从已有文档和已完成任务中提取记忆候选项
+   *
+   * 聚合逻辑：
+   * 1. 任务: 每个已完成阶段 → 1 条 summary 候选项（phase 标题 + 子任务列表）
+   * 2. 文档: 每篇文档 → 1 条候选项（section 类型 → 建议 memoryType 映射）
+   * 3. 去重: 检查已有记忆，已有记忆的候选项直接跳过不返回
+   *
+   * AI 收到候选项后，分析 content 并调用 devplan_memory_save 批量生成记忆。
+   */
+  generateMemoryCandidates(options?: {
+    source?: 'tasks' | 'docs' | 'both';
+    taskId?: string;
+    section?: string;
+    subSection?: string;
+    limit?: number;
+  }): MemoryGenerateResult {
+    const source = options?.source || 'both';
+    const limit = options?.limit || 50;
+
+    // 获取已有记忆，用于去重检查
+    const existingMemories = this.listMemories ? this.listMemories() : [];
+    const memoryByTaskId = new Set<string>();
+    const memoryContentSet = new Set<string>();
+    for (const m of existingMemories) {
+      if (m.relatedTaskId) memoryByTaskId.add(m.relatedTaskId);
+      // 用前 50 字符作内容指纹
+      memoryContentSet.add(m.content.slice(0, 50).toLowerCase());
+    }
+
+    const candidates: MemoryCandidate[] = [];
+    let totalCompletedPhases = 0;
+    let totalDocuments = 0;
+    let phasesWithMemory = 0;
+    let docsWithMemory = 0;
+    let skippedWithMemory = 0;
+
+    // ========== 任务来源 ==========
+    if (source === 'tasks' || source === 'both') {
+      const allTasks = this.listMainTasks();
+      const completedTasks = options?.taskId
+        ? allTasks.filter((t) => t.taskId === options.taskId)
+        : allTasks.filter((t) => t.status === 'completed');
+
+      totalCompletedPhases = completedTasks.length;
+
+      for (const task of completedTasks) {
+        const hasMemory = memoryByTaskId.has(task.taskId);
+        if (hasMemory) {
+          phasesWithMemory++;
+          skippedWithMemory++;
+          continue; // 已有记忆 → 跳过不列出
+        }
+
+        // 聚合子任务列表
+        const subTasks = this.listSubTasks(task.taskId);
+        const subTaskLines = subTasks
+          .map((st) => `  - [${st.status === 'completed' ? '✅' : '⬜'}] ${st.taskId}: ${st.title}`)
+          .join('\n');
+
+        const content = [
+          `## ${task.title}`,
+          `- 状态: ${task.status}`,
+          `- 优先级: ${task.priority}`,
+          task.description ? `- 描述: ${task.description}` : '',
+          task.estimatedHours ? `- 预计工时: ${task.estimatedHours}h` : '',
+          task.completedAt ? `- 完成时间: ${new Date(task.completedAt).toISOString().slice(0, 10)}` : '',
+          `- 子任务 (${task.completedSubtasks}/${task.totalSubtasks}):`,
+          subTaskLines,
+        ].filter(Boolean).join('\n');
+
+        // 推断重要性：P0 高优先级 → 0.8, P1 → 0.6, P2 → 0.5
+        const importanceMap: Record<string, number> = { P0: 0.8, P1: 0.6, P2: 0.5 };
+
+        candidates.push({
+          sourceType: 'task',
+          sourceId: task.taskId,
+          sourceTitle: task.title,
+          content,
+          suggestedMemoryType: 'summary',
+          suggestedImportance: importanceMap[task.priority] || 0.6,
+          suggestedTags: [task.taskId, task.priority],
+          hasExistingMemory: false,
+        });
+
+        if (candidates.length >= limit) break;
+      }
+    }
+
+    // ========== 文档来源 ==========
+    if ((source === 'docs' || source === 'both') && candidates.length < limit) {
+      let docs = this.listSections();
+
+      // 可选过滤
+      if (options?.section) {
+        docs = docs.filter((d) => d.section === options.section);
+        if (options?.subSection) {
+          docs = docs.filter((d) => d.subSection === options.subSection);
+        }
+      }
+
+      totalDocuments = docs.length;
+
+      // section → suggestedMemoryType 映射
+      const sectionToMemoryType: Record<string, MemoryType> = {
+        overview: 'summary',
+        core_concepts: 'pattern',
+        api_design: 'pattern',
+        file_structure: 'pattern',
+        config: 'preference',
+        examples: 'pattern',
+        technical_notes: 'insight',
+        api_endpoints: 'pattern',
+        milestones: 'summary',
+        changelog: 'summary',
+        custom: 'insight',
+      };
+
+      // section → suggestedImportance 映射
+      const sectionToImportance: Record<string, number> = {
+        overview: 0.7,
+        core_concepts: 0.8,
+        api_design: 0.7,
+        file_structure: 0.5,
+        config: 0.5,
+        examples: 0.4,
+        technical_notes: 0.7,
+        api_endpoints: 0.5,
+        milestones: 0.6,
+        changelog: 0.4,
+        custom: 0.5,
+      };
+
+      for (const doc of docs) {
+        if (candidates.length >= limit) break;
+
+        const docKey = doc.subSection
+          ? `${doc.section}|${doc.subSection}`
+          : doc.section;
+
+        // 检查是否已有对应记忆（通过内容前缀匹配）
+        const contentFingerprint = doc.content.slice(0, 50).toLowerCase();
+        const hasMemory = memoryContentSet.has(contentFingerprint);
+        if (hasMemory) {
+          docsWithMemory++;
+          skippedWithMemory++;
+          continue; // 已有记忆 → 跳过不列出
+        }
+
+        // 截取内容摘要（最多 800 字符，保留完整行）
+        let contentPreview = doc.content;
+        if (contentPreview.length > 800) {
+          contentPreview = contentPreview.slice(0, 800);
+          const lastNewline = contentPreview.lastIndexOf('\n');
+          if (lastNewline > 400) contentPreview = contentPreview.slice(0, lastNewline);
+          contentPreview += '\n... (内容截断，完整文档可通过 devplan_get_section 获取)';
+        }
+
+        const content = [
+          `## ${doc.title}`,
+          `- 文档类型: ${doc.section}${doc.subSection ? ' → ' + doc.subSection : ''}`,
+          `- 版本: ${doc.version}`,
+          doc.relatedTaskIds?.length
+            ? `- 关联任务: ${doc.relatedTaskIds.join(', ')}`
+            : '',
+          `\n### 内容摘要\n`,
+          contentPreview,
+        ].filter(Boolean).join('\n');
+
+        const suggestedType = sectionToMemoryType[doc.section] || 'insight';
+        const suggestedImportance = sectionToImportance[doc.section] || 0.5;
+
+        // 从标题推断更精确的类型
+        const titleLower = doc.title.toLowerCase();
+        let refinedType = suggestedType;
+        if (titleLower.includes('决策') || titleLower.includes('decision') || titleLower.includes('选择'))
+          refinedType = 'decision';
+        else if (titleLower.includes('修复') || titleLower.includes('fix') || titleLower.includes('bug'))
+          refinedType = 'bugfix';
+        else if (titleLower.includes('优化') || titleLower.includes('性能') || titleLower.includes('performance'))
+          refinedType = 'insight';
+
+        const tags: string[] = [doc.section];
+        if (doc.subSection) tags.push(doc.subSection);
+        if (doc.relatedTaskIds) tags.push(...doc.relatedTaskIds);
+
+        candidates.push({
+          sourceType: 'document',
+          sourceId: docKey,
+          sourceTitle: doc.title,
+          content,
+          suggestedMemoryType: refinedType,
+          suggestedImportance: suggestedImportance,
+          suggestedTags: tags,
+          hasExistingMemory: false,
+        });
+      }
+    }
+
+    return {
+      candidates,
+      stats: {
+        totalCompletedPhases,
+        totalDocuments,
+        phasesWithMemory,
+        docsWithMemory,
+        skippedWithMemory,
+        candidatesReturned: candidates.length,
+      },
+    };
+  }
+
+  // ==========================================================================
   // Utility
   // ==========================================================================
 
@@ -2016,6 +2743,42 @@ export class DevPlanGraphStore implements IDevPlanStore {
           to: prompt.id,
           label: RT.HAS_PROMPT,
         });
+      }
+    }
+
+    // Memory 节点
+    {
+      const memories = this.listMemories ? this.listMemories() : [];
+      for (const mem of memories) {
+        const label = `${mem.memoryType}: ${mem.content.slice(0, 30)}...`;
+        nodes.push({
+          id: mem.id,
+          label,
+          type: 'memory',
+          properties: {
+            memoryType: mem.memoryType,
+            importance: mem.importance,
+            hitCount: mem.hitCount,
+            tags: mem.tags || [],
+            createdAt: mem.createdAt,
+          },
+        });
+        edges.push({
+          from: this.getProjectId(),
+          to: mem.id,
+          label: RT.HAS_MEMORY,
+        });
+        // memory → task 边
+        if (mem.relatedTaskId) {
+          const taskEntity = this.findEntityByProp(ET.MAIN_TASK, 'taskId', mem.relatedTaskId);
+          if (taskEntity) {
+            edges.push({
+              from: mem.id,
+              to: taskEntity.id,
+              label: RT.MEMORY_FROM_TASK,
+            });
+          }
+        }
       }
     }
 

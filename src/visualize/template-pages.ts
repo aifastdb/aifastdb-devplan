@@ -361,6 +361,9 @@ function renderDocContent(doc, section, subSection) {
   if (doc.updatedAt) {
     metaHtml += '<span class="docs-content-tag">' + fmtTime(doc.updatedAt) + '</span>';
   }
+  if (doc.id) {
+    metaHtml += '<span class="docs-content-tag docs-id-tag" title="点击复制 ID" style="cursor:pointer;font-family:monospace;font-size:10px;max-width:220px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;" onclick="navigator.clipboard.writeText(\\x27' + escHtml(doc.id) + '\\x27).then(function(){var t=event.target;t.textContent=\\x27✓ 已复制\\x27;setTimeout(function(){t.textContent=\\x27ID: ' + escHtml(doc.id.slice(0,8)) + '…\\x27},1200)})">ID: ' + escHtml(doc.id.slice(0,8)) + '…</span>';
+  }
   document.getElementById('docsContentMeta').innerHTML = metaHtml;
 
   // Markdown 内容
@@ -423,9 +426,92 @@ function renderDocContent(doc, section, subSection) {
     contentHtml += '</div>';
   }
 
-  document.getElementById('docsContentInner').innerHTML = contentHtml;
+  var innerEl = document.getElementById('docsContentInner');
+  innerEl.innerHTML = contentHtml;
+  // 后处理：代码高亮、复制按钮、表格包裹等
+  if (typeof mdEnhanceContent === 'function') mdEnhanceContent(innerEl);
+  // 生成右侧目录导航
+  docsBuildToc();
 }
 
+// ========== Docs TOC ==========
+var _docsTocCleanup = null;
+
+function docsBuildToc() {
+  var tocList = document.getElementById('docsTocList');
+  var tocPanel = document.getElementById('docsTocPanel');
+  var inner = document.getElementById('docsContentInner');
+  if (!tocList || !tocPanel || !inner) return;
+  tocList.innerHTML = '';
+
+  var headings = inner.querySelectorAll('h1,h2,h3,h4,h5,h6');
+  if (headings.length < 2) {
+    tocPanel.style.display = 'none';
+    return;
+  }
+
+  var minLv = 6;
+  for (var i = 0; i < headings.length; i++) {
+    var lv = parseInt(headings[i].tagName[1]);
+    if (lv < minLv) minLv = lv;
+  }
+
+  for (var i = 0; i < headings.length; i++) {
+    var h = headings[i];
+    var indent = parseInt(h.tagName[1]) - minLv;
+    var li = document.createElement('li');
+    var a = document.createElement('a');
+    a.href = '#' + h.id;
+    a.textContent = h.textContent;
+    a.dataset.tid = h.id;
+    if (indent > 0) a.className = 'indent-' + Math.min(indent, 4);
+    a.onclick = (function(target) {
+      return function(e) {
+        e.preventDefault();
+        target.scrollIntoView({ behavior: 'smooth', block: 'start' });
+      };
+    })(h);
+    li.appendChild(a);
+    tocList.appendChild(li);
+  }
+
+  tocPanel.style.display = '';
+  docsSetupScrollSpy(headings);
+}
+
+function docsSetupScrollSpy(headings) {
+  var scrollArea = document.getElementById('docsContentBody');
+  var tocList = document.getElementById('docsTocList');
+  if (!scrollArea || !tocList) return;
+
+  // 清理之前的监听器
+  if (_docsTocCleanup) { _docsTocCleanup(); _docsTocCleanup = null; }
+
+  var links = tocList.querySelectorAll('a');
+  var ticking = false;
+
+  function onScroll() {
+    if (ticking) return;
+    ticking = true;
+    requestAnimationFrame(function() {
+      var cur = '';
+      for (var i = 0; i < headings.length; i++) {
+        var rect = headings[i].getBoundingClientRect();
+        if (rect.top <= 120) cur = headings[i].id;
+      }
+      for (var i = 0; i < links.length; i++) {
+        links[i].classList.toggle('active', links[i].dataset.tid === cur);
+      }
+      ticking = false;
+    });
+  }
+
+  scrollArea.addEventListener('scroll', onScroll, { passive: true });
+  _docsTocCleanup = function() {
+    scrollArea.removeEventListener('scroll', onScroll);
+  };
+  onScroll();
+}
 
 // ========== RAG Chat ==========
 var chatHistory = []; // [{role:'user'|'assistant', content:string, results?:array}]
@@ -797,6 +883,460 @@ function phaseItem(task, status, icon) {
   }
   h += '</div>';
   return h;
+}
+
+// ========== Memory Browser ==========
+var memoryLoaded = false;
+var memoryData = [];
+var memoryFilterType = 'all';
+
+var MEMORY_TYPE_ICONS = {
+  decision: '🏗️',
+  bugfix: '🐛',
+  pattern: '📐',
+  insight: '💡',
+  preference: '⚙️',
+  summary: '📝'
+};
+
+var MEMORY_TYPE_LABELS = {
+  decision: '决策',
+  bugfix: 'Bug 修复',
+  pattern: '模式',
+  insight: '洞察',
+  preference: '偏好',
+  summary: '摘要'
+};
+
+function loadMemoryPage() {
+  var list = document.getElementById('memoryList');
+  if (memoryLoaded && memoryData.length > 0) {
+    renderMemoryList(memoryData);
+    return;
+  }
+  if (list) list.innerHTML = '<div style="text-align:center;padding:60px;color:#6b7280;font-size:12px;"><div class="spinner" style="margin:0 auto 12px;width:24px;height:24px;border-width:3px;"></div>加载记忆数据...</div>';
+
+  fetch('/api/memories').then(function(r) { return r.json(); }).then(function(data) {
+    memoryData = data.memories || [];
+    memoryLoaded = true;
+    renderMemoryList(memoryData);
+  }).catch(function(err) {
+    if (list) list.innerHTML = '<div style="text-align:center;padding:60px;color:#f87171;font-size:12px;">加载失败: ' + (err.message || err) + '<br><span style="cursor:pointer;color:#818cf8;text-decoration:underline;" onclick="memoryLoaded=false;loadMemoryPage();">重试</span></div>';
+  });
+}
+
+function filterMemories(type) {
+  memoryFilterType = type;
+  // update button active states
+  var btns = document.querySelectorAll('.memory-filter-btn');
+  for (var i = 0; i < btns.length; i++) {
+    btns[i].classList.remove('active');
+    if (btns[i].getAttribute('data-type') === type) btns[i].classList.add('active');
+  }
+  renderMemoryList(memoryData);
+}
+
+function renderMemoryList(data) {
+  var list = document.getElementById('memoryList');
+  var countEl = document.getElementById('memoryCount');
+  if (!list) return;
+
+  // filter
+  var filtered = data;
+  if (memoryFilterType !== 'all') {
+    filtered = [];
+    for (var i = 0; i < data.length; i++) {
+      if (data[i].memoryType === memoryFilterType) filtered.push(data[i]);
+    }
+  }
+
+  if (countEl) {
+    countEl.textContent = filtered.length + ' / ' + data.length + ' 条记忆';
+  }
+
+  if (filtered.length === 0) {
+    list.innerHTML = '<div class="memory-empty"><div class="memory-empty-icon">🧠</div>' +
+      (data.length === 0 ? '还没有保存任何记忆<br><span style="color:#4b5563;font-size:11px;margin-top:8px;display:block;">Cursor 在开发过程中会自动积累决策、Bug 修复、代码模式等知识</span>' : '没有 "' + (MEMORY_TYPE_LABELS[memoryFilterType] || memoryFilterType) + '" 类型的记忆') +
+      '</div>';
+    return;
+  }
+
+  // sort by importance desc, then by createdAt desc
+  filtered.sort(function(a, b) {
+    var ia = (a.importance || 0.5);
+    var ib = (b.importance || 0.5);
+    if (ib !== ia) return ib - ia;
+    return (b.createdAt || 0) - (a.createdAt || 0);
+  });
+
+  var h = '';
+  for (var i = 0; i < filtered.length; i++) {
+    var mem = filtered[i];
+    var type = mem.memoryType || 'insight';
+    var icon = MEMORY_TYPE_ICONS[type] || '💭';
+    var importance = mem.importance || 0.5;
+    var pct = Math.round(importance * 100);
+
+    h += '<div class="memory-card type-' + type + '">';
+
+    // header
+    h += '<div class="memory-card-header">';
+    h += '<span class="memory-type-badge ' + type + '">' + icon + ' ' + (MEMORY_TYPE_LABELS[type] || type) + '</span>';
+    if (mem.relatedTaskId) {
+      h += '<span style="font-size:10px;color:#4b5563;background:#111827;padding:2px 6px;border-radius:3px;">' + escHtml(mem.relatedTaskId) + '</span>';
+    }
+    h += '<span class="memory-importance">';
+    h += '<span class="memory-importance-bar"><span class="memory-importance-fill" style="width:' + pct + '%"></span></span>';
+    h += ' ' + pct + '%';
+    h += '</span>';
+    h += '</div>';
+
+    // content
+    h += '<div class="memory-card-content">' + escHtml(mem.content || '') + '</div>';
+
+    // footer: tags + meta
+    h += '<div class="memory-card-footer">';
+    var tags = mem.tags || [];
+    for (var t = 0; t < tags.length; t++) {
+      h += '<span class="memory-tag">#' + escHtml(tags[t]) + '</span>';
+    }
+    h += '<span class="memory-meta">';
+    if (mem.hitCount > 0) {
+      h += '<span title="被召回次数">🔍 ' + mem.hitCount + '</span>';
+    }
+    if (mem.createdAt) {
+      h += '<span>' + formatMemoryTime(mem.createdAt) + '</span>';
+    }
+    h += '</span>';
+    h += '</div>';
+
+    h += '</div>';
+  }
+
+  list.innerHTML = h;
+}
+
+function formatMemoryTime(ts) {
+  try {
+    var d = new Date(ts);
+    var now = new Date();
+    var diff = now.getTime() - d.getTime();
+    if (diff < 3600000) return Math.floor(diff / 60000) + ' 分钟前';
+    if (diff < 86400000) return Math.floor(diff / 3600000) + ' 小时前';
+    if (diff < 604800000) return Math.floor(diff / 86400000) + ' 天前';
+    return d.getFullYear() + '-' + String(d.getMonth() + 1).padStart(2, '0') + '-' + String(d.getDate()).padStart(2, '0');
+  } catch(e) { return ''; }
+}
+
+// ========== Memory Generate ==========
+var memGenCandidates = [];
+var memGenSelected = {};
+var memGenLastSource = 'both';
+var memGenLastTaskId = null;
+var memGenTotalSaved = 0;
+
+function toggleMemGenDropdown(e) {
+  if (e) e.stopPropagation();
+  var dd = document.getElementById('memGenDropdown');
+  if (dd) dd.classList.toggle('show');
+}
+
+// close dropdown on body click
+document.addEventListener('click', function(e) {
+  var dd = document.getElementById('memGenDropdown');
+  if (dd && dd.classList.contains('show')) {
+    var group = dd.closest('.memory-generate-group');
+    if (group && !group.contains(e.target)) dd.classList.remove('show');
+  }
+});
+
+function getMemGenLimit() {
+  var sel = document.getElementById('memGenLimitSelect');
+  var v = sel ? parseInt(sel.value, 10) : 50;
+  return v === 0 ? 99999 : v;
+}
+
+function isAutoNextEnabled() {
+  var cb = document.getElementById('memGenAutoNext');
+  return cb ? cb.checked : false;
+}
+
+function onMemGenLimitChange() {
+  // When user changes limit, toggle auto-next visibility hint
+}
+
+function generateMemories(source, taskId) {
+  // close dropdown
+  var dd = document.getElementById('memGenDropdown');
+  if (dd) dd.classList.remove('show');
+
+  // track source for auto-continue
+  memGenLastSource = source || 'both';
+  memGenLastTaskId = taskId || null;
+  memGenTotalSaved = 0;
+
+  // show overlay
+  var overlay = document.getElementById('memGenOverlay');
+  if (overlay) overlay.style.display = 'flex';
+
+  loadMemGenBatch();
+}
+
+function loadMemGenBatch() {
+  var listEl = document.getElementById('memGenCandidateList');
+  var limit = getMemGenLimit();
+  var sourceLabel = memGenLastSource === 'both' ? '文档+任务' : memGenLastSource === 'tasks' ? '任务' : '文档';
+  var batchInfo = memGenTotalSaved > 0 ? '（已累计保存 ' + memGenTotalSaved + ' 条，加载下一批...）' : '';
+  if (listEl) listEl.innerHTML = '<div style="text-align:center;padding:40px;color:#6b7280;font-size:12px;"><div class="spinner" style="margin:0 auto 12px;width:24px;height:24px;border-width:3px;"></div>正在从 ' + sourceLabel + ' 中提取候选项...' + batchInfo + '</div>';
+
+  var url = '/api/memories/generate?source=' + encodeURIComponent(memGenLastSource) + '&limit=' + limit;
+  if (memGenLastTaskId) url += '&taskId=' + encodeURIComponent(memGenLastTaskId);
+
+  // reset save button
+  var btn = document.getElementById('memGenSaveBtn');
+  if (btn) { btn.disabled = false; btn.innerHTML = '💾 保存选中 (<span id="memGenSelectedCount">0</span>)'; }
+
+  fetch(url).then(function(r) { return r.json(); }).then(function(data) {
+    memGenCandidates = data.candidates || [];
+    memGenSelected = {};
+    // auto-select all candidates (已有记忆的候选项已被服务端过滤)
+    for (var i = 0; i < memGenCandidates.length; i++) {
+      memGenSelected[i] = true;
+    }
+    renderCandidateList();
+    updateGenStats(data);
+  }).catch(function(err) {
+    if (listEl) listEl.innerHTML = '<div style="text-align:center;padding:40px;color:#f87171;font-size:12px;">生成失败: ' + (err.message || err) + '</div>';
+  });
+}
+
+function closeMemGenOverlay() {
+  var overlay = document.getElementById('memGenOverlay');
+  if (overlay) overlay.style.display = 'none';
+  memGenCandidates = [];
+  memGenSelected = {};
+  memGenTotalSaved = 0;
+}
+
+function updateGenStats(data) {
+  var statsEl = document.getElementById('memGenStats');
+  if (statsEl) {
+    var total = (data.candidates || []).length;
+    var fromTasks = 0, fromDocs = 0;
+    for (var i = 0; i < total; i++) {
+      if (data.candidates[i].sourceType === 'task') fromTasks++;
+      else fromDocs++;
+    }
+    var skipped = (data.stats && data.stats.skippedWithMemory) || 0;
+    var txt = '共 ' + total + ' 条 (任务: ' + fromTasks + ', 文档: ' + fromDocs + ')';
+    if (skipped > 0) txt += ' · 已跳过 ' + skipped + ' 条已有记忆';
+    if (memGenTotalSaved > 0) txt += ' · 已累计保存 ' + memGenTotalSaved + ' 条';
+    var limit = getMemGenLimit();
+    if (total === 0 && memGenTotalSaved > 0) {
+      txt = '🎉 全部处理完毕！累计保存 ' + memGenTotalSaved + ' 条记忆';
+    } else if (limit < 99999) {
+      txt += ' (每批 ' + limit + ')';
+    }
+    statsEl.textContent = txt;
+  }
+  updateSelectedCount();
+  // If no candidates returned and auto-next was running, auto-close
+  if ((data.candidates || []).length === 0 && memGenTotalSaved > 0) {
+    var btn = document.getElementById('memGenSaveBtn');
+    if (btn) { btn.disabled = true; btn.textContent = '🎉 全部完成！共保存 ' + memGenTotalSaved + ' 条'; }
+    memoryLoaded = false;
+    setTimeout(function() { closeMemGenOverlay(); loadMemoryPage(); }, 2000);
+  }
+}
+
+function updateSelectedCount() {
+  var cnt = 0;
+  for (var k in memGenSelected) { if (memGenSelected[k]) cnt++; }
+  var el = document.getElementById('memGenSelectedCount');
+  if (el) el.textContent = cnt;
+  var btn = document.getElementById('memGenSaveBtn');
+  if (btn) btn.disabled = cnt === 0;
+}
+
+function toggleCandidate(idx) {
+  memGenSelected[idx] = !memGenSelected[idx];
+  // update card UI
+  var card = document.querySelector('.mem-gen-candidate[data-idx="' + idx + '"]');
+  if (card) {
+    card.classList.toggle('selected', !!memGenSelected[idx]);
+    var check = card.querySelector('.mem-gen-candidate-check');
+    if (check) check.textContent = memGenSelected[idx] ? '✓' : '';
+  }
+  updateSelectedCount();
+}
+
+function toggleAllCandidates(state) {
+  // state: true=all, false=none (已有记忆的候选项已被服务端过滤，无需客户端二次判断)
+  for (var i = 0; i < memGenCandidates.length; i++) {
+    memGenSelected[i] = !!state;
+  }
+  renderCandidateList();
+}
+
+function renderCandidateList() {
+  var listEl = document.getElementById('memGenCandidateList');
+  if (!listEl) return;
+
+  if (memGenCandidates.length === 0) {
+    listEl.innerHTML = '<div style="text-align:center;padding:40px;color:#6b7280;font-size:13px;">没有找到可以提取的候选项</div>';
+    updateSelectedCount();
+    return;
+  }
+
+  var h = '';
+  for (var i = 0; i < memGenCandidates.length; i++) {
+    var c = memGenCandidates[i];
+    var sel = !!memGenSelected[i];
+    var cls = 'mem-gen-candidate' + (sel ? ' selected' : '');
+    var typeIcon = MEMORY_TYPE_ICONS[c.suggestedMemoryType] || '💭';
+    var typeLabel = MEMORY_TYPE_LABELS[c.suggestedMemoryType] || c.suggestedMemoryType;
+
+    h += '<div class="' + cls + '" data-idx="' + i + '" onclick="toggleCandidate(' + i + ')">';
+    h += '<div class="mem-gen-candidate-check">' + (sel ? '✓' : '') + '</div>';
+    h += '<div class="mem-gen-candidate-body">';
+
+    // title row
+    h += '<div class="mem-gen-candidate-title">';
+    h += '<span class="mem-gen-candidate-source ' + c.sourceType + '">' + (c.sourceType === 'task' ? '✅ 任务' : '📄 文档') + '</span>';
+    h += escHtml(c.sourceTitle);
+    h += '</div>';
+
+    // content preview (truncate)
+    var preview = (c.content || '').substring(0, 200);
+    if ((c.content || '').length > 200) preview += '...';
+    h += '<div class="mem-gen-candidate-preview">' + escHtml(preview) + '</div>';
+
+    // meta
+    h += '<div class="mem-gen-candidate-meta">';
+    h += '<span class="mem-gen-candidate-type ' + c.suggestedMemoryType + '">' + typeIcon + ' ' + typeLabel + '</span>';
+    h += '<span class="mem-gen-candidate-importance">重要性: ' + Math.round((c.suggestedImportance || 0.5) * 100) + '%</span>';
+    h += '</div>';
+
+    h += '</div>';
+    h += '</div>';
+  }
+  listEl.innerHTML = h;
+  updateSelectedCount();
+}
+
+function saveSelectedCandidates() {
+  var toSave = [];
+  for (var i = 0; i < memGenCandidates.length; i++) {
+    if (memGenSelected[i]) toSave.push(memGenCandidates[i]);
+  }
+  if (toSave.length === 0) return;
+
+  var btn = document.getElementById('memGenSaveBtn');
+  if (btn) { btn.disabled = true; btn.textContent = '💾 保存中...'; }
+
+  var saved = 0, failed = 0;
+  var total = toSave.length;
+  var batchLimit = getMemGenLimit();
+  var batchSize = memGenCandidates.length;
+
+  function saveNext(idx) {
+    if (idx >= total) {
+      // batch done
+      memGenTotalSaved += saved;
+      var doneMsg = '✅ 本批保存 ' + saved + ' 条' + (failed > 0 ? ' (失败 ' + failed + ')' : '');
+      if (memGenTotalSaved > saved) doneMsg += ' · 累计 ' + memGenTotalSaved + ' 条';
+
+      // Check if we should auto-load next batch:
+      // - auto-next is enabled
+      // - batch was full (batchSize >= limit), meaning there might be more
+      // - limit is not "unlimited" (99999)
+      var shouldContinue = isAutoNextEnabled() && batchLimit < 99999 && batchSize >= batchLimit;
+
+      if (shouldContinue) {
+        if (btn) btn.textContent = doneMsg + ' — 加载下一批...';
+        setTimeout(function() { loadMemGenBatch(); }, 800);
+      } else {
+        if (btn) btn.textContent = doneMsg;
+        if (batchSize < batchLimit || batchLimit >= 99999) {
+          if (btn) btn.textContent = '✅ 全部完成！共保存 ' + memGenTotalSaved + ' 条';
+        }
+        // refresh memories list
+        memoryLoaded = false;
+        setTimeout(function() {
+          closeMemGenOverlay();
+          loadMemoryPage();
+        }, 1500);
+      }
+      return;
+    }
+
+    var c = toSave[idx];
+    // Build content: use sourceTitle + content snippet
+    var memContent = c.content || c.sourceTitle || '';
+    if (memContent.length > 500) memContent = memContent.substring(0, 500) + '...';
+
+    fetch('/api/memories/save', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        memoryType: c.suggestedMemoryType || 'summary',
+        content: memContent,
+        tags: c.suggestedTags || [],
+        relatedTaskId: c.sourceType === 'task' ? c.sourceId : undefined,
+        importance: c.suggestedImportance || 0.5,
+      })
+    }).then(function(r) { return r.json(); }).then(function() {
+      saved++;
+      if (btn) btn.textContent = '💾 保存中... (' + saved + '/' + total + ')';
+      saveNext(idx + 1);
+    }).catch(function() {
+      failed++;
+      saveNext(idx + 1);
+    });
+  }
+
+  saveNext(0);
+}
+
+function showPhasePickerForGenerate() {
+  // close dropdown first
+  var dd = document.getElementById('memGenDropdown');
+  if (dd) dd.classList.remove('show');
+
+  // fetch progress to get completed phases
+  fetch('/api/progress').then(function(r) { return r.json(); }).then(function(data) {
+    var phases = (data.completedPhases || []);
+    if (phases.length === 0) {
+      alert('没有已完成的阶段');
+      return;
+    }
+    var overlay = document.getElementById('memGenOverlay');
+    if (overlay) overlay.style.display = 'flex';
+    var listEl = document.getElementById('memGenCandidateList');
+    var statsEl = document.getElementById('memGenStats');
+    if (statsEl) statsEl.textContent = '请选择一个阶段';
+
+    var h = '<div style="padding:8px;">';
+    h += '<div style="font-size:13px;color:#9ca3af;margin-bottom:12px;">选择要提取记忆的阶段：</div>';
+    for (var i = 0; i < phases.length; i++) {
+      var p = phases[i];
+      h += '<div class="mem-gen-candidate" onclick="generateMemories(\\'tasks\\',\\'' + escHtml(p.taskId) + '\\')" style="cursor:pointer;">';
+      h += '<div class="mem-gen-candidate-body">';
+      h += '<div class="mem-gen-candidate-title">';
+      h += '<span class="mem-gen-candidate-source task">' + escHtml(p.taskId) + '</span>';
+      h += escHtml(p.title);
+      h += '</div>';
+      var desc = '';
+      if (p.completedSubTasks !== undefined) desc = '子任务: ' + p.completedSubTasks + '/' + p.totalSubTasks;
+      h += '<div class="mem-gen-candidate-preview">' + escHtml(desc) + '</div>';
+      h += '</div>';
+      h += '</div>';
+    }
+    h += '</div>';
+    if (listEl) listEl.innerHTML = h;
+  }).catch(function() {
+    alert('获取阶段列表失败');
+  });
 }
 
 `;

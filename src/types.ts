@@ -481,7 +481,7 @@ export interface DevPlanGraphNode {
   /** 节点名称 */
   label: string;
   /** 节点类型 */
-  type: 'project' | 'main-task' | 'sub-task' | 'document' | 'module' | 'prompt';
+  type: 'project' | 'main-task' | 'sub-task' | 'document' | 'module' | 'prompt' | 'memory';
   /** 节点度数（连接边数量），由后端导出时计算 */
   degree?: number;
   /** 节点属性 */
@@ -682,6 +682,174 @@ export interface Prompt {
   tags?: string[];
   /** 创建时间 */
   createdAt: number;
+}
+
+// ============================================================================
+// Memory Types (Cursor 长期记忆)
+// ============================================================================
+
+/**
+ * 记忆类型 — 对标 ai_db LLM Gateway 的三层记忆
+ *
+ * | memoryType | ai_db 对标 | 说明 |
+ * |---|---|---|
+ * | decision  | memory_semantic (决策类) | 架构/设计决策及理由 |
+ * | pattern   | memory_semantic (模式类) | 代码模式、命名约定、项目结构偏好 |
+ * | bugfix    | memory_semantic (修复类) | Bug 模式和修复方案 |
+ * | insight   | memory_semantic (洞察类) | 开发经验和技术洞察 |
+ * | preference| memory_profile           | 用户偏好和项目约定 |
+ * | summary   | memory_summary           | 会话/阶段摘要 |
+ */
+export type MemoryType =
+  | 'decision'    // 架构/设计决策及理由
+  | 'pattern'     // 代码模式、命名约定
+  | 'bugfix'      // Bug 模式和修复方案
+  | 'insight'     // 开发经验和技术洞察
+  | 'preference'  // 用户偏好和项目约定
+  | 'summary';    // 会话/阶段摘要
+
+/**
+ * 记忆输入
+ */
+export interface MemoryInput {
+  /** 项目名称 */
+  projectName: string;
+  /** 记忆类型 */
+  memoryType: MemoryType;
+  /** 记忆内容（Markdown 支持） */
+  content: string;
+  /** 自定义标签 */
+  tags?: string[];
+  /** 关联的主任务 ID（可选） */
+  relatedTaskId?: string;
+  /** 重要性 (0~1，默认 0.5) */
+  importance?: number;
+}
+
+/**
+ * 存储的记忆
+ */
+export interface Memory {
+  /** 记忆 ID (图引擎实体 ID) */
+  id: string;
+  /** 项目名称 */
+  projectName: string;
+  /** 记忆类型 */
+  memoryType: MemoryType;
+  /** 记忆内容 */
+  content: string;
+  /** 自定义标签 */
+  tags?: string[];
+  /** 关联的主任务 ID */
+  relatedTaskId?: string;
+  /** 重要性 (0~1) */
+  importance: number;
+  /** 访问次数（每次 recall 命中 +1） */
+  hitCount: number;
+  /** 最后访问时间 */
+  lastAccessedAt: number | null;
+  /** 创建时间 */
+  createdAt: number;
+  /** 更新时间 */
+  updatedAt: number;
+}
+
+/**
+ * 带评分的记忆召回结果
+ */
+export interface ScoredMemory extends Memory {
+  /** 相关性评分 (0~1) */
+  score: number;
+  /** 来源类型（统一召回时区分 memory / doc） */
+  sourceKind?: 'memory' | 'doc';
+  /** 当 sourceKind='doc' 时，文档的 section */
+  docSection?: string;
+  /** 当 sourceKind='doc' 时，文档的 subSection */
+  docSubSection?: string;
+  /** 当 sourceKind='doc' 时，文档标题 */
+  docTitle?: string;
+}
+
+/**
+ * 记忆上下文 — 新会话启动时的综合上下文
+ */
+export interface MemoryContext {
+  /** 项目名称 */
+  projectName: string;
+  /** 最近的进行中/已完成主任务 */
+  recentTasks: Array<{
+    taskId: string;
+    title: string;
+    status: TaskStatus;
+    completedAt?: number | null;
+  }>;
+  /** 与查询相关的记忆（按相关性排序，统一召回含文档） */
+  relevantMemories: ScoredMemory[];
+  /** 项目偏好/约定 (memoryType=preference) */
+  projectPreferences: Memory[];
+  /** 最近的决策记忆 (memoryType=decision) */
+  recentDecisions: Memory[];
+  /** 总记忆数 */
+  totalMemories: number;
+  /** 关键文档摘要（overview / core_concepts 等自动纳入） */
+  relatedDocs?: Array<{
+    section: string;
+    subSection?: string;
+    title: string;
+    /** 内容摘要（截取前 N 字符） */
+    summary: string;
+  }>;
+}
+
+// ============================================================================
+// Memory Generation Types (从文档/任务提取记忆)
+// ============================================================================
+
+/**
+ * 记忆候选项 — 从已有文档或任务中聚合的原始数据
+ *
+ * MCP 工具返回候选项，AI 分析后调用 devplan_memory_save 批量生成记忆。
+ */
+export interface MemoryCandidate {
+  /** 来源类型 */
+  sourceType: 'task' | 'document';
+  /** 来源 ID (taskId 或 section|subSection) */
+  sourceId: string;
+  /** 来源标题 */
+  sourceTitle: string;
+  /** 聚合的内容（任务: phase 标题+子任务列表; 文档: 标题+内容摘要） */
+  content: string;
+  /** 建议的记忆类型 */
+  suggestedMemoryType: MemoryType;
+  /** 建议的重要性 (0~1) */
+  suggestedImportance: number;
+  /** 建议的标签 */
+  suggestedTags: string[];
+  /** 此来源是否已有关联记忆 */
+  hasExistingMemory: boolean;
+}
+
+/**
+ * 记忆生成结果
+ */
+export interface MemoryGenerateResult {
+  /** 候选项列表 */
+  candidates: MemoryCandidate[];
+  /** 统计摘要 */
+  stats: {
+    /** 已完成阶段总数 */
+    totalCompletedPhases: number;
+    /** 文档总数 */
+    totalDocuments: number;
+    /** 已有记忆的阶段数 */
+    phasesWithMemory: number;
+    /** 已有记忆的文档数 */
+    docsWithMemory: number;
+    /** 因已有记忆而被跳过的候选项数 */
+    skippedWithMemory: number;
+    /** 返回的候选项数（已排除有记忆的） */
+    candidatesReturned: number;
+  };
 }
 
 /** Autopilot 配置的默认值 */

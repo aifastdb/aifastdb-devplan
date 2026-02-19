@@ -466,6 +466,78 @@ function startServer(projectName: string, basePath: string, port: number): void 
           break;
         }
 
+        case '/api/memories': {
+          // 列出所有记忆（用于记忆浏览页面）
+          const memStore = createFreshStore(projectName, basePath);
+          let memories: any[] = [];
+          if (typeof (memStore as any).listMemories === 'function') {
+            const memoryType = url.searchParams.get('memoryType') || undefined;
+            memories = (memStore as any).listMemories({
+              memoryType,
+            });
+          }
+          res.writeHead(200, { 'Content-Type': 'application/json; charset=utf-8' });
+          res.end(JSON.stringify({ memories }));
+          break;
+        }
+
+        case '/api/memories/generate': {
+          // 从文档/任务中生成记忆候选项
+          const genStore = createFreshStore(projectName, basePath);
+          if (typeof (genStore as any).generateMemoryCandidates !== 'function') {
+            res.writeHead(400, { 'Content-Type': 'application/json; charset=utf-8' });
+            res.end(JSON.stringify({ error: 'generateMemoryCandidates not supported (requires graph engine)' }));
+            break;
+          }
+          const genSource = url.searchParams.get('source') || 'both';
+          const genTaskId = url.searchParams.get('taskId') || undefined;
+          const genSection = url.searchParams.get('section') || undefined;
+          const rawLimit = url.searchParams.get('limit') ? parseInt(url.searchParams.get('limit')!, 10) : 50;
+          const genLimit = rawLimit <= 0 ? 99999 : rawLimit;
+
+          const result = (genStore as any).generateMemoryCandidates({
+            source: genSource,
+            taskId: genTaskId,
+            section: genSection,
+            limit: genLimit,
+          });
+          res.writeHead(200, { 'Content-Type': 'application/json; charset=utf-8' });
+          res.end(JSON.stringify(result));
+          break;
+        }
+
+        case '/api/memories/save': {
+          // 保存一条记忆（POST）
+          if (req.method !== 'POST') {
+            res.writeHead(405, { 'Content-Type': 'application/json; charset=utf-8' });
+            res.end(JSON.stringify({ error: 'Method Not Allowed. Use POST.' }));
+            break;
+          }
+          const saveBody = await readRequestBody(req);
+          const saveStore = createFreshStore(projectName, basePath);
+          if (typeof (saveStore as any).saveMemory !== 'function') {
+            res.writeHead(400, { 'Content-Type': 'application/json; charset=utf-8' });
+            res.end(JSON.stringify({ error: 'saveMemory not supported (requires graph engine)' }));
+            break;
+          }
+          try {
+            const saved = (saveStore as any).saveMemory({
+              projectName,
+              memoryType: saveBody.memoryType || 'insight',
+              content: saveBody.content || '',
+              tags: saveBody.tags || [],
+              relatedTaskId: saveBody.relatedTaskId || undefined,
+              importance: saveBody.importance ?? 0.5,
+            });
+            res.writeHead(200, { 'Content-Type': 'application/json; charset=utf-8' });
+            res.end(JSON.stringify({ status: 'saved', memory: saved }));
+          } catch (e: any) {
+            res.writeHead(500, { 'Content-Type': 'application/json; charset=utf-8' });
+            res.end(JSON.stringify({ error: e.message || String(e) }));
+          }
+          break;
+        }
+
         case '/api/docs': {
           // 列出所有文档片段（不含内容，用于文档浏览页面左侧列表）
           const store = createFreshStore(projectName, basePath);

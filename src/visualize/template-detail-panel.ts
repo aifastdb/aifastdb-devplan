@@ -405,7 +405,10 @@ function loadDocContent(section, subSection) {
       area.innerHTML = '<div class="doc-error">文档内容为空</div>';
       return;
     }
-    area.innerHTML = '<div class="doc-content">' + renderMarkdown(doc.content) + '</div>';
+    area.innerHTML = '<div class="doc-content mdv-body">' + renderMarkdown(doc.content) + '</div>';
+    // 后处理：代码高亮、复制按钮、表格包裹等
+    var mdvEl = area.querySelector('.mdv-body');
+    if (mdvEl && typeof mdEnhanceContent === 'function') mdEnhanceContent(mdvEl);
     docContentVisible = true;
     var btn = document.getElementById('docToggleBtn');
     if (btn) btn.textContent = '收起';
@@ -414,9 +417,59 @@ function loadDocContent(section, subSection) {
   });
 }
 
-/** 简易 Markdown 渲染 — 支持标题、粗体、斜体、代码、列表、表格、引用、链接、分隔线 */
+/** 预处理：修复无表头的孤立管道行块 → 合法 Markdown 表格 */
+function fixOrphanPipeRows(md) {
+  var lines = md.split('\\n');
+  var result = [];
+  var pipeBlock = [];
+
+  function flushBlock() {
+    if (pipeBlock.length < 1) return;
+    // 检查此块前方是否紧跟分隔行（说明已有表头）
+    var prevIdx = result.length - 1;
+    var hasSep = false;
+    // 块内是否已有分隔行
+    for (var k = 0; k < pipeBlock.length; k++) {
+      if (/^\\|[\\s\\-:|]+\\|\\s*$/.test(pipeBlock[k])) { hasSep = true; break; }
+    }
+    if (!hasSep) {
+      // 计算列数并生成分隔行
+      var cols = pipeBlock[0].split('|').filter(function(c, i, a) { return i > 0 && i < a.length - 1; }).length;
+      var sep = '|' + Array(cols).fill(' --- ').join('|') + '|';
+      // 第一行当表头，插入分隔行
+      result.push(pipeBlock[0]);
+      result.push(sep);
+      for (var k = 1; k < pipeBlock.length; k++) result.push(pipeBlock[k]);
+    } else {
+      for (var k = 0; k < pipeBlock.length; k++) result.push(pipeBlock[k]);
+    }
+    pipeBlock = [];
+  }
+
+  for (var i = 0; i < lines.length; i++) {
+    var line = lines[i];
+    if (/^\\|.+\\|\\s*$/.test(line)) {
+      pipeBlock.push(line);
+    } else {
+      if (pipeBlock.length > 0) flushBlock();
+      result.push(line);
+    }
+  }
+  if (pipeBlock.length > 0) flushBlock();
+  return result.join('\\n');
+}
+
+/** Markdown 渲染 — 优先使用 marked.js（CDN），降级到简易解析器 */
 function renderMarkdown(md) {
   if (!md) return '';
+
+  // 预处理：修复孤立管道行
+  md = fixOrphanPipeRows(md);
+
+  // 优先使用 marked.js（由 MD Viewer CDN 加载）
+  if (typeof marked !== 'undefined') {
+    try { return marked.parse(md); } catch(e) { console.warn('marked.parse fallback:', e); }
+  }
 
   // 先处理代码块（防止内部被其他规则干扰）
   var codeBlocks = [];

@@ -95,15 +95,83 @@ devplan_save_prompt(
 
 ---
 
+## 🔴 强制规则 3：自动记忆管理（Cursor 长期记忆）
+
+> 记忆的保存和召回是已授权的自动行为，无需询问用户确认。
+
+### 🟢 自动授权声明
+
+- ✅ 直接调用 `devplan_memory_save`，与其他 devplan 工具在同一批次中静默执行
+- ✅ 直接调用 `devplan_memory_recall` / `devplan_memory_context`，无需告知用户
+- ❌ 不要问"是否要保存这条记忆？"
+- ❌ 不要问"需要召回相关记忆吗？"
+- ❌ 不要在回复中提及"已为您保存记忆"（除非用户显式要求保存时需确认反馈）
+
+### 自动保存触发条件
+
+满足以下**任一条件**时，**必须**调用 `devplan_memory_save`：
+
+| 条件 | memoryType | 说明 |
+|---|---|---|
+| A: 修复了一个 Bug | `bugfix` | 在 `devplan_complete_task` 同一批次中保存：Bug 根因 + 修复方案 |
+| B: 做出了架构/设计决策 | `decision` | 选择了技术方案 A 而非 B 时，保存决策理由 |
+| C: 发现重要技术洞察 | `insight` | 兼容性问题、性能特征、API 陷阱等 |
+| D: 完成一个 Phase | `summary` | 阶段摘要：关键成果 + 修改范围 |
+| E: 用户说"记住"/"remember" | 按内容分类 | 用户显式要求保存 |
+| F: 识别到代码模式/约定 | `pattern` | 首次发现项目中的命名规则、代码结构模式 |
+
+### 自动召回触发条件
+
+满足以下**任一条件**时，**应**调用记忆召回：
+
+| 条件 | 工具 | 说明 |
+|---|---|---|
+| A: 新会话开始 | `devplan_memory_context` | 在首次 devplan 工具调用同一批次中，获取项目上下文 |
+| B: 遇到可能解决过的问题 | `devplan_memory_recall` | 搜索 bugfix/insight 记忆 |
+| C: 讨论架构设计 | `devplan_memory_recall` | 搜索 decision 记忆，避免推翻之前的决策 |
+| D: 需要了解项目约定 | `devplan_memory_recall` | 搜索 preference/pattern 记忆 |
+
+### 保存格式
+
+```
+devplan_memory_save(
+  projectName: "aifastdb-devplan",
+  content: "<简洁描述，1~3 句话>",
+  memoryType: "bugfix",         // decision/pattern/bugfix/insight/preference/summary
+  importance: 0.8,              // 0~1, 默认 0.5
+  tags: ["sharding", "fix"],    // 可选分类标签
+  relatedTaskId: "phase-24"     // 可选关联任务
+)
+```
+
+### 召回格式
+
+```
+// 新会话初始化（推荐）
+devplan_memory_context(projectName: "aifastdb-devplan", query: "<当前话题关键词>")
+
+// 精确搜索
+devplan_memory_recall(projectName: "aifastdb-devplan", query: "sharding 路由")
+```
+
+### 注意事项
+
+- **同一轮对话中同类型记忆只保存一次**（避免重复）
+- **content 要精炼**：1~3 句话概括，不要复制大段代码
+- **importance 合理评估**：Bug 修复 0.8~1.0，架构决策 0.7~0.9，模式 0.5~0.7
+
+---
+
 ## 完整工作流示例
 
 用户说："修改 aifastdb-devplan 项目，在 3D 图谱中添加呼吸灯效果"
 
 ```
-// 第 1 批工具调用：保存 Prompt + 查看任务状态
+// 第 1 批工具调用：保存 Prompt + 查看任务状态 + 召回相关记忆
 batch 1: [
   devplan_save_prompt(projectName: "aifastdb-devplan", content: "...", ...),
   devplan_list_tasks(projectName: "aifastdb-devplan"),
+  devplan_memory_context(projectName: "aifastdb-devplan", query: "3D 图谱呼吸灯"),
 ]
 
 // 第 2 批：创建任务（如果没有合适的 in_progress 阶段）
@@ -115,10 +183,11 @@ batch 2: [
 
 // ... 执行代码修改 ...
 
-// 完成后标记任务
+// 完成后：标记任务 + 保存重要记忆（如有 Bug 修复或决策）
 batch N: [
   devplan_complete_task(projectName: "aifastdb-devplan", taskId: "T14B.1"),
   devplan_complete_task(projectName: "aifastdb-devplan", taskId: "T14B.2"),
+  devplan_memory_save(projectName: "aifastdb-devplan", content: "呼吸灯效果使用 CSS animation 实现...", memoryType: "pattern", importance: 0.6),
 ]
 ```
 
@@ -147,6 +216,10 @@ devplan_export_markdown(projectName: "aifastdb-devplan", scope: "tasks")
 devplan_list_modules(projectName: "aifastdb-devplan")
 devplan_save_prompt(projectName: "aifastdb-devplan", content: "用户 Prompt", relatedTaskId: "phase-X")
 devplan_list_prompts(projectName: "aifastdb-devplan")
+devplan_memory_save(projectName: "aifastdb-devplan", content: "...", memoryType: "decision")
+devplan_memory_recall(projectName: "aifastdb-devplan", query: "...")
+devplan_memory_list(projectName: "aifastdb-devplan")
+devplan_memory_context(projectName: "aifastdb-devplan")
 ```
 
 ## 开发阶段概览
@@ -158,6 +231,7 @@ devplan_list_prompts(projectName: "aifastdb-devplan")
 | Phase 1B | ✅ 已完成 | WAL Shard 语义化重命名 |
 | Phase 7~13 | ✅ 已完成 | 图谱渲染引擎 + 性能优化 + 3D 可视化 |
 | Phase 14 | 🔄 进行中 | template.ts 拆分重构 |
+| Phase 24 | ✅ 已完成 | Cursor 长期记忆 — DevPlan Memory Layer (5/5) |
 
 ## 注意事项
 

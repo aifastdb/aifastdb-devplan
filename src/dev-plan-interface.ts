@@ -30,6 +30,12 @@ import type {
   RebuildIndexResult,
   PromptInput,
   Prompt,
+  MemoryInput,
+  Memory,
+  MemoryType,
+  ScoredMemory,
+  MemoryContext,
+  MemoryGenerateResult,
 } from './types';
 
 // ============================================================================
@@ -246,6 +252,87 @@ export interface IDevPlanStore {
    * 获取主任务关联的所有 Prompt
    */
   getTaskRelatedPrompts?(taskId: string): Prompt[];
+
+  // ==========================================================================
+  // Memory Operations (Cursor 长期记忆)
+  // ==========================================================================
+
+  /**
+   * 保存一条记忆
+   *
+   * 记忆内容会自动生成 embedding 并索引到 HNSW 向量索引（如已启用语义搜索）。
+   * 如果指定了 relatedTaskId，自动建立 memory_from_task 关系。
+   */
+  saveMemory?(input: MemoryInput): Memory;
+
+  /**
+   * 智能召回记忆 — 基于语义向量搜索
+   *
+   * 将 query 文本 embed 后，通过 HNSW 向量搜索找到最相关的记忆。
+   * 命中的记忆自动 +1 hitCount。
+   *
+   * @param query - 查询文本
+   * @param options - 过滤选项
+   */
+  recallMemory?(query: string, options?: {
+    /** 按记忆类型过滤 */
+    memoryType?: MemoryType;
+    /** 最大返回数 */
+    limit?: number;
+    /** 最低分数阈值 (0~1) */
+    minScore?: number;
+    /** 是否包含文档搜索（统一召回，默认 true） */
+    includeDocs?: boolean;
+  }): ScoredMemory[];
+
+  /**
+   * 列出记忆（支持过滤）
+   */
+  listMemories?(filter?: {
+    /** 按记忆类型过滤 */
+    memoryType?: MemoryType;
+    /** 按关联任务过滤 */
+    relatedTaskId?: string;
+    /** 最大返回数 */
+    limit?: number;
+  }): Memory[];
+
+  /**
+   * 删除一条记忆
+   */
+  deleteMemory?(memoryId: string): boolean;
+
+  /**
+   * 获取新会话上下文 — 核心工具
+   *
+   * 聚合最近任务、相关记忆、项目偏好、最近决策，
+   * 为 Cursor 新会话提供全面的项目上下文。
+   *
+   * @param query - 可选查询文本（用于语义召回相关记忆）
+   * @param maxMemories - 最大返回记忆数（默认 10）
+   */
+  getMemoryContext?(query?: string, maxMemories?: number): MemoryContext;
+
+  /**
+   * 记忆生成器 — 从已有文档和任务历史中提取记忆候选项
+   *
+   * MCP 工具聚合已有数据，返回结构化的 "记忆候选项" 列表。
+   * AI 分析候选项内容后，选择性调用 devplan_memory_save 批量生成记忆。
+   *
+   * @param options - 过滤选项
+   */
+  generateMemoryCandidates?(options?: {
+    /** 数据源：tasks=已完成任务, docs=文档, both=全部 (默认 both) */
+    source?: 'tasks' | 'docs' | 'both';
+    /** 指定阶段 ID (仅从该阶段提取) */
+    taskId?: string;
+    /** 指定文档 section (仅从该章节提取) */
+    section?: string;
+    /** 指定文档 subSection */
+    subSection?: string;
+    /** 最大返回候选项数 (默认 50) */
+    limit?: number;
+  }): MemoryGenerateResult;
 
   // ==========================================================================
   // Utility
