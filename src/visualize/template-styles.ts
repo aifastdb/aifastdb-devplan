@@ -102,6 +102,7 @@ export function getStyles(): string {
     .panel-header.main-task { background: linear-gradient(135deg, #4f46e5, #6366f1); }
     .panel-header.sub-task { background: linear-gradient(135deg, #7c3aed, #8b5cf6); }
     .panel-header.document { background: linear-gradient(135deg, #1d4ed8, #3b82f6); }
+    .panel-header.memory { background: linear-gradient(135deg, #a21caf, #e879f9); }
     .panel-title { font-weight: 600; font-size: 14px; color: #fff; pointer-events: none; }
     .panel-close { background: rgba(255,255,255,0.2); border: none; color: #fff; width: 28px; height: 28px; border-radius: 6px; cursor: pointer; font-size: 16px; display: flex; align-items: center; justify-content: center; }
     .panel-close:hover { background: rgba(255,255,255,0.3); }
@@ -163,6 +164,7 @@ export function getStyles(): string {
     .legend-icon.circle { background: #22c55e; border-radius: 50%; }
     .legend-icon.dot { background: #047857; border-radius: 50%; width: 8px; height: 8px; }
     .legend-icon.square { background: #3b82f6; border-radius: 2px; width: 10px; height: 10px; }
+    .legend-icon.hexagon { background: #e879f9; clip-path: polygon(25% 0%,75% 0%,100% 50%,75% 100%,25% 100%,0% 50%); }
     .legend-line { width: 24px; height: 2px; }
     .legend-line.solid { background: #6b7280; }
     .legend-line.thin { background: #6b7280; height: 1px; }
@@ -272,6 +274,21 @@ export function getStyles(): string {
     .memory-filter-btn { background: #1f2937; border: 1px solid #374151; border-radius: 8px; padding: 6px 14px; color: #9ca3af; font-size: 12px; cursor: pointer; transition: all 0.2s; white-space: nowrap; }
     .memory-filter-btn:hover { background: #374151; color: #e5e7eb; }
     .memory-filter-btn.active { background: #312e81; border-color: #6366f1; color: #a5b4fc; }
+    /* Memory View Toggle */
+    .memory-view-toggle { display: flex; gap: 2px; background: #1f2937; border: 1px solid #374151; border-radius: 8px; padding: 2px; margin-right: 12px; }
+    .memory-view-btn { background: transparent; border: none; border-radius: 6px; padding: 5px 12px; color: #9ca3af; font-size: 12px; cursor: pointer; transition: all 0.2s; display: flex; align-items: center; gap: 4px; white-space: nowrap; }
+    .memory-view-btn:hover { color: #e5e7eb; background: #374151; }
+    .memory-view-btn.active { background: #312e81; color: #a5b4fc; }
+    .memory-header-right { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
+
+    /* Memory Graph Container */
+    .memory-graph-container { flex: 1; position: relative; border-radius: 12px; overflow: hidden; background: #0f172a; border: 1px solid #1e293b; min-height: 400px; }
+    .memory-graph-loading { position: absolute; top: 50%; left: 50%; transform: translate(-50%, -50%); text-align: center; color: #6b7280; font-size: 13px; z-index: 10; }
+    .memory-graph-legend { position: absolute; bottom: 16px; left: 16px; background: rgba(15, 23, 42, 0.85); backdrop-filter: blur(8px); border: 1px solid #1e293b; border-radius: 10px; padding: 10px 14px; display: flex; flex-direction: column; gap: 6px; z-index: 10; }
+    .mg-legend-item { display: flex; align-items: center; gap: 6px; font-size: 11px; color: #9ca3af; }
+    .mg-legend-dot { width: 10px; height: 10px; border-radius: 50%; flex-shrink: 0; }
+    .memory-graph-stats { position: absolute; top: 16px; right: 16px; background: rgba(15, 23, 42, 0.85); backdrop-filter: blur(8px); border: 1px solid #1e293b; border-radius: 10px; padding: 8px 14px; font-size: 11px; color: #9ca3af; z-index: 10; }
+
     .memory-list { flex: 1; display: flex; flex-direction: column; gap: 10px; overflow-y: auto; }
     .memory-card { background: #1f2937; border: 1px solid #374151; border-radius: 10px; padding: 16px 20px; transition: all 0.2s; position: relative; overflow: hidden; }
     .memory-card:hover { border-color: #4b5563; background: #1e293b; }
@@ -358,6 +375,23 @@ export function getStyles(): string {
     .mem-gen-candidate-type.summary { background: #064e3b; color: #6ee7b7; }
     .mem-gen-candidate-existing { font-size: 9px; color: #f59e0b; }
     .mem-gen-candidate-importance { font-size: 10px; color: #6b7280; }
+
+    /* Auto-import dropdown highlight */
+    .memory-generate-dropdown-item.auto-import { background: linear-gradient(135deg, rgba(99,102,241,0.08), rgba(16,185,129,0.08)); }
+    .memory-generate-dropdown-item.auto-import:hover { background: linear-gradient(135deg, rgba(99,102,241,0.18), rgba(16,185,129,0.18)); }
+
+    /* Auto-import overlay */
+    .mem-auto-import-overlay { position: fixed; inset: 0; background: rgba(0,0,0,0.65); backdrop-filter: blur(4px); z-index: 1001; display: flex; align-items: center; justify-content: center; }
+    .mem-auto-import-card { background: #1f2937; border: 1px solid #374151; border-radius: 16px; padding: 36px 48px; text-align: center; min-width: 360px; max-width: 460px; box-shadow: 0 24px 48px rgba(0,0,0,0.4); }
+    .mem-auto-import-icon { font-size: 40px; margin-bottom: 12px; }
+    .mem-auto-import-title { font-size: 18px; font-weight: 700; color: #f3f4f6; margin-bottom: 20px; }
+    .mem-auto-import-progress-bar { width: 100%; height: 8px; background: #111827; border-radius: 4px; overflow: hidden; margin-bottom: 14px; }
+    .mem-auto-import-progress-fill { height: 100%; background: linear-gradient(90deg, #6366f1, #10b981); border-radius: 4px; transition: width 0.3s ease; }
+    .mem-auto-import-status { font-size: 14px; color: #e5e7eb; margin-bottom: 6px; font-weight: 500; }
+    .mem-auto-import-detail { font-size: 11px; color: #6b7280; margin-bottom: 20px; min-height: 16px; }
+    .mem-auto-import-cancel { background: #374151; border: 1px solid #4b5563; border-radius: 8px; padding: 8px 24px; color: #9ca3af; font-size: 12px; cursor: pointer; transition: all 0.2s; }
+    .mem-auto-import-cancel:hover { background: #4b5563; color: #e5e7eb; }
+    .mem-auto-import-cancel:disabled { opacity: 0.4; cursor: default; }
 
     /* Stats Dashboard */
     .stats-page { padding: 24px; overflow-y: auto; background: #111827; flex: 1; }

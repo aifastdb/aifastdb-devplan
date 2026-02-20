@@ -1,28 +1,25 @@
 # -*- coding: utf-8 -*-
 """
-DevPlan Executor — 双通道决策引擎
+DevPlan Executor — 三通道决策引擎
 
-融合两个信息通道做出执行决策：
-  - Channel 1: DevPlan HTTP API → 任务编排状态（有无待发任务、阶段进度等）
-  - Channel 2: 屏幕截图 + 视觉 AI → UI 运行时状态 + 截图对比变化检测
+融合三个信息通道做出执行决策：
+  - Channel 1: Cursor renderer.log 日志监控 → AI 活动状态（ToolCall 事件、网络错误）
+  - Channel 2: DevPlan HTTP API → 任务编排状态（有无待发任务、阶段进度等）
+  - Channel 3: 屏幕截图 + Ollama gemma3:27b 视觉 AI → UI 运行时状态（8 态分类）
 
-决策矩阵（5 状态版：CONNECTION_ERROR / PROVIDER_ERROR / RESPONSE_STALL / IDLE / UNKNOWN）：
+决策矩阵（8 状态版 + 差异化恢复策略）：
 
-| DevPlan 状态            | UI 状态              | 屏幕变化      | 联合判断      | 执行动作            |
-|------------------------|---------------------|-------------|--------------|-------------------|
-| send_task（有待发任务）  | IDLE / UNKNOWN      | 无变化       | 可发送任务    | 发送子任务内容       |
-| send_task              | IDLE / UNKNOWN      | 有变化       | AI 可能在忙  | 等待               |
-| send_task              | CONNECTION_ERROR    | 任意         | 连接错误     | 发送"请继续"恢复    |
-| send_task              | PROVIDER_ERROR      | 任意         | Provider错误 | 发送"请继续"恢复    |
-| send_task              | RESPONSE_STALL     | 任意         | 响应中断     | 发送"请继续"唤醒    |
-| wait（任务进行中）       | IDLE / UNKNOWN      | 有变化       | AI 在工作    | 继续等待           |
-| wait                   | IDLE / UNKNOWN      | 无变化       | AI 可能已停  | 尝试唤醒           |
-| wait                   | CONNECTION_ERROR    | 任意         | 连接错误     | 发送"请继续"恢复    |
-| wait                   | PROVIDER_ERROR      | 任意         | Provider错误 | 发送"请继续"恢复    |
-| wait                   | RESPONSE_STALL     | 任意         | 响应中断     | 发送"请继续"唤醒    |
-| start_phase            | 任意                | 任意         | 启动新阶段    | 调用 start_phase   |
-| all_done               | 任意                | 任意         | 全部完成      | 停止自动化          |
-| 任意（非 all_done）      | 任意               | 右下角3分钟无变化 | 兜底唤醒   | 发送"请继续"        |
+| UI 状态              | 恢复动作              | 说明                          |
+|---------------------|----------------------|------------------------------|
+| AI_GENERATING       | WAIT                 | AI 在工作，跳过                |
+| CONNECTION_ERROR    | SEND_CONTINUE        | 连接错误，发"请继续"            |
+| PROVIDER_ERROR      | SEND_CONTINUE        | Provider 错误，发"请继续"       |
+| CONTEXT_OVERFLOW    | NEW_CONVERSATION     | 上下文溢出，Ctrl+L 开新对话恢复  |
+| RATE_LIMIT          | WAIT_COOLDOWN(60s)   | 限流，等冷却期                  |
+| API_TIMEOUT         | SEND_CONTINUE        | API 超时，即时重试              |
+| RESPONSE_INTERRUPTED| SEND_CONTINUE        | 响应被截断，发"请继续"           |
+| RESPONSE_STALL      | SEND_CONTINUE/升级    | 累积型中断，N 次无效→开新对话     |
+| IDLE + 无变化        | SEND_TASK/唤醒        | 空闲，发新任务或唤醒             |
 """
 
 from __future__ import annotations
@@ -48,6 +45,8 @@ class Action(str, Enum):
     WAIT = "wait"                         # 等待，本轮不操作
     ALL_DONE = "all_done"                 # 全部完成，停止
     ERROR_RECOVERY = "error_recovery"     # 错误恢复
+    NEW_CONVERSATION = "new_conversation" # 开新对话（上下文溢出时 Ctrl+L）
+    WAIT_COOLDOWN = "wait_cooldown"       # 等待冷却期（限流时）
 
 
 @dataclass
@@ -60,6 +59,8 @@ class Decision:
     task_id: Optional[str] = None
     # start_phase 时携带的阶段 ID
     phase_id: Optional[str] = None
+    # wait_cooldown 时的等待秒数
+    cooldown_seconds: int = 0
 
 
 # ── 状态追踪器 ───────────────────────────────────────────────
@@ -80,6 +81,8 @@ class StateTracker:
     last_devplan_action: str = ""
     # 上次 UI 状态
     last_ui_status: str = ""
+    # RESPONSE_STALL 连续无效 continue 发送次数（用于升级到 CONTEXT_OVERFLOW）
+    stall_continue_count: int = 0
 
     def increment_status(self, status: str) -> int:
         """
@@ -138,13 +141,21 @@ class DualChannelEngine:
         min_send_interval: float = 5.0,
         max_continue_retries: int = 5,
         auto_start_next_phase: bool = True,
-        fallback_no_change_timeout: int = 180,
+        fallback_no_change_timeout: int = 90,
+        rate_limit_wait: int = 60,
+        api_timeout_wait: int = 5,
+        context_overflow_wait: int = 3,
+        stall_escalate_threshold: int = 3,
     ):
         self.threshold = status_trigger_threshold
         self.min_send_interval = min_send_interval
         self.max_continue_retries = max_continue_retries
         self.auto_start_next_phase = auto_start_next_phase
         self.fallback_no_change_timeout = fallback_no_change_timeout
+        self.rate_limit_wait = rate_limit_wait
+        self.api_timeout_wait = api_timeout_wait
+        self.context_overflow_wait = context_overflow_wait
+        self.stall_escalate_threshold = stall_escalate_threshold
         self.tracker = StateTracker()
 
     def decide(
@@ -233,19 +244,31 @@ class DualChannelEngine:
         ui_status: UIStatus,
         screen_changing: bool,
     ) -> Decision:
-        """DevPlan 说"有待发任务"时的决策（5 状态版）
+        """DevPlan 说"有待发任务"时的决策（8 状态版）
 
-        判断逻辑：
-        1. CONNECTION_ERROR → 发送"请继续"恢复连接
-        2. PROVIDER_ERROR → 发送"请继续"恢复
-        3. RESPONSE_STALL → 发送"请继续"唤醒 AI
-        4. 屏幕有变化 → AI 可能在忙，等待
-        5. 屏幕无变化 + IDLE/UNKNOWN → 发送新任务
+        判断逻辑（按优先级）：
+        1. AI_GENERATING → AI 正在工作，等待
+        2. CONNECTION_ERROR → 发送"请继续"恢复连接
+        3. PROVIDER_ERROR → 发送"请继续"恢复
+        4. CONTEXT_OVERFLOW → 开新对话 (Ctrl+L) + 恢复 prompt
+        5. RATE_LIMIT → 等待冷却期
+        6. API_TIMEOUT → 即时重试
+        7. RESPONSE_INTERRUPTED → 发送"请继续"
+        8. RESPONSE_STALL → 发送"请继续"唤醒，连续无效→升级
+        9. 屏幕有变化 → AI 可能在忙，等待
+        10. 屏幕无变化 + IDLE/UNKNOWN → 发送新任务
         """
         sub_task = devplan_data.get("subTask", {})
         task_id = sub_task.get("taskId", "")
         title = sub_task.get("title", "")
         description = sub_task.get("description", "")
+
+        # AI 正在生成 → 等待
+        if ui_status == UIStatus.AI_GENERATING:
+            return Decision(
+                action=Action.WAIT,
+                message=f"DevPlan 有待发任务 {task_id}，AI 正在生成中，等待",
+            )
 
         # 连接错误 → 尝试恢复
         if ui_status == UIStatus.CONNECTION_ERROR:
@@ -259,11 +282,33 @@ class DualChannelEngine:
                 f"DevPlan 有待发任务 {task_id}，但 UI 检测到 Provider Error，尝试恢复"
             )
 
-        # 响应中断 → 尝试唤醒
-        if ui_status == UIStatus.RESPONSE_STALL:
-            return self._maybe_send_continue(
-                f"DevPlan 有待发任务 {task_id}，但 UI 响应中断（屏幕长时间无变化），尝试唤醒"
+        # 上下文溢出 → 开新对话
+        if ui_status == UIStatus.CONTEXT_OVERFLOW:
+            return self._handle_context_overflow(devplan_data, task_id)
+
+        # 限流 → 等待冷却
+        if ui_status == UIStatus.RATE_LIMIT:
+            return Decision(
+                action=Action.WAIT_COOLDOWN,
+                message=f"DevPlan 有待发任务 {task_id}，但检测到限流，等待 {self.rate_limit_wait} 秒",
+                cooldown_seconds=self.rate_limit_wait,
             )
+
+        # API 超时 → 即时重试
+        if ui_status == UIStatus.API_TIMEOUT:
+            return self._maybe_send_continue(
+                f"DevPlan 有待发任务 {task_id}，API 超时，即时重试"
+            )
+
+        # 响应被中断 → 发送"请继续"
+        if ui_status == UIStatus.RESPONSE_INTERRUPTED:
+            return self._maybe_send_continue(
+                f"DevPlan 有待发任务 {task_id}，AI 响应被中断，发送继续"
+            )
+
+        # 响应中断（累积型）→ 唤醒，多次无效则升级
+        if ui_status == UIStatus.RESPONSE_STALL:
+            return self._handle_response_stall(devplan_data, task_id)
 
         # 屏幕有变化 → AI 可能正在工作，等一等
         if screen_changing:
@@ -290,15 +335,27 @@ class DualChannelEngine:
     ) -> Decision:
         """DevPlan 说"等待中（AI 正在工作）"时的决策（5 状态版）
 
-        判断逻辑：
-        1. CONNECTION_ERROR → 发送"请继续"恢复连接
-        2. PROVIDER_ERROR → 发送"请继续"恢复
-        3. RESPONSE_STALL → 发送"请继续"唤醒 AI
-        4. 屏幕有变化 → AI 正在工作，继续等待
-        5. 屏幕无变化 → AI 可能已停止，尝试唤醒
+        判断逻辑（8 状态版）：
+        1. AI_GENERATING → AI 正在工作，等待
+        2. CONNECTION_ERROR → 发送"请继续"恢复连接
+        3. PROVIDER_ERROR → 发送"请继续"恢复
+        4. CONTEXT_OVERFLOW → 开新对话 + 恢复
+        5. RATE_LIMIT → 等待冷却
+        6. API_TIMEOUT → 即时重试
+        7. RESPONSE_INTERRUPTED → 发送"请继续"
+        8. RESPONSE_STALL → 唤醒，连续无效→升级
+        9. 屏幕有变化 → AI 正在工作，继续等待
+        10. 屏幕无变化 → AI 可能已停止，尝试唤醒
         """
         sub_task = devplan_data.get("subTask", {})
         task_id = sub_task.get("taskId", "")
+
+        # AI 正在生成 → 等待
+        if ui_status == UIStatus.AI_GENERATING:
+            return Decision(
+                action=Action.WAIT,
+                message=f"{task_id} 执行中，AI 正在生成，继续等待",
+            )
 
         # 连接错误 → 尝试恢复
         if ui_status == UIStatus.CONNECTION_ERROR:
@@ -312,11 +369,33 @@ class DualChannelEngine:
                 f"{task_id} 执行中但 UI 检测到 Provider Error，尝试恢复"
             )
 
-        # 响应中断 → 尝试唤醒
-        if ui_status == UIStatus.RESPONSE_STALL:
-            return self._maybe_send_continue(
-                f"{task_id} 执行中但 UI 响应中断（屏幕长时间无变化），尝试唤醒"
+        # 上下文溢出 → 开新对话
+        if ui_status == UIStatus.CONTEXT_OVERFLOW:
+            return self._handle_context_overflow(devplan_data, task_id)
+
+        # 限流 → 等待冷却
+        if ui_status == UIStatus.RATE_LIMIT:
+            return Decision(
+                action=Action.WAIT_COOLDOWN,
+                message=f"{task_id} 执行中但检测到限流，等待 {self.rate_limit_wait} 秒",
+                cooldown_seconds=self.rate_limit_wait,
             )
+
+        # API 超时 → 即时重试
+        if ui_status == UIStatus.API_TIMEOUT:
+            return self._maybe_send_continue(
+                f"{task_id} 执行中，API 超时，即时重试"
+            )
+
+        # 响应被中断 → 发送"请继续"
+        if ui_status == UIStatus.RESPONSE_INTERRUPTED:
+            return self._maybe_send_continue(
+                f"{task_id} 执行中，AI 响应被中断，发送继续"
+            )
+
+        # 响应中断（累积型）→ 唤醒，多次无效则升级
+        if ui_status == UIStatus.RESPONSE_STALL:
+            return self._handle_response_stall(devplan_data, task_id)
 
         # 屏幕有变化 → AI 正在工作（代替原 WORKING / TERMINAL_RUNNING 判断）
         if screen_changing:
@@ -384,6 +463,67 @@ class DualChannelEngine:
 
     # ── 辅助方法 ─────────────────────────────────────────────
 
+    def _handle_context_overflow(self, devplan_data: dict, task_id: str) -> Decision:
+        """
+        处理上下文溢出：需要开新对话。
+
+        策略：
+        1. Ctrl+L 开新对话
+        2. 构建恢复 prompt，包含当前任务上下文
+        3. 重置所有状态计数
+        """
+        logger.warning("🔴 检测到上下文溢出 (CONTEXT_OVERFLOW)，准备开新对话恢复")
+
+        # 构建恢复 prompt
+        sub_task = devplan_data.get("subTask", {})
+        phase = devplan_data.get("phase", {})
+        phase_id = phase.get("taskId", "")
+        phase_title = phase.get("title", "")
+        sub_title = sub_task.get("title", "")
+        sub_desc = sub_task.get("description", "")
+
+        # 恢复 prompt 告诉新对话从哪里继续
+        restore_prompt = f"请继续 {phase_id} 的开发任务。"
+        if task_id:
+            restore_prompt += f"\n当前子任务: {task_id} — {sub_title}"
+        if sub_desc:
+            restore_prompt += f"\n任务描述: {sub_desc}"
+        restore_prompt += "\n\n上下文过长导致中断，请使用 devplan 工具查询任务状态后继续开发。"
+
+        self.tracker.reset_all()
+        return Decision(
+            action=Action.NEW_CONVERSATION,
+            message=f"上下文溢出，开新对话恢复 {task_id}",
+            task_content=restore_prompt,
+            task_id=task_id,
+            cooldown_seconds=self.context_overflow_wait,
+        )
+
+    def _handle_response_stall(self, devplan_data: dict, task_id: str) -> Decision:
+        """
+        处理 RESPONSE_STALL：累积型中断检测。
+
+        策略：
+        1. 先发送"请继续"尝试唤醒
+        2. 连续 stall_escalate_threshold 次无效后，升级为 CONTEXT_OVERFLOW 策略
+        """
+        self.tracker.stall_continue_count += 1
+
+        # 检查是否需要升级
+        if self.tracker.stall_continue_count >= self.stall_escalate_threshold:
+            logger.warning(
+                "🔴 RESPONSE_STALL 连续 %d 次无效（阈值 %d），升级为 CONTEXT_OVERFLOW 策略",
+                self.tracker.stall_continue_count,
+                self.stall_escalate_threshold,
+            )
+            self.tracker.stall_continue_count = 0
+            return self._handle_context_overflow(devplan_data, task_id)
+
+        # 常规处理：发送"请继续"
+        return self._maybe_send_continue(
+            f"{task_id} 响应中断（STALL {self.tracker.stall_continue_count}/{self.stall_escalate_threshold}），尝试唤醒"
+        )
+
     def _maybe_send_continue(self, message: str) -> Decision:
         """
         带防抖和重试上限的"发送继续"判断。
@@ -435,9 +575,14 @@ class DualChannelEngine:
 
     def reset_continue_retries(self) -> None:
         """
-        当检测到 AI 恢复活动时重置重试计数。
+        当检测到 AI 恢复活动时重置重试计数和 stall 升级计数。
         应在主循环检测到屏幕从无变化变为有变化时调用。
         """
-        if self.tracker.continue_retries > 0:
-            logger.info("AI 已恢复活动，重置 continue 重试计数（之前: %d）", self.tracker.continue_retries)
+        if self.tracker.continue_retries > 0 or self.tracker.stall_continue_count > 0:
+            logger.info(
+                "AI 已恢复活动，重置计数（continue: %d, stall: %d）",
+                self.tracker.continue_retries,
+                self.tracker.stall_continue_count,
+            )
         self.tracker.continue_retries = 0
+        self.tracker.stall_continue_count = 0

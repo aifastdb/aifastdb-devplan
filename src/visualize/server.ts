@@ -527,10 +527,164 @@ function startServer(projectName: string, basePath: string, port: number): void 
               content: saveBody.content || '',
               tags: saveBody.tags || [],
               relatedTaskId: saveBody.relatedTaskId || undefined,
+              sourceId: saveBody.sourceId || undefined,
               importance: saveBody.importance ?? 0.5,
             });
             res.writeHead(200, { 'Content-Type': 'application/json; charset=utf-8' });
             res.end(JSON.stringify({ status: 'saved', memory: saved }));
+          } catch (e: any) {
+            res.writeHead(500, { 'Content-Type': 'application/json; charset=utf-8' });
+            res.end(JSON.stringify({ error: e.message || String(e) }));
+          }
+          break;
+        }
+
+        case '/api/memories/relate': {
+          // Phase-44: 建立记忆间关系（POST）
+          if (req.method !== 'POST') {
+            res.writeHead(405, { 'Content-Type': 'application/json; charset=utf-8' });
+            res.end(JSON.stringify({ error: 'Method Not Allowed. Use POST.' }));
+            break;
+          }
+          const relBody = await readRequestBody(req);
+          const relStore = createFreshStore(projectName, basePath);
+          try {
+            // 使用 graph 的 put_relation 或 applyMutations 建立关系
+            const graph = (relStore as any).graph;
+            if (!graph) {
+              res.writeHead(400, { 'Content-Type': 'application/json; charset=utf-8' });
+              res.end(JSON.stringify({ error: 'Graph engine not available' }));
+              break;
+            }
+            const fromId = relBody.fromId;
+            const toId = relBody.toId;
+            const relationType = relBody.relationType || 'MEMORY_RELATES';
+            const weight = relBody.weight ?? 0.5;
+
+            // 尝试使用 applyMutations (Phase-44)，回退到 putRelation
+            if (typeof graph.applyMutations === 'function') {
+              graph.applyMutations([{
+                type: 'PutRelation',
+                relation: {
+                  source_id: fromId,
+                  target_id: toId,
+                  relation_type: relationType,
+                  weight: weight,
+                }
+              }]);
+            } else if (typeof graph.putRelation === 'function') {
+              graph.putRelation({
+                source_id: fromId,
+                target_id: toId,
+                relation_type: relationType,
+                weight: weight,
+              });
+            } else {
+              res.writeHead(400, { 'Content-Type': 'application/json; charset=utf-8' });
+              res.end(JSON.stringify({ error: 'No relation creation method available' }));
+              break;
+            }
+            res.writeHead(200, { 'Content-Type': 'application/json; charset=utf-8' });
+            res.end(JSON.stringify({ status: 'created', from: fromId, to: toId, relationType, weight }));
+          } catch (e: any) {
+            res.writeHead(500, { 'Content-Type': 'application/json; charset=utf-8' });
+            res.end(JSON.stringify({ error: e.message || String(e) }));
+          }
+          break;
+        }
+
+        case '/api/memories/clear': {
+          // 批量清除所有记忆（POST）
+          if (req.method !== 'POST') {
+            res.writeHead(405, { 'Content-Type': 'application/json; charset=utf-8' });
+            res.end(JSON.stringify({ error: 'Method Not Allowed. Use POST.' }));
+            break;
+          }
+          const clearBody = await readRequestBody(req);
+          if (clearBody.confirm !== true) {
+            res.writeHead(400, { 'Content-Type': 'application/json; charset=utf-8' });
+            res.end(JSON.stringify({ error: 'Safety guard: confirm must be true' }));
+            break;
+          }
+          const clearStore = createFreshStore(projectName, basePath);
+          if (typeof (clearStore as any).clearAllMemories !== 'function') {
+            res.writeHead(400, { 'Content-Type': 'application/json; charset=utf-8' });
+            res.end(JSON.stringify({ error: 'clearAllMemories not supported (requires graph engine)' }));
+            break;
+          }
+          try {
+            const clearResult = (clearStore as any).clearAllMemories(clearBody.memoryType || undefined);
+            res.writeHead(200, { 'Content-Type': 'application/json; charset=utf-8' });
+            res.end(JSON.stringify({ status: 'cleared', ...clearResult, memoryType: clearBody.memoryType || 'all' }));
+          } catch (e: any) {
+            res.writeHead(500, { 'Content-Type': 'application/json; charset=utf-8' });
+            res.end(JSON.stringify({ error: e.message || String(e) }));
+          }
+          break;
+        }
+
+        case '/api/memories/graph': {
+          // 导出仅记忆相关的图数据（用于记忆页面 3D 可视化）
+          const memGraphStore = createFreshStore(projectName, basePath);
+          if (!memGraphStore.exportGraph) {
+            res.writeHead(400, { 'Content-Type': 'application/json; charset=utf-8' });
+            res.end(JSON.stringify({ error: 'exportGraph not supported (requires graph engine)' }));
+            break;
+          }
+          try {
+            // 导出完整图（含记忆），然后过滤出记忆相关节点和边
+            const fullGraph = memGraphStore.exportGraph({
+              includeDocuments: true,
+              includeModules: true,
+              includeNodeDegree: false,
+              enableBackendDegreeFallback: false,
+              includePrompts: false,
+            });
+            if (!fullGraph) {
+              res.writeHead(500, { 'Content-Type': 'application/json; charset=utf-8' });
+              res.end(JSON.stringify({ error: 'exportGraph returned null' }));
+              break;
+            }
+            // 收集记忆节点 ID
+            const memoryNodeIds = new Set<string>();
+            const memoryNodes: any[] = [];
+            const contextNodes: any[] = [];
+            const contextNodeIds = new Set<string>();
+
+            for (const node of fullGraph.nodes) {
+              if (node.type === 'memory') {
+                memoryNodeIds.add(node.id);
+                memoryNodes.push(node);
+              }
+            }
+
+            // 收集与记忆相关的边和上下文节点（任务、文档、模块）
+            const memEdges: any[] = [];
+            for (const edge of fullGraph.edges) {
+              const fromIsMem = memoryNodeIds.has(edge.from);
+              const toIsMem = memoryNodeIds.has(edge.to);
+              if (fromIsMem || toIsMem) {
+                memEdges.push(edge);
+                // 添加非记忆端的上下文节点
+                const otherId = fromIsMem ? edge.to : edge.from;
+                if (!memoryNodeIds.has(otherId) && !contextNodeIds.has(otherId)) {
+                  contextNodeIds.add(otherId);
+                  const ctxNode = fullGraph.nodes.find((n: any) => n.id === otherId);
+                  if (ctxNode) contextNodes.push(ctxNode);
+                }
+              }
+            }
+
+            res.writeHead(200, { 'Content-Type': 'application/json; charset=utf-8' });
+            res.end(JSON.stringify({
+              nodes: [...memoryNodes, ...contextNodes],
+              edges: memEdges,
+              stats: {
+                memoryCount: memoryNodes.length,
+                contextCount: contextNodes.length,
+                edgeCount: memEdges.length,
+              },
+            }));
           } catch (e: any) {
             res.writeHead(500, { 'Content-Type': 'application/json; charset=utf-8' });
             res.end(JSON.stringify({ error: e.message || String(e) }));

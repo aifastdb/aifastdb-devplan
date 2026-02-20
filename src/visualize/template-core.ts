@@ -203,7 +203,8 @@ var NODE_COLORS_DEFAULTS = {
   colorModule: '#ff6600',
   colorMainTask: '#22c55e',
   colorSubTask: '#047857',
-  colorDocument: '#3b82f6'
+  colorDocument: '#3b82f6',
+  colorMemory: '#e879f9'
 };
 
 function getNodeColors() {
@@ -234,18 +235,18 @@ function saveNodeColors(colors) {
 }
 
 function updateNodeColor(nodeType, colorValue) {
-  var keyMap = { 'project': 'colorProject', 'module': 'colorModule', 'main-task': 'colorMainTask', 'sub-task': 'colorSubTask', 'document': 'colorDocument' };
+  var keyMap = { 'project': 'colorProject', 'module': 'colorModule', 'main-task': 'colorMainTask', 'sub-task': 'colorSubTask', 'document': 'colorDocument', 'memory': 'colorMemory' };
   var key = keyMap[nodeType];
   if (!key) return;
   var colors = getNodeColors();
   colors[key] = colorValue;
   saveNodeColors(colors);
   // Update hex display
-  var hexMap = { 'project': 'ncColorProjectHex', 'module': 'ncColorModuleHex', 'main-task': 'ncColorMainTaskHex', 'sub-task': 'ncColorSubTaskHex', 'document': 'ncColorDocumentHex' };
+  var hexMap = { 'project': 'ncColorProjectHex', 'module': 'ncColorModuleHex', 'main-task': 'ncColorMainTaskHex', 'sub-task': 'ncColorSubTaskHex', 'document': 'ncColorDocumentHex', 'memory': 'ncColorMemoryHex' };
   var hexEl = document.getElementById(hexMap[nodeType]);
   if (hexEl) hexEl.textContent = colorValue;
   // Update dot color
-  var dotMap = { 'project': 'ncColorProject', 'module': 'ncColorModule', 'main-task': 'ncColorMainTask', 'sub-task': 'ncColorSubTask', 'document': 'ncColorDocument' };
+  var dotMap = { 'project': 'ncColorProject', 'module': 'ncColorModule', 'main-task': 'ncColorMainTask', 'sub-task': 'ncColorSubTask', 'document': 'ncColorDocument', 'memory': 'ncColorMemory' };
   var input = document.getElementById(dotMap[nodeType]);
   if (input) {
     var dot = input.parentElement.querySelector('.s3d-dot');
@@ -275,6 +276,8 @@ function getUnifiedNodeStyle() {
       'in_progress': { bg: '#7c3aed', border: '#6d28d9', font: '#ddd6fe' },
       'cancelled':   { bg: '#92400e', border: '#78350f', font: '#fde68a' }
     },
+    // 记忆节点: 紫粉色系
+    memory: { bg: nc.colorMemory, border: darkenHex(nc.colorMemory, 0.15), font: '#fdf4ff' },
     // 通用状态颜色 (用于状态饼图等)
     statusGeneric: {
       completed:   { bg: '#059669', border: '#047857', font: '#d1fae5' },
@@ -292,7 +295,8 @@ function initNodeColorsUI() {
     'ncColorModule': 'colorModule',
     'ncColorMainTask': 'colorMainTask',
     'ncColorSubTask': 'colorSubTask',
-    'ncColorDocument': 'colorDocument'
+    'ncColorDocument': 'colorDocument',
+    'ncColorMemory': 'colorMemory'
   };
   for (var id in colorMap) {
     var el = document.getElementById(id);
@@ -337,6 +341,7 @@ var S3D_DEFAULTS = {
   sizeMainTask: 15,
   sizeSubTask: 8,
   sizeDocument: 10,
+  sizeMemory: 8,
   particles: true,
   arrows: false,
   nodeOpacity: 0.90,

@@ -278,6 +278,28 @@ class CursorController:
         """发送"请继续"指令"""
         return self.send_text(self.config.continue_command)
 
+    def new_conversation(self) -> SendResult:
+        """
+        开启新对话（Ctrl+L），用于上下文溢出时的恢复。
+
+        Returns:
+            SendResult 操作结果
+        """
+        if not self._available:
+            return SendResult(success=False, message="GUI 不可用")
+        try:
+            # 先激活 Cursor 窗口
+            self.activate_window()
+            time.sleep(0.3)
+            # Ctrl+L 开新对话
+            self._pyautogui.hotkey("ctrl", "l")
+            time.sleep(1.0)  # 等待新对话界面加载
+            logger.info("已发送 Ctrl+L 开新对话")
+            return SendResult(success=True, message="新对话已开启")
+        except Exception as e:
+            logger.error("开新对话失败: %s", e)
+            return SendResult(success=False, message=str(e))
+
     def send_task(self, task_content: str) -> SendResult:
         """
         发送新任务（清除输入框后发送）。

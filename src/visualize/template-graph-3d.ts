@@ -17,7 +17,8 @@ function load3DColorsFromSettings() {
     'module':    nc.colorModule,
     'main-task': nc.colorMainTask,
     'sub-task':  nc.colorSubTask,
-    'document':  nc.colorDocument
+    'document':  nc.colorDocument,
+    'memory':    nc.colorMemory
   };
 }
 function load3DSizesFromSettings() {
@@ -27,7 +28,8 @@ function load3DSizesFromSettings() {
     'module':    s.sizeModule,
     'main-task': s.sizeMainTask,
     'sub-task':  s.sizeSubTask,
-    'document':  s.sizeDocument
+    'document':  s.sizeDocument,
+    'memory':    s.sizeMemory || 8
   };
 }
 var NODE_3D_COLORS = load3DColorsFromSettings();

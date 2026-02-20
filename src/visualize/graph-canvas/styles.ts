@@ -36,6 +36,7 @@ function StyleManager() {
     'main-task': { min: 14, max: 38, baseFont: 11, maxFont: 15, scale: 2.2 },
     'sub-task':  { min: 7,  max: 18, baseFont: 8,  maxFont: 11, scale: 1.5 },
     'document':  { min: 12, max: 30, baseFont: 9,  maxFont: 13, scale: 1.8 },
+    'memory':    { min: 6,  max: 20, baseFont: 7,  maxFont: 11, scale: 1.2 },
   };
 
   // Node type shapes
@@ -45,6 +46,7 @@ function StyleManager() {
     'main-task': 'circle',
     'sub-task': 'circle',
     'document': 'box',
+    'memory': 'hexagon',
   };
 
   // Node type colors (for non-status-based types) — 从统一配置读取
@@ -52,10 +54,12 @@ function StyleManager() {
     'project': _uni.project,
     'module':  _uni.module,
     'document': _uni.document,
+    'memory':  _uni.memory,
   } : {
     'project': { bg: '#f59e0b', border: '#d97706', font: '#fff' },
     'module':  { bg: '#ff6600', border: '#cc5200', font: '#fff3e0' },
     'document': { bg: '#2563eb', border: '#1d4ed8', font: '#dbeafe' },
+    'memory':  { bg: '#e879f9', border: '#a21caf', font: '#fdf4ff' },
   };
 
   // Edge styles by label
@@ -66,6 +70,12 @@ function StyleManager() {
     'module_has_task':{ width: 1.5, color: '#4b5563', highlightColor: '#ff8533', dashes: [2, 4], arrows: true },
     'task_has_doc':   { width: 1.5, color: '#4b5563', highlightColor: '#f59e0b', dashes: [4, 3], arrows: true },
     'doc_has_child':  { width: 1.5, color: '#4b5563', highlightColor: '#c084fc', dashes: [6, 3], arrows: true },
+    'has_memory':     { width: 1, color: '#581c87', highlightColor: '#e879f9', dashes: [3, 3], arrows: true },
+    'memory_relates': { width: 1.5, color: '#86198f', highlightColor: '#f0abfc', dashes: null, arrows: false },
+    'memory_from_task':{ width: 1, color: '#581c87', highlightColor: '#c084fc', dashes: [4, 2], arrows: true },
+    'memory_from_doc':{ width: 1, color: '#581c87', highlightColor: '#a78bfa', dashes: [2, 3], arrows: true },
+    'module_memory':  { width: 1, color: '#581c87', highlightColor: '#d946ef', dashes: [3, 2], arrows: true },
+    'memory_supersedes':{ width: 1, color: '#701a75', highlightColor: '#f472b6', dashes: [6, 2], arrows: true },
   };
 
   this.EDGE_DEFAULT = { width: 1, color: '#4b5563', highlightColor: '#9ca3af', dashes: null, arrows: false };

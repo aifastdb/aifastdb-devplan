@@ -174,6 +174,12 @@ export function getMdViewerStyles(): string {
       .docs-toc-panel { display: none !important; }
     }
 
+    /* Mermaid diagram container */
+    .mermaid-container { margin: 16px 0; padding: 20px; background: #1a1f2e; border: 1px solid #334155; border-radius: 8px; overflow-x: auto; text-align: center; }
+    .mermaid-container svg { max-width: 100%; height: auto; }
+    .mermaid-container .mermaid-label { display: block; margin-bottom: 8px; font-size: 11px; color: #6b7280; text-align: right; }
+    .mermaid-error { margin: 16px 0; padding: 12px 16px; background: rgba(239,68,68,0.08); border: 1px solid rgba(239,68,68,0.3); border-radius: 8px; color: #f87171; font-size: 13px; white-space: pre-wrap; }
+
     /* Print */
     @media print {
       .mdv-toolbar,.mdv-toc-panel,.mdv-back-to-top,.mdv-home,.mdv-progress,.mdv-stats { display: none !important; }
@@ -219,6 +225,7 @@ export function getMdViewerPageHTML(): string {
             </div>
             <button class="mdv-btn" id="mdvTocToggle" style="display:none;" onclick="mdvToggleToc()">📑 目录</button>
             <button class="mdv-btn" id="mdvPrintBtn" style="display:none;" onclick="window.print()">🖨️ 打印</button>
+            <button class="mdv-btn" id="mdvSaveBtn" style="display:none;" onclick="mdvSaveMd()">💾 保存</button>
             <button class="mdv-btn" id="mdvBackBtn" style="display:none;" onclick="mdvGoHome()">← 返回</button>
             <button class="mdv-btn mdv-btn-primary" onclick="document.getElementById('mdvFileInput').click()">📂 打开</button>
           </div>
@@ -291,6 +298,8 @@ var mdvCdnLoading = false;
 var mdvTocVisible = false;
 var mdvSearchTimeout = null;
 var mdvInited = false;
+var _mdvRawMarkdown = '';
+var _mdvFileName = '';
 
 /** 页面入口 — 由 navTo('md-viewer') 调用 */
 function loadMdViewerPage() {
@@ -310,6 +319,11 @@ var MDV_HLJS_URLS = [
   'https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.9.0/highlight.min.js',
   'https://cdn.jsdelivr.net/npm/highlight.js@11.9.0/lib/highlight.min.js'
 ];
+var MDV_MERMAID_URLS = [
+  'https://cdn.jsdelivr.net/npm/mermaid@11/dist/mermaid.min.js',
+  'https://unpkg.com/mermaid@11/dist/mermaid.min.js'
+];
+var mdvMermaidReady = false;
 
 function mdvLoadCDN() {
   if (mdvCdnLoaded || mdvCdnLoading) return;
@@ -322,17 +336,47 @@ function mdvLoadCDN() {
       marked.setOptions({ gfm: true, breaks: false });
     }
     mdvLoadScript(MDV_HLJS_URLS, 0, function(hljsOk) {
-      mdvCdnLoaded = true;
-      mdvCdnLoading = false;
-      if (statusEl) {
-        if (markedOk) {
-          statusEl.textContent = '✅ marked' + (hljsOk ? ' + hljs' : '');
-          statusEl.className = 'mdv-cdn-status loaded';
-        } else {
-          statusEl.textContent = '⚠️ CDN 加载失败，使用简易渲染';
-          statusEl.className = 'mdv-cdn-status failed';
+      mdvLoadScript(MDV_MERMAID_URLS, 0, function(mermaidOk) {
+        if (mermaidOk && typeof mermaid !== 'undefined') {
+          try {
+            mermaid.initialize({
+              startOnLoad: false,
+              theme: 'dark',
+              themeVariables: {
+                darkMode: true,
+                background: '#1a1f2e',
+                primaryColor: '#4f46e5',
+                primaryTextColor: '#e6edf3',
+                primaryBorderColor: '#6366f1',
+                lineColor: '#6b7280',
+                secondaryColor: '#1e293b',
+                tertiaryColor: '#334155',
+                fontFamily: '-apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif',
+                fontSize: '14px'
+              },
+              securityLevel: 'loose',
+              flowchart: { useMaxWidth: true, htmlLabels: true, curve: 'basis' },
+              sequence: { useMaxWidth: true },
+              gantt: { useMaxWidth: true }
+            });
+            mdvMermaidReady = true;
+          } catch(e) { console.warn('mermaid init error:', e); }
         }
-      }
+        mdvCdnLoaded = true;
+        mdvCdnLoading = false;
+        if (statusEl) {
+          if (markedOk) {
+            var extra = [];
+            if (hljsOk) extra.push('hljs');
+            if (mermaidOk) extra.push('mermaid');
+            statusEl.textContent = '✅ marked' + (extra.length ? ' + ' + extra.join(' + ') : '');
+            statusEl.className = 'mdv-cdn-status loaded';
+          } else {
+            statusEl.textContent = '⚠️ CDN 加载失败，使用简易渲染';
+            statusEl.className = 'mdv-cdn-status failed';
+          }
+        }
+      });
     });
   });
 }
@@ -421,6 +465,64 @@ function mdEnhanceContent(container) {
     table.parentNode.insertBefore(wrapper, table);
     wrapper.appendChild(table);
   }
+
+  // 4. Mermaid diagram rendering
+  mdvRenderMermaidBlocks(container);
+}
+
+var _mdvMermaidCounter = 0;
+
+function mdvRenderMermaidBlocks(container) {
+  if (!container) return;
+  if (!mdvMermaidReady || typeof mermaid === 'undefined') return;
+
+  // Find all <pre><code class="language-mermaid"> blocks
+  var codeBlocks = container.querySelectorAll('pre code.language-mermaid');
+  var pending = [];
+  for (var i = 0; i < codeBlocks.length; i++) {
+    pending.push(codeBlocks[i]);
+  }
+
+  // Also check for <code class="mermaid"> (some marked versions)
+  var altBlocks = container.querySelectorAll('pre code.mermaid');
+  for (var i = 0; i < altBlocks.length; i++) {
+    if (pending.indexOf(altBlocks[i]) === -1) pending.push(altBlocks[i]);
+  }
+
+  if (pending.length === 0) return;
+
+  for (var i = 0; i < pending.length; i++) {
+    (function(codeEl) {
+      var pre = codeEl.parentElement;
+      if (!pre || pre.tagName !== 'PRE') return;
+      // Skip if already rendered
+      if (pre.dataset.mermaidRendered) return;
+      pre.dataset.mermaidRendered = '1';
+
+      var source = codeEl.textContent || '';
+      if (!source.trim()) return;
+
+      var containerId = 'mermaid-graph-' + (++_mdvMermaidCounter);
+      var wrapper = document.createElement('div');
+      wrapper.className = 'mermaid-container';
+      wrapper.id = containerId + '-wrap';
+
+      try {
+        mermaid.render(containerId, source.trim()).then(function(result) {
+          wrapper.innerHTML = '<span class="mermaid-label">mermaid</span>' + result.svg;
+          pre.parentNode.replaceChild(wrapper, pre);
+        }).catch(function(err) {
+          console.warn('Mermaid render error:', err);
+          var errDiv = document.createElement('div');
+          errDiv.className = 'mermaid-error';
+          errDiv.textContent = '⚠️ Mermaid 渲染失败: ' + (err.message || err);
+          pre.parentNode.insertBefore(errDiv, pre);
+        });
+      } catch(e) {
+        console.warn('Mermaid sync error:', e);
+      }
+    })(pending[i]);
+  }
 }
 
 /** MD Viewer 页面专用后处理（调用共享函数） */
@@ -436,6 +538,9 @@ function mdvRender(md, name) {
   var fileNameEl = document.getElementById('mdvFileName');
   if (!home || !result || !body) return;
 
+  _mdvRawMarkdown = md;
+  _mdvFileName = name;
+
   home.style.display = 'none';
   result.style.display = 'block';
   body.innerHTML = mdvParseMd(md);
@@ -447,7 +552,7 @@ function mdvRender(md, name) {
   mdvGenerateTOC();
 
   // Show toolbar buttons
-  var els = ['mdvTocToggle', 'mdvPrintBtn', 'mdvSearchBox', 'mdvBackBtn'];
+  var els = ['mdvTocToggle', 'mdvPrintBtn', 'mdvSearchBox', 'mdvSaveBtn', 'mdvBackBtn'];
   for (var i = 0; i < els.length; i++) {
     var el = document.getElementById(els[i]);
     if (el) el.style.display = '';
@@ -498,9 +603,12 @@ function mdvGoHome() {
   if (fileNameEl) fileNameEl.textContent = '';
   if (progressBar) progressBar.style.width = '0%';
 
+  _mdvRawMarkdown = '';
+  _mdvFileName = '';
+
   mdvShowToc(false);
 
-  var els = ['mdvTocToggle', 'mdvPrintBtn', 'mdvSearchBox', 'mdvBackBtn'];
+  var els = ['mdvTocToggle', 'mdvPrintBtn', 'mdvSearchBox', 'mdvSaveBtn', 'mdvBackBtn'];
   for (var i = 0; i < els.length; i++) {
     var el = document.getElementById(els[i]);
     if (el) el.style.display = 'none';
@@ -670,6 +778,22 @@ function mdvSearch(q) {
 
   var first = body.querySelector('mark[data-mdvs]');
   if (first) first.scrollIntoView({ behavior: 'smooth', block: 'center' });
+}
+
+// ===== Save as .md =====
+function mdvSaveMd() {
+  if (!_mdvRawMarkdown) return;
+  var blob = new Blob([_mdvRawMarkdown], { type: 'text/markdown;charset=utf-8' });
+  var url = URL.createObjectURL(blob);
+  var a = document.createElement('a');
+  a.href = url;
+  var fn = _mdvFileName || 'document';
+  if (!/\\.(md|markdown)$/i.test(fn)) fn = fn.replace(/\\.[^.]+$/, '') + '.md';
+  a.download = fn;
+  document.body.appendChild(a);
+  a.click();
+  document.body.removeChild(a);
+  URL.revokeObjectURL(url);
 }
 
 // ===== Clear =====

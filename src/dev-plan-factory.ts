@@ -74,8 +74,70 @@ export interface DevPlanConfig {
   defaultProject: string;
   /** 是否启用语义搜索（graph 引擎可用时生效） */
   enableSemanticSearch?: boolean;
-  /** Embedding 向量维度（默认 384） */
+  /**
+   * Embedding 向量维度覆盖（Matryoshka 截断）
+   *
+   * 通常不需要设置 — 维度从 modelId 自动解析。
+   * 仅在需要 Matryoshka 截断时设置（如 qwen3-embedding:8b 从 4096d 截断到 1024d）。
+   *
+   * ⚠️ 初始化后不可变更，否则 HNSW 索引损坏。
+   */
   embeddingDimension?: number;
+
+  /**
+   * Phase-52: Perception 预设名称 — 快捷选择 Embedding 模型
+   *
+   * 可选值: "miniLM" | "bgeSmall" | "multilingualE5" | "embeddingGemma" |
+   *         "ollamaEmbeddingGemma" | "ollamaQwen3Embedding" | "ollamaQwen3Embedding8b" | "none"
+   * 默认 "miniLM"（sentence-transformers/all-MiniLM-L6-v2, 384d）
+   *
+   * 维度从模型自动解析，无需手动指定。
+   */
+  perceptionPreset?: string;
+
+  /**
+   * Phase-52: 完整的 Perception 配置对象（优先级高于 perceptionPreset）
+   *
+   * 维度从 modelId 自动解析，无需手动指定 dimension（除非需要 Matryoshka 截断）。
+   *
+   * 示例（本地 Candle，维度自动 384d）:
+   * ```json
+   * { "perceptionConfig": { "engineType": "candle", "modelId": "BAAI/bge-small-en-v1.5" } }
+   * ```
+   *
+   * 示例（Ollama 远程，维度自动 4096d）:
+   * ```json
+   * { "perceptionConfig": {
+   *     "engineType": "ollama",
+   *     "modelId": "qwen3-embedding:8b",
+   *     "endpoint": "http://localhost:11434/v1"
+   *   }
+   * }
+   * ```
+   */
+  perceptionConfig?: {
+    engineType?: string;
+    modelId?: string;
+    dimension?: number;
+    device?: string;
+    autoDownload?: boolean;
+    cacheDir?: string;
+    // Phase-110: Remote embedding fields
+    endpoint?: string;
+    apiKey?: string;
+    timeoutSecs?: number;
+    fallbackEngineType?: string;
+    fallbackModelId?: string;
+  };
+
+  /**
+   * Phase-52: 是否启用 Tantivy BM25 全文搜索
+   *
+   * 启用后支持三路混合搜索 (vector + BM25 + graph)。
+   * 需要 aifastdb >= 2.9.0（含 full-text-search feature）。
+   */
+  enableTextSearch?: boolean;
+
   /**
    * 多项目工作区注册表：projectName → 项目根目录路径。
    *
@@ -364,9 +426,20 @@ export function createDevPlan(
   const enableSemanticSearch = projectConfig?.enableSemanticSearch
     ?? workspaceConfig?.enableSemanticSearch
     ?? false;
+  // embeddingDimension 仅用于 Matryoshka 截断覆盖，通常为 undefined（让系统从 modelId 自动解析）
   const embeddingDimension = projectConfig?.embeddingDimension
-    ?? workspaceConfig?.embeddingDimension
-    ?? 384;
+    ?? workspaceConfig?.embeddingDimension;
+
+  // Phase-52: 读取 Perception 配置（优先项目级，其次工作区级）
+  const perceptionPreset = (projectConfig?.perceptionPreset
+    ?? workspaceConfig?.perceptionPreset) as import('./types').PerceptionPresetName | undefined;
+  const perceptionConfig = projectConfig?.perceptionConfig
+    ?? workspaceConfig?.perceptionConfig;
+
+  // Phase-52: 读取 Tantivy BM25 全文搜索配置
+  const enableTextSearch = projectConfig?.enableTextSearch
+    ?? workspaceConfig?.enableTextSearch
+    ?? false;
 
   // 推导项目根目录（用于 git 操作的 cwd）
   // base 是 .devplan 目录路径（如 D:\xxx\project\.devplan），dirname 即项目根
@@ -376,9 +449,13 @@ export function createDevPlan(
   if (resolvedEngine === 'graph') {
     return new DevPlanGraphStore(projectName, {
       graphPath: path.join(base, projectName, 'graph-data'),
-      shardCount: 5,
+      // shardCount 不再需要手动设置 — SocialGraphV2 自动从 shardNames.length 推导
+      // 分片定义集中在 shard-config.ts (Single Source of Truth)
       enableSemanticSearch,
       embeddingDimension,
+      perceptionPreset,
+      perceptionConfig,
+      enableTextSearch,
       gitCwd,
     });
   } else {

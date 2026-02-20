@@ -73,6 +73,50 @@ import {
 } from '../autopilot';
 
 // ============================================================================
+// Async Mutex — 串行化重型操作（embedding + decompose），防止并发过载崩溃
+// ============================================================================
+
+/**
+ * 简易异步互斥锁。
+ *
+ * 当 Cursor 对同一 MCP Server 并行发送多个 tool call 时，
+ * 每个 memory_save 会执行 N 次同步 NAPI embed 调用（阻塞事件循环）。
+ * 5 条并行 × 5 次 embed = 25 次连续阻塞 → Cursor 心跳超时 → 连接断开。
+ *
+ * AsyncMutex 将并发请求串行化，并在两次操作之间通过 setImmediate
+ * 让出事件循环，允许 MCP SDK 处理心跳/ping 消息，保持连接稳定。
+ */
+class AsyncMutex {
+  private queue: Array<() => void> = [];
+  private locked = false;
+
+  /** 获取锁。如锁已被占用，返回的 Promise 会挂起直到前一个操作完成。 */
+  async acquire(): Promise<void> {
+    if (!this.locked) {
+      this.locked = true;
+      return;
+    }
+    return new Promise<void>(resolve => {
+      this.queue.push(resolve);
+    });
+  }
+
+  /** 释放锁。如队列中有等待者，通过 setImmediate 在下一 tick 唤醒，给事件循环喘息空间。 */
+  release(): void {
+    if (this.queue.length > 0) {
+      const next = this.queue.shift()!;
+      // 让出事件循环，允许 MCP SDK 处理 keepalive/heartbeat
+      setImmediate(next);
+    } else {
+      this.locked = false;
+    }
+  }
+}
+
+/** 全局互斥锁 — 所有 memory_save 操作共享，保证串行执行 */
+const memorySaveMutex = new AsyncMutex();
+
+// ============================================================================
 // DevPlan Store Cache
 // ============================================================================
 
@@ -478,6 +522,20 @@ const TOOLS = [
     },
   },
   {
+    name: 'devplan_repair_counts',
+    description: 'Phase-45: Repair all main task sub-task counts and auto-complete status. Recalculates totalSubtasks/completedSubtasks from actual sub-task data and auto-completes main tasks where all sub-tasks are done but status is still in_progress. Fixes data inconsistencies caused by updateEntity routing issues.\nPhase-45: 修复所有主任务的子任务计数和自动完成状态。从实际子任务数据重新计算 totalSubtasks/completedSubtasks，并自动完成所有子任务已完成但状态仍为 in_progress 的主任务。修复因 updateEntity 路由问题导致的数据不一致。',
+    inputSchema: {
+      type: 'object' as const,
+      properties: {
+        projectName: {
+          type: 'string',
+          description: `Project name (default: "${DEFAULT_PROJECT_NAME}")\n项目名称（默认："${DEFAULT_PROJECT_NAME}"）`,
+        },
+      },
+      required: ['projectName'],
+    },
+  },
+  {
     name: 'devplan_create_module',
     description: 'Create/register a feature module in the dev plan. Modules represent independent functional areas of the project (e.g., "vector-store", "permission-system"). Main tasks and documents can be associated with modules.\n在开发计划中创建/注册功能模块。模块代表项目的独立功能区域（如 "vector-store"、"permission-system"）。主任务和文档可以关联到模块。',
     inputSchema: {
@@ -870,6 +928,27 @@ const TOOLS = [
           type: 'number',
           description: 'Optional: Importance score 0~1 (default: 0.5)\n可选：重要性评分 0~1（默认 0.5）',
         },
+        sourceId: {
+          type: 'string',
+          description: 'Optional: Source ID tracking which document/task this memory was generated from. Used by devplan_memory_generate for dedup. Format: taskId (e.g., "phase-7") or "section|subSection" (e.g., "overview", "technical_notes|security"). **IMPORTANT**: When saving memories from devplan_memory_generate candidates, ALWAYS pass the candidate\'s `sourceId` field here to enable proper dedup tracking.\n可选：记忆来源 ID，标记该记忆由哪个文档/任务生成。用于 devplan_memory_generate 的去重。格式：taskId（如 "phase-7"）或 "section|subSection"（如 "overview"）。**重要**：从 devplan_memory_generate 候选项保存记忆时，务必传入候选项的 sourceId 以启用去重追踪。',
+        },
+        moduleId: {
+          type: 'string',
+          description: 'Optional: Associate with a feature module (e.g., "vector-store"). Automatically creates MODULE_MEMORY relation to integrate the memory into the module-level knowledge graph.\n可选：关联到功能模块（如 "vector-store"）。自动创建 MODULE_MEMORY 关系，将记忆融入模块级知识图谱。',
+        },
+        decompose: {
+          type: 'string',
+          enum: ['false', 'true', 'rule', 'llm'],
+          description: 'Optional: Memory decomposition mode (Phase-47). Decomposes content into an Episode + Entities + Relations sub-graph using the Rust memory tree engine.\n可选：记忆分解模式（Phase-47）。将内容分解为 Episode + Entities + Relations 子图。\n- "false" (default): Traditional single-entity storage\n- "true" or "rule": Rule-based decomposer\n- "llm": Parse LLM-generated decomposition JSON (requires llmDecompositionJson)',
+        },
+        llmDecompositionJson: {
+          type: 'string',
+          description: 'Optional: LLM-generated decomposition JSON string. Only used when decompose="llm".\n可选：LLM 生成的分解 JSON 字符串。仅当 decompose="llm" 时使用。',
+        },
+        decomposeContext: {
+          type: 'string',
+          description: 'Optional: Additional context for the decomposer (e.g., current task description).\n可选：为分解器提供的额外上下文信息（如当前任务描述）。',
+        },
       },
       required: ['projectName', 'memoryType', 'content'],
     },
@@ -904,6 +983,10 @@ const TOOLS = [
         includeDocs: {
           type: 'boolean',
           description: 'Whether to include document sections in recall results via unified search (default: true). Set to false to search memories only.\n是否通过统一召回包含文档搜索结果（默认 true）。设为 false 仅搜索记忆。',
+        },
+        graphExpand: {
+          type: 'boolean',
+          description: 'Whether to expand results via MEMORY_RELATES graph traversal (default: true). When enabled, related memories connected through the memory network are also discovered and RRF-fused with vector results.\n是否通过 MEMORY_RELATES 图谱遍历扩展结果（默认 true）。启用时，通过记忆网络关联的记忆也会被发现并与向量结果 RRF 融合。',
         },
       },
       required: ['projectName', 'query'],
@@ -955,6 +1038,43 @@ const TOOLS = [
     },
   },
   {
+    name: 'devplan_memory_clear',
+    description: 'Batch clear all memories for a project. Optionally filter by memoryType. Use this before re-importing memories with the fixed batch generator.\n批量清除项目的所有记忆。可选按 memoryType 过滤。用于重新导入记忆前的清理。',
+    inputSchema: {
+      type: 'object' as const,
+      properties: {
+        projectName: {
+          type: 'string',
+          description: `Project name (default: "${DEFAULT_PROJECT_NAME}")\n项目名称（默认："${DEFAULT_PROJECT_NAME}"）`,
+        },
+        memoryType: {
+          type: 'string',
+          enum: ['decision', 'pattern', 'bugfix', 'insight', 'preference', 'summary'],
+          description: 'Optional: Only clear memories of this type. Omit to clear ALL memories.\n可选：仅清除指定类型的记忆。省略则清除全部。',
+        },
+        confirm: {
+          type: 'boolean',
+          description: 'Must be true to confirm deletion. Safety guard.\n必须为 true 以确认删除操作。安全保护。',
+        },
+      },
+      required: ['projectName', 'confirm'],
+    },
+  },
+  {
+    name: 'devplan_memory_clusters',
+    description: 'Get memory topic clusters based on MEMORY_RELATES graph connectivity. Automatically groups semantically related memories into themed clusters using connected component analysis. Returns cluster themes, member counts, and memory summaries.\n基于 MEMORY_RELATES 图谱连通性获取记忆主题集群。自动将语义关联的记忆按连通分量聚合为主题集群。返回集群主题、成员数量和记忆摘要。',
+    inputSchema: {
+      type: 'object' as const,
+      properties: {
+        projectName: {
+          type: 'string',
+          description: `Project name (default: "${DEFAULT_PROJECT_NAME}")\n项目名称（默认："${DEFAULT_PROJECT_NAME}"）`,
+        },
+      },
+      required: ['projectName'],
+    },
+  },
+  {
     name: 'devplan_memory_context',
     description: 'Get comprehensive project context for a new Cursor session. Aggregates recent tasks, relevant memories (via semantic search), project preferences, and recent decisions. This is the PRIMARY tool for session initialization.\n获取新 Cursor 会话的综合项目上下文。聚合最近任务、相关记忆（语义搜索）、项目偏好和最近决策。这是会话初始化的核心工具。\n\n**Unified Recall**: When a query is provided, automatically searches both memories AND documents, returning merged results. Also includes `relatedDocs` field with key document summaries (overview, core_concepts).',
     inputSchema: {
@@ -978,7 +1098,7 @@ const TOOLS = [
   },
   {
     name: 'devplan_memory_generate',
-    description: 'Generate memory candidates from existing documents and completed tasks. Returns structured candidates that the AI can review and selectively save as memories via devplan_memory_save. This tool aggregates raw data; the AI provides the intelligence to extract meaningful memories.\n从已有文档和已完成任务中生成记忆候选项。返回结构化候选项供 AI 审查后通过 devplan_memory_save 批量保存为记忆。此工具聚合原始数据，AI 负责提取有意义的记忆。',
+    description: 'Generate memory candidates from existing documents and completed tasks. Returns structured candidates that the AI can review and selectively save as memories via devplan_memory_save. This tool aggregates raw data; the AI provides the intelligence to extract meaningful memories.\n从已有文档和已完成任务中生成记忆候选项。返回结构化候选项供 AI 审查后通过 devplan_memory_save 批量保存为记忆。此工具聚合原始数据，AI 负责提取有意义的记忆。\n\n**Batch AI Workflow (批量 AI 处理工作流)**:\nWhen user says "批量生成记忆" / "全量导入记忆" / "batch generate memories":\n1. Call this tool with limit=5 to get a small batch\n2. For EACH candidate: read its content, extract 1-3 key insights, determine the best memoryType\n3. Call devplan_memory_save for each with AI-refined content (concise, 1-3 sentences), **MUST pass sourceId from candidate.sourceId**\n4. Check stats.remaining — if > 0, repeat from step 1\n5. Continue until remaining === 0\n\n**Memory Tree / suggestedRelations (记忆树 / 建议关联)**:\nEach candidate may include a `suggestedRelations` array with `{ targetSourceId, relationType, weight, reason }` entries.\nThese represent inferred connections between candidates (e.g., task→doc DERIVED_FROM, consecutive phases TEMPORAL_NEXT, same-module RELATES).\n`targetSourceId` references another candidate\'s `sourceId`. After saving all memories, map sourceId→entityId and build relations via the graph.\nThis transforms flat memories into a connected Memory Tree graph.\n\n**CRITICAL — sourceId dedup tracking**: Each candidate has a `sourceId` field (e.g., "phase-7" for tasks, "overview" or "technical_notes|security" for docs). When calling devplan_memory_save, you MUST pass `sourceId: candidate.sourceId` so that subsequent calls to devplan_memory_generate can skip already-processed sources. Without sourceId, the same candidates will keep appearing.\n\nThe stats.remaining field tells how many more eligible candidates exist beyond the current batch.',
     inputSchema: {
       type: 'object' as const,
       properties: {
@@ -1005,7 +1125,29 @@ const TOOLS = [
         },
         limit: {
           type: 'number',
-          description: 'Optional: Maximum candidates to return (default: 50)\n可选：最大候选项数（默认 50）',
+          description: 'Optional: Maximum candidates to return (default: 50). For AI batch workflow, use limit=5 to process in small batches. stats.remaining shows how many more are available.\n可选：最大候选项数（默认 50）。AI 批量工作流建议用 limit=5 分小批处理。stats.remaining 显示剩余待处理数。',
+        },
+      },
+      required: ['projectName'],
+    },
+  },
+  {
+    name: 'devplan_memory_lifecycle',
+    description: 'Run memory lifecycle management scan using DynamicNode promote/demote. Long-idle memories are demoted to shadow state (excluded from vector search but preserved in graph). Re-accessed memories are auto-promoted back. This implements biological memory forgetting and reinforcement.\n运行记忆生命周期管理扫描。长期未访问的记忆降级为 shadow 状态（不参与向量搜索但保留在图谱中），被重新访问时自动恢复。实现生物记忆的遗忘与强化机制。',
+    inputSchema: {
+      type: 'object' as const,
+      properties: {
+        projectName: {
+          type: 'string',
+          description: `Project name (default: "${DEFAULT_PROJECT_NAME}")\n项目名称（默认："${DEFAULT_PROJECT_NAME}"）`,
+        },
+        demoteIdleTimeoutSecs: {
+          type: 'number',
+          description: 'Idle seconds before demotion to shadow (default: 2592000 = 30 days)\n降级前的闲置秒数（默认 2592000 = 30 天）',
+        },
+        promoteHitThreshold: {
+          type: 'number',
+          description: 'Minimum hit count to promote from shadow (default: 3)\n从 shadow 恢复的最低命中次数（默认 3）',
         },
       },
       required: ['projectName'],
@@ -1095,8 +1237,20 @@ interface ToolArgs {
   maxMemories?: number;
   /** devplan_memory_save: 记忆来源 */
   source?: string;
+  /** devplan_memory_save: 记忆来源 ID（用于批量生成去重追踪） */
+  sourceId?: string;
   /** devplan_memory_recall: 是否包含文档统一召回 */
   includeDocs?: boolean;
+  /** devplan_memory_recall: 是否启用图谱关联扩展 (Phase-38) */
+  graphExpand?: boolean;
+  /** devplan_memory_clear: 确认删除（安全保护） */
+  confirm?: boolean;
+  /** Phase-47: devplan_memory_save: 记忆分解模式 */
+  decompose?: string;
+  /** Phase-47: devplan_memory_save: LLM 分解结果 JSON */
+  llmDecompositionJson?: string;
+  /** Phase-47: devplan_memory_save: 分解器上下文 */
+  decomposeContext?: string;
 }
 
 /**
@@ -1741,6 +1895,36 @@ async function handleToolCall(name: string, args: ToolArgs): Promise<string> {
       }
     }
 
+    case 'devplan_repair_counts': {
+      if (!args.projectName) {
+        throw new McpError(ErrorCode.InvalidParams, 'Missing required: projectName');
+      }
+
+      const plan = getDevPlan(args.projectName);
+      if (typeof (plan as any).repairAllMainTaskCounts !== 'function') {
+        throw new McpError(
+          ErrorCode.InvalidRequest,
+          `Repair counts requires "graph" engine. Project "${args.projectName}" uses a different engine.`
+        );
+      }
+
+      try {
+        const result = (plan as any).repairAllMainTaskCounts();
+        return JSON.stringify({
+          success: true,
+          repaired: result.repaired,
+          autoCompleted: result.autoCompleted,
+          details: result.details,
+          summary: result.repaired === 0
+            ? '✅ All main task counts are correct. No repair needed.'
+            : `🔧 Repaired ${result.repaired} main tasks (${result.autoCompleted} auto-completed)`,
+        });
+      } catch (err) {
+        throw new McpError(ErrorCode.InternalError,
+          err instanceof Error ? err.message : String(err));
+      }
+    }
+
     case 'devplan_create_module': {
       if (!args.projectName || !args.moduleId || !args.name) {
         throw new McpError(ErrorCode.InvalidParams, 'Missing required: projectName, moduleId, name');
@@ -2219,7 +2403,7 @@ async function handleToolCall(name: string, args: ToolArgs): Promise<string> {
         throw new McpError(ErrorCode.InvalidParams, 'Missing required: content');
       }
 
-      const plan = createDevPlan(projectName);
+      const plan = getDevPlan(projectName);
       if (typeof (plan as any).savePrompt !== 'function') {
         throw new McpError(
           ErrorCode.InvalidRequest,
@@ -2244,7 +2428,7 @@ async function handleToolCall(name: string, args: ToolArgs): Promise<string> {
 
     case 'devplan_list_prompts': {
       const projectName = args.projectName!;
-      const plan = createDevPlan(projectName);
+      const plan = getDevPlan(projectName);
 
       if (typeof (plan as any).listPrompts !== 'function') {
         throw new McpError(
@@ -2276,43 +2460,79 @@ async function handleToolCall(name: string, args: ToolArgs): Promise<string> {
     // ==================================================================
 
     case 'devplan_memory_save': {
-      const projectName = args.projectName!;
-      const content = args.content;
-      const memoryType = args.memoryType;
+      // ======================================================================
+      // 并发控制：通过 AsyncMutex 串行化 memory_save 操作
+      //
+      // 每次 saveMemory 会执行多次同步 NAPI embed 调用（各 ~200-500ms）。
+      // 5 条并行请求会导致 10-25 秒连续事件循环阻塞 → Cursor 断连。
+      // 互斥锁保证同一时刻只有 1 条 save 在执行，两条之间让出事件循环。
+      // ======================================================================
+      await memorySaveMutex.acquire();
+      try {
+        const projectName = args.projectName!;
+        const content = args.content;
+        const memoryType = args.memoryType;
 
-      if (!content) {
-        throw new McpError(ErrorCode.InvalidParams, 'Missing required: content');
+        if (!content) {
+          throw new McpError(ErrorCode.InvalidParams, 'Missing required: content');
+        }
+        if (!memoryType) {
+          throw new McpError(ErrorCode.InvalidParams, 'Missing required: memoryType');
+        }
+
+        const validTypes = ['decision', 'pattern', 'bugfix', 'insight', 'preference', 'summary'];
+        if (!validTypes.includes(memoryType)) {
+          throw new McpError(ErrorCode.InvalidParams,
+            `Invalid memoryType: "${memoryType}". Must be one of: ${validTypes.join(', ')}`);
+        }
+
+        const plan = getDevPlan(projectName);
+        if (typeof (plan as any).saveMemory !== 'function') {
+          throw new McpError(ErrorCode.InvalidRequest,
+            `Memory features require "graph" engine. Project "${projectName}" uses a different engine.`);
+        }
+
+        // Phase-47: 解析 decompose 参数
+        let decompose: boolean | 'rule' | 'llm' | undefined;
+        const decomposeArg = args.decompose as string | undefined;
+        if (decomposeArg === 'true' || decomposeArg === 'rule') {
+          decompose = 'rule';
+        } else if (decomposeArg === 'llm') {
+          decompose = 'llm';
+        }
+
+        const memory = (plan as any).saveMemory({
+          projectName,
+          content,
+          memoryType: memoryType as any,
+          importance: args.importance,
+          tags: args.tags,
+          relatedTaskId: args.relatedTaskId,
+          sourceId: args.sourceId,
+          moduleId: args.moduleId,
+          source: args.source || 'cursor',
+          decompose,
+          llmDecompositionJson: args.llmDecompositionJson,
+          decomposeContext: args.decomposeContext,
+        });
+
+        // Phase-51: 冲突信息摘要
+        const result: Record<string, unknown> = {
+          status: 'saved',
+          memory,
+        };
+        if (memory.conflicts && memory.conflicts.length > 0) {
+          result.conflictSummary = `⚠️ Detected ${memory.conflicts.length} conflict(s) with existing memories: ${
+            memory.conflicts.map((c: any) =>
+              `${c.conflictType} with ${c.existingEntityId} (similarity: ${(c.similarity * 100).toFixed(0)}%)`
+            ).join('; ')
+          }. Rust layer has automatically created SUPERSEDES/CONFLICTS relations.`;
+        }
+
+        return JSON.stringify(result, null, 2);
+      } finally {
+        memorySaveMutex.release();
       }
-      if (!memoryType) {
-        throw new McpError(ErrorCode.InvalidParams, 'Missing required: memoryType');
-      }
-
-      const validTypes = ['decision', 'pattern', 'bugfix', 'insight', 'preference', 'summary'];
-      if (!validTypes.includes(memoryType)) {
-        throw new McpError(ErrorCode.InvalidParams,
-          `Invalid memoryType: "${memoryType}". Must be one of: ${validTypes.join(', ')}`);
-      }
-
-      const plan = createDevPlan(projectName);
-      if (typeof (plan as any).saveMemory !== 'function') {
-        throw new McpError(ErrorCode.InvalidRequest,
-          `Memory features require "graph" engine. Project "${projectName}" uses a different engine.`);
-      }
-
-      const memory = (plan as any).saveMemory({
-        projectName,
-        content,
-        memoryType: memoryType as any,
-        importance: args.importance,
-        tags: args.tags,
-        relatedTaskId: args.relatedTaskId,
-        source: args.source || 'cursor',
-      });
-
-      return JSON.stringify({
-        status: 'saved',
-        memory,
-      }, null, 2);
     }
 
     case 'devplan_memory_recall': {
@@ -2323,18 +2543,20 @@ async function handleToolCall(name: string, args: ToolArgs): Promise<string> {
         throw new McpError(ErrorCode.InvalidParams, 'Missing required: query');
       }
 
-      const plan = createDevPlan(projectName);
+      const plan = getDevPlan(projectName);
       if (typeof (plan as any).recallMemory !== 'function') {
         throw new McpError(ErrorCode.InvalidRequest,
           `Memory features require "graph" engine. Project "${projectName}" uses a different engine.`);
       }
 
       const includeDocs = args.includeDocs !== undefined ? args.includeDocs : true;
+      const graphExpand = args.graphExpand !== undefined ? args.graphExpand : true;
       const memories = (plan as any).recallMemory(query, {
         memoryType: args.memoryType as any,
         limit: args.limit,
         minScore: args.minScore,
         includeDocs,
+        graphExpand,
       });
 
       // 统计来源分布
@@ -2355,7 +2577,7 @@ async function handleToolCall(name: string, args: ToolArgs): Promise<string> {
     case 'devplan_memory_list': {
       const projectName = args.projectName!;
 
-      const plan = createDevPlan(projectName);
+      const plan = getDevPlan(projectName);
       if (typeof (plan as any).listMemories !== 'function') {
         throw new McpError(ErrorCode.InvalidRequest,
           `Memory features require "graph" engine. Project "${projectName}" uses a different engine.`);
@@ -2385,7 +2607,7 @@ async function handleToolCall(name: string, args: ToolArgs): Promise<string> {
         throw new McpError(ErrorCode.InvalidParams, 'Missing required: memoryId');
       }
 
-      const plan = createDevPlan(projectName);
+      const plan = getDevPlan(projectName);
       if (typeof (plan as any).deleteMemory !== 'function') {
         throw new McpError(ErrorCode.InvalidRequest,
           `Memory features require "graph" engine. Project "${projectName}" uses a different engine.`);
@@ -2398,10 +2620,69 @@ async function handleToolCall(name: string, args: ToolArgs): Promise<string> {
       }, null, 2);
     }
 
+    case 'devplan_memory_clear': {
+      const projectName = args.projectName!;
+      const confirm = args.confirm;
+
+      if (confirm !== true) {
+        throw new McpError(ErrorCode.InvalidParams,
+          'Safety guard: confirm must be true to clear memories. Set confirm: true to proceed.');
+      }
+
+      const plan = getDevPlan(projectName);
+      if (typeof (plan as any).clearAllMemories !== 'function') {
+        throw new McpError(ErrorCode.InvalidRequest,
+          `Memory features require "graph" engine. Project "${projectName}" uses a different engine.`);
+      }
+
+      const memoryType = args.memoryType as string | undefined;
+      const result = (plan as any).clearAllMemories(memoryType);
+      return JSON.stringify({
+        status: 'cleared',
+        ...result,
+        memoryType: memoryType || 'all',
+        projectName,
+      }, null, 2);
+    }
+
+    case 'devplan_memory_clusters': {
+      const projectName = args.projectName!;
+
+      const plan = getDevPlan(projectName);
+      if (typeof (plan as any).getMemoryClusters !== 'function') {
+        throw new McpError(ErrorCode.InvalidRequest,
+          `Memory clusters require "graph" engine. Project "${projectName}" uses a different engine.`);
+      }
+
+      const clusters = (plan as any).getMemoryClusters();
+      const totalMemories = clusters.reduce(
+        (sum: number, c: any) => sum + c.memoryCount, 0
+      );
+
+      return JSON.stringify({
+        projectName,
+        totalClusters: clusters.length,
+        totalMemories,
+        clusters: clusters.map((c: any) => ({
+          clusterId: c.clusterId,
+          theme: c.theme,
+          memoryCount: c.memoryCount,
+          topMemoryTypes: c.topMemoryTypes,
+          memories: c.memories.map((m: any) => ({
+            id: m.id,
+            memoryType: m.memoryType,
+            content: m.content.length > 100 ? m.content.slice(0, 100) + '...' : m.content,
+            importance: m.importance,
+            tags: m.tags,
+          })),
+        })),
+      }, null, 2);
+    }
+
     case 'devplan_memory_context': {
       const projectName = args.projectName!;
 
-      const plan = createDevPlan(projectName);
+      const plan = getDevPlan(projectName);
       if (typeof (plan as any).getMemoryContext !== 'function') {
         throw new McpError(ErrorCode.InvalidRequest,
           `Memory features require "graph" engine. Project "${projectName}" uses a different engine.`);
@@ -2421,7 +2702,7 @@ async function handleToolCall(name: string, args: ToolArgs): Promise<string> {
     case 'devplan_memory_generate': {
       const projectName = args.projectName!;
 
-      const plan = createDevPlan(projectName);
+      const plan = getDevPlan(projectName);
       if (typeof (plan as any).generateMemoryCandidates !== 'function') {
         throw new McpError(ErrorCode.InvalidRequest,
           `Memory generation requires "graph" engine. Project "${projectName}" uses a different engine.`);
@@ -2436,6 +2717,41 @@ async function handleToolCall(name: string, args: ToolArgs): Promise<string> {
       });
 
       return JSON.stringify(result, null, 2);
+    }
+
+    case 'devplan_memory_lifecycle': {
+      const projectName = args.projectName!;
+
+      const plan = getDevPlan(projectName);
+      if (typeof (plan as any).runMemoryLifecycle !== 'function') {
+        throw new McpError(ErrorCode.InvalidRequest,
+          `Memory lifecycle requires "graph" engine with dynamicScan support. Project "${projectName}" may use a different engine or older aifastdb version.`);
+      }
+
+      const report = (plan as any).runMemoryLifecycle({
+        demoteIdleTimeoutSecs: (args as any).demoteIdleTimeoutSecs,
+        promoteHitThreshold: (args as any).promoteHitThreshold,
+      });
+
+      if (report === null) {
+        return JSON.stringify({
+          status: 'unsupported',
+          message: 'Memory lifecycle scan not available. Please upgrade to aifastdb >= 2.8.0.',
+        });
+      }
+
+      // Phase-50: 包含 Rust 原生 memoryTreeLifecycle 的额外字段
+      const extras: string[] = [];
+      if (report.summariesCreated) extras.push(`${report.summariesCreated} summaries created`);
+      if (report.hebbianUpdates) extras.push(`${report.hebbianUpdates} Hebbian updates`);
+      const extrasStr = extras.length > 0 ? `, ${extras.join(', ')}` : '';
+
+      return JSON.stringify({
+        status: 'completed',
+        projectName,
+        report,
+        message: `Scanned ${report.scanned} memories: ${report.promoted} promoted, ${report.demoted} demoted${extrasStr} (${report.durationMs}ms)`,
+      });
     }
 
     default:

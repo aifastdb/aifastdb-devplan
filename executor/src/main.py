@@ -2,12 +2,12 @@
 """
 DevPlan Executor — 主循环
 
-Autopilot 执行器入口，实现：
-  1. 轮询 DevPlan HTTP API 获取任务状态
-  2. 截图 + 视觉 AI 识别 UI 状态
-  3. 双通道决策引擎联合判断
-  4. GUI 自动化执行操作
-  5. 心跳上报
+Autopilot 执行器入口，实现三通道智能检测：
+  1. Channel 1: Cursor renderer.log 日志监控 → AI 活动/停止检测（毫秒级）
+  2. Channel 2: DevPlan HTTP API → 任务编排状态（有无待发任务、阶段进度）
+  3. Channel 3: 截图 + Ollama gemma3:27b 视觉 AI → 8 态 UI 状态分类
+  4. 三通道决策引擎联合判断 + 差异化恢复策略
+  5. GUI 自动化执行操作 + 心跳上报
 
 启动方式：
   cd executor/
@@ -49,6 +49,7 @@ from .config import ExecutorConfig, UIStatus, get_config
 from .cursor_controller import CursorController
 from .devplan_client import DevPlanClient
 from .engine import Action, Decision, DualChannelEngine
+from .log_monitor import CursorLogMonitor
 from .ui_server import image_to_base64, set_executor_refs, start_server_thread, ui_state
 from .vision_analyzer import VisionAnalyzer
 
@@ -81,9 +82,20 @@ class ExecutorLoop:
             max_continue_retries=config.max_continue_retries,
             auto_start_next_phase=config.auto_start_next_phase,
             fallback_no_change_timeout=config.fallback_no_change_timeout,
+            rate_limit_wait=config.rate_limit_wait,
+            api_timeout_wait=config.api_timeout_wait,
+            context_overflow_wait=config.context_overflow_wait,
+            stall_escalate_threshold=config.stall_escalate_threshold,
         )
         self.analyzer = VisionAnalyzer(config)
         self.gui = CursorController(config)
+
+        # Channel 1: 日志监控（可选，启用后能跳过不必要的截图分析）
+        self.log_monitor: Optional[CursorLogMonitor] = None
+        if config.log_monitor_enabled:
+            self.log_monitor = CursorLogMonitor(
+                idle_threshold=config.log_monitor_idle_threshold,
+            )
 
         # 心跳计时
         self._last_heartbeat_time: float = 0
@@ -131,6 +143,14 @@ class ExecutorLoop:
             return
 
         logger.info("DevPlan 服务已连接: %s", self.config.devplan_base_url)
+
+        # 启动日志监控（Channel 1）
+        if self.log_monitor:
+            if self.log_monitor.start():
+                logger.info("📊 日志监控已启动（Channel 1: renderer.log）")
+            else:
+                logger.warning("⚠️ 日志监控启动失败，将仅依赖截图分析")
+                self.log_monitor = None
 
         # 显示初始状态
         self._log_initial_status()
@@ -193,8 +213,42 @@ class ExecutorLoop:
             ui_update_devplan["phase_progress"] = f"{completed}/{total}"
         ui_state.update(**ui_update_devplan)
 
+        # ── Channel 1.5: 日志监控（快速判断 AI 是否活跃）──
+        log_ai_active = False
+        if self.log_monitor:
+            log_state = self.log_monitor.poll()
+            log_ai_active = log_state.is_ai_active
+            if log_state.log_file_found:
+                logger.info(
+                    "[LogMonitor] AI活跃=%s | 空闲%.0fs | pending=%d | 错误=%d",
+                    log_ai_active,
+                    log_state.idle_seconds if log_state.idle_seconds != float("inf") else -1,
+                    log_state.pending_tool_calls,
+                    len(log_state.recent_errors),
+                )
+                ui_state.update(
+                    log_monitor_active=log_ai_active,
+                    log_monitor_idle=log_state.idle_seconds if log_state.idle_seconds != float("inf") else -1,
+                    log_monitor_pending=log_state.pending_tool_calls,
+                )
+                # 日志检测到网络错误 → 提前预警
+                if log_state.recent_errors:
+                    logger.warning(
+                        "[LogMonitor] 检测到 %d 个近期网络错误",
+                        len(log_state.recent_errors),
+                    )
+
         # ── Channel 2: 屏幕 UI 状态 ──
-        ui_status, screen_changing, raw_response = self.analyzer.analyze()
+        # 如果日志监控确认 AI 活跃，可以跳过昂贵的 Ollama 截图分析
+        if log_ai_active and devplan_action == "wait":
+            # AI 在活跃工作 → 跳过截图分析，直接用 IDLE + screen_changing=True
+            ui_status = UIStatus.AI_GENERATING
+            screen_changing = True
+            raw_response = "[LogMonitor] AI 活跃，跳过截图分析"
+            logger.info("[Screen] 日志监控确认 AI 活跃，跳过 Ollama 分析（节省 GPU）")
+        else:
+            ui_status, screen_changing, raw_response = self.analyzer.analyze()
+
         change_str = "有变化" if screen_changing else "无变化"
         logger.info(
             "[Screen] status=%s | 屏幕%s | %s",
@@ -316,6 +370,38 @@ class ExecutorLoop:
         elif decision.action == Action.WAIT:
             logger.debug("⏳ %s", decision.message)
 
+        elif decision.action == Action.NEW_CONVERSATION:
+            # 上下文溢出：Ctrl+L 开新对话 → 等待 → 发送恢复 prompt
+            logger.warning("🔴 执行新对话恢复流程（CONTEXT_OVERFLOW）")
+            if self.gui.available:
+                # Step 1: Ctrl+L 开新对话
+                result = self.gui.new_conversation()
+                if result.success:
+                    logger.info("✅ 已开启新对话 (Ctrl+L)")
+                    # Step 2: 等待新对话准备就绪
+                    wait_sec = decision.cooldown_seconds or 3
+                    logger.info("⏳ 等待 %d 秒让新对话就绪...", wait_sec)
+                    time.sleep(wait_sec)
+                    # Step 3: 发送恢复 prompt
+                    if decision.task_content:
+                        result2 = self.gui.send_task(decision.task_content)
+                        if result2.success:
+                            logger.info("✅ 已发送恢复 prompt")
+                        else:
+                            logger.error("❌ 发送恢复 prompt 失败: %s", result2.message)
+                else:
+                    logger.error("❌ 开新对话失败: %s — 降级为发送继续", result.message)
+                    self.gui.send_continue()
+            ui_state.add_log("WARNING", f"新对话恢复: {decision.message[:60]}")
+
+        elif decision.action == Action.WAIT_COOLDOWN:
+            # 限流/超时：等待冷却期
+            wait_sec = decision.cooldown_seconds or 60
+            logger.warning("⏳ 限流冷却等待 %d 秒...", wait_sec)
+            ui_state.add_log("WARNING", f"限流等待 {wait_sec}s: {decision.message[:60]}")
+            # 用 countdown 方式等待，允许中途停止
+            self._countdown_wait(wait_sec)
+
         elif decision.action == Action.ERROR_RECOVERY:
             if self.gui.available:
                 result = self.gui.send_continue()
@@ -398,6 +484,9 @@ class ExecutorLoop:
     def _shutdown(self) -> None:
         """清理退出"""
         logger.info("正在停止 Executor...")
+        # 停止日志监控
+        if self.log_monitor:
+            self.log_monitor.stop()
         # 更新 Web UI 状态
         ui_state.update(running=False, decision_action="STOPPED", decision_message="Executor 已停止")
         ui_state.add_log("INFO", "Executor 正在停止...")

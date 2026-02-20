@@ -41,27 +41,45 @@ logger = logging.getLogger("executor.vision")
 
 PROMPT_BOTTOM_RIGHT = """Analyze this screenshot (this is the **bottom-right** area of Cursor IDE — the chat panel, input box, and any popup dialogs).
 
-Is there an **error popup or dialog** visible?
+Determine the current state. Check ALL conditions in order:
 
-**Look for these signs of CONNECTION_ERROR:**
-- A popup/dialog with "Connection Error" or "Connection failed" text
-- A "Try again" button in a dialog overlay
-- A "Resume" button in a dialog
-- Text mentioning "problem persists", "check your internet", "Copy Request Details"
-- A dark overlay/modal with error message
+**1. CONNECTION_ERROR** — Network connection failed:
+- A popup with "Connection Error" / "Connection failed"
+- A "Try again" or "Resume" button in a dialog overlay
+- Text: "problem persists", "check your internet", "Copy Request Details"
 
-**Look for these signs of PROVIDER_ERROR:**
-- A warning icon (⚠) with "Provider Error" header text
-- Text saying "We're having trouble connecting to the model provider"
-- Text saying "This might be temporary - please try again in a moment"
-- A "Copy Request Details" link with a UUID
-- A dark popup/banner with "Provider" in the title
+**2. PROVIDER_ERROR** — Model provider error:
+- ⚠ icon with "Provider Error" header
+- "trouble connecting to the model provider"
+- "try again in a moment" with a "Copy Request Details" link
 
-If CONNECTION_ERROR signs are visible → reply: CONNECTION_ERROR
-If PROVIDER_ERROR signs are visible → reply: PROVIDER_ERROR
-If NONE of the above → reply: IDLE
+**3. CONTEXT_OVERFLOW** — Conversation too long:
+- Message suggesting "start a new conversation"
+- Text: "conversation is getting long", "context length", "token limit"
+- A prompt to start a new chat session
 
-Reply with ONLY one word: CONNECTION_ERROR or PROVIDER_ERROR or IDLE"""
+**4. RATE_LIMIT** — Request rate limited:
+- Text: "rate limit", "too many requests", "usage limit", "slow down"
+- "try again in X seconds/minutes"
+- HTTP 429 error mentioned
+
+**5. API_TIMEOUT** — API request timed out:
+- Text: "timed out", "request timeout", "took too long", "request failed"
+- A timeout error message
+
+**6. RESPONSE_INTERRUPTED** — AI response was cut off mid-output:
+- Text abruptly ends (incomplete sentence/code block)
+- "no result from tool" message
+- Response appears truncated without a natural ending
+
+**7. AI_GENERATING** — AI is actively generating:
+- A "Stop" button is visible (NOT a "Send" button)
+- Text/code is visibly streaming (blinking cursor at end)
+- An animated loading/thinking indicator
+
+**8. IDLE** — None of the above, everything looks normal/quiet.
+
+Reply with ONLY one word from: CONNECTION_ERROR, PROVIDER_ERROR, CONTEXT_OVERFLOW, RATE_LIMIT, API_TIMEOUT, RESPONSE_INTERRUPTED, AI_GENERATING, IDLE"""
 
 PROMPT_TOP_RIGHT = """Analyze this screenshot (this is the **top-right** area of Cursor IDE — the code editor and tabs).
 
@@ -76,27 +94,20 @@ Always reply: IDLE
 
 Reply with ONLY one word: IDLE"""
 
-ANALYSIS_PROMPT = """Analyze this screenshot of Cursor IDE.
+ANALYSIS_PROMPT = """Analyze this screenshot of Cursor IDE chat panel.
 
-Is there an **error popup or dialog** visible?
+Determine the current state:
 
-**Look for these signs of CONNECTION_ERROR:**
-- A popup/dialog with "Connection Error" or "Connection failed" text
-- A "Try again" button in a dialog overlay
-- A "Resume" button in a dialog
-- Text mentioning "problem persists", "check your internet"
+1. **CONNECTION_ERROR**: Network error popup, "Try again"/"Resume" button, "Connection Error"
+2. **PROVIDER_ERROR**: ⚠ "Provider Error" popup, "trouble connecting to model provider"
+3. **CONTEXT_OVERFLOW**: "conversation is getting long", "start a new conversation", "token limit"
+4. **RATE_LIMIT**: "rate limit", "too many requests", "usage limit", "slow down"
+5. **API_TIMEOUT**: "timed out", "request timeout", "request failed"
+6. **RESPONSE_INTERRUPTED**: Text abruptly cut off, "no result from tool"
+7. **AI_GENERATING**: "Stop" button visible, text streaming, loading indicator
+8. **IDLE**: None of the above
 
-**Look for these signs of PROVIDER_ERROR:**
-- A warning icon (⚠) with "Provider Error" header text
-- Text saying "We're having trouble connecting to the model provider"
-- Text saying "This might be temporary - please try again in a moment"
-- A "Copy Request Details" link with a UUID
-
-If CONNECTION_ERROR signs are visible → reply: CONNECTION_ERROR
-If PROVIDER_ERROR signs are visible → reply: PROVIDER_ERROR
-If NONE of the above → reply: IDLE
-
-Reply with ONLY one word: CONNECTION_ERROR or PROVIDER_ERROR or IDLE"""
+Reply with ONLY one word: CONNECTION_ERROR, PROVIDER_ERROR, CONTEXT_OVERFLOW, RATE_LIMIT, API_TIMEOUT, RESPONSE_INTERRUPTED, AI_GENERATING, or IDLE"""
 
 
 # ── 视觉分析器 ──────────────────────────────────────────────
@@ -456,38 +467,36 @@ class VisionAnalyzer:
         """
         从视觉模型的原始文本中解析 UI 状态。
 
-        判断三种错误结果：CONNECTION_ERROR / PROVIDER_ERROR / IDLE。
+        判断 8 种状态（按优先级排列）：
+          CONNECTION_ERROR > PROVIDER_ERROR > CONTEXT_OVERFLOW > RATE_LIMIT >
+          API_TIMEOUT > RESPONSE_INTERRUPTED > AI_GENERATING > IDLE
+
         双层匹配：
-          Layer 1: 精确匹配关键词（优先级：CONNECTION_ERROR > PROVIDER_ERROR）
+          Layer 1: 精确匹配枚举名（Ollama 模型直接输出）
           Layer 2: 模糊匹配 STATUS_MARKERS 中的关键词
         """
         if not raw_text:
             return UIStatus.IDLE
 
-        text_upper = raw_text.upper()
+        text_upper = raw_text.upper().strip()
 
-        # Layer 1a: 精确匹配 CONNECTION_ERROR 关键词（最高优先级）
-        connection_keywords = [
-            "CONNECTION_ERROR",
-            "CONNECTION FAILED",
-            "CONNECTION ERROR",
+        # Layer 1: 精确匹配枚举名（按优先级排列）
+        # Ollama 通常直接返回枚举名，优先匹配
+        priority_order = [
+            UIStatus.CONNECTION_ERROR,
+            UIStatus.PROVIDER_ERROR,
+            UIStatus.CONTEXT_OVERFLOW,
+            UIStatus.RATE_LIMIT,
+            UIStatus.API_TIMEOUT,
+            UIStatus.RESPONSE_INTERRUPTED,
+            UIStatus.AI_GENERATING,
+            UIStatus.IDLE,
         ]
-        for keyword in connection_keywords:
-            if keyword in text_upper:
-                return UIStatus.CONNECTION_ERROR
+        for status in priority_order:
+            if status.value in text_upper:
+                return status
 
-        # Layer 1b: 精确匹配 PROVIDER_ERROR 关键词
-        provider_keywords = [
-            "PROVIDER_ERROR",
-            "PROVIDER ERROR",
-            "PROVIDER RETURNED AN ERROR",
-            "PROVIDER RETURNED",
-        ]
-        for keyword in provider_keywords:
-            if keyword in text_upper:
-                return UIStatus.PROVIDER_ERROR
-
-        # Layer 2: 模糊匹配 STATUS_MARKERS（CONNECTION_ERROR + PROVIDER_ERROR）
+        # Layer 2: 模糊匹配 STATUS_MARKERS（按声明顺序 = 优先级）
         for status_name, markers in STATUS_MARKERS.items():
             for marker in markers:
                 if marker.upper() in text_upper:

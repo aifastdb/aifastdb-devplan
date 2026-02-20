@@ -1028,6 +1028,348 @@ function formatMemoryTime(ts) {
   } catch(e) { return ''; }
 }
 
+// ========== Memory View Switch (List / 3D Graph) ==========
+var memoryViewMode = 'list';
+var memoryGraph3dInstance = null;
+var memoryGraphLoaded = false;
+var memoryGraphData = null;
+
+function switchMemoryView(mode) {
+  if (mode === memoryViewMode) return;
+  memoryViewMode = mode;
+
+  // Toggle button active state
+  var btns = document.querySelectorAll('.memory-view-btn');
+  for (var i = 0; i < btns.length; i++) {
+    btns[i].classList.remove('active');
+    if (btns[i].getAttribute('data-view') === mode) btns[i].classList.add('active');
+  }
+
+  var listEl = document.getElementById('memoryList');
+  var filtersEl = document.getElementById('memoryFilters');
+  var graphEl = document.getElementById('memoryGraphContainer');
+  var genGroup = document.querySelector('.memory-generate-group');
+
+  if (mode === 'graph') {
+    if (listEl) listEl.style.display = 'none';
+    if (filtersEl) filtersEl.style.display = 'none';
+    if (graphEl) graphEl.style.display = 'block';
+    if (genGroup) genGroup.style.display = 'none';
+    loadMemoryGraph();
+  } else {
+    if (listEl) listEl.style.display = 'flex';
+    if (filtersEl) filtersEl.style.display = 'flex';
+    if (graphEl) graphEl.style.display = 'none';
+    if (genGroup) genGroup.style.display = 'flex';
+    // Destroy 3D graph to free memory
+    if (memoryGraph3dInstance) {
+      try { memoryGraph3dInstance._destructor && memoryGraph3dInstance._destructor(); } catch(e) {}
+      memoryGraph3dInstance = null;
+    }
+  }
+}
+
+function loadMemoryGraph() {
+  var loadingEl = document.getElementById('memoryGraphLoading');
+  var graph3dEl = document.getElementById('memoryGraph3D');
+  var statsEl = document.getElementById('memoryGraphStats');
+
+  if (loadingEl) loadingEl.style.display = 'block';
+  if (graph3dEl) graph3dEl.innerHTML = '';
+
+  fetch('/api/memories/graph').then(function(r) { return r.json(); }).then(function(data) {
+    if (data.error) {
+      if (loadingEl) loadingEl.innerHTML = '<div style="color:#f87171;">加载失败: ' + data.error + '</div>';
+      return;
+    }
+    memoryGraphData = data;
+    memoryGraphLoaded = true;
+
+    if (statsEl) {
+      var s = data.stats || {};
+      statsEl.innerHTML = '🧠 ' + (s.memoryCount || 0) + ' 记忆 · ' + (s.contextCount || 0) + ' 上下文 · ' + (s.edgeCount || 0) + ' 关系';
+    }
+
+    renderMemoryGraph3D(data);
+  }).catch(function(err) {
+    if (loadingEl) loadingEl.innerHTML = '<div style="color:#f87171;">加载失败: ' + (err.message || err) + '<br><span style="cursor:pointer;color:#818cf8;text-decoration:underline;" onclick="loadMemoryGraph();">重试</span></div>';
+  });
+}
+
+function renderMemoryGraph3D(data) {
+  var container = document.getElementById('memoryGraph3D');
+  var loadingEl = document.getElementById('memoryGraphLoading');
+  if (!container) return;
+
+  // Check if ForceGraph3D is available
+  if (typeof ForceGraph3D === 'undefined') {
+    // Fallback message
+    if (loadingEl) loadingEl.innerHTML = '<div style="color:#f59e0b;">3D 引擎未加载（需要 Three.js + 3D Force Graph）<br><span style="font-size:11px;color:#6b7280;">请在设置中切换到 3D 引擎后刷新页面</span></div>';
+    return;
+  }
+
+  if (loadingEl) loadingEl.style.display = 'none';
+
+  // Node color map
+  var NODE_COLORS = {
+    'memory': '#c026d3',
+    'main-task': '#3b82f6',
+    'sub-task': '#818cf8',
+    'doc': '#60a5fa',
+    'module': '#ff8533',
+    'project': '#6366f1'
+  };
+
+  // Edge color map
+  var EDGE_COLORS = {
+    'memory_relates': '#d946ef',
+    'memory_from_task': '#60a5fa',
+    'memory_from_doc': '#38bdf8',
+    'module_memory': '#fb923c',
+    'has_memory': '#a78bfa',
+    'memory_supersedes': '#f87171'
+  };
+
+  // Build nodes
+  var nodes3d = [];
+  for (var i = 0; i < data.nodes.length; i++) {
+    var n = data.nodes[i];
+    var t = n.type || 'memory';
+    var isMem = (t === 'memory');
+    var memType = (n.properties && n.properties.memoryType) || '';
+    var label = n.label || '';
+    // Memory type colors
+    var memTypeColors = {
+      'decision': '#6366f1', 'bugfix': '#ef4444', 'pattern': '#06b6d4',
+      'insight': '#f59e0b', 'preference': '#8b5cf6', 'summary': '#10b981'
+    };
+    var color = isMem ? (memTypeColors[memType] || NODE_COLORS.memory) : (NODE_COLORS[t] || '#64748b');
+    var val = isMem ? (3 + ((n.properties && n.properties.importance) || 0.5) * 6) : (t === 'project' ? 12 : 5);
+
+    nodes3d.push({
+      id: n.id,
+      label: label,
+      _type: t,
+      _props: n.properties || {},
+      _val: val,
+      _color: color,
+      _isMem: isMem
+    });
+  }
+
+  // Build links
+  var links3d = [];
+  for (var i = 0; i < data.edges.length; i++) {
+    var e = data.edges[i];
+    var edgeLabel = e.label || '';
+    var edgeColor = EDGE_COLORS[edgeLabel] || '#374151';
+    var w = (edgeLabel === 'memory_relates') ? 2 : 1;
+    links3d.push({
+      source: e.from,
+      target: e.to,
+      _label: edgeLabel,
+      _color: edgeColor,
+      _width: w
+    });
+  }
+
+  // Build adjacency for highlighting
+  var _mgNeighbors = {};
+  var _mgLinks = {};
+  for (var i = 0; i < links3d.length; i++) {
+    var l = links3d[i];
+    var sId = typeof l.source === 'object' ? l.source.id : l.source;
+    var tId = typeof l.target === 'object' ? l.target.id : l.target;
+    if (!_mgNeighbors[sId]) _mgNeighbors[sId] = new Set();
+    if (!_mgNeighbors[tId]) _mgNeighbors[tId] = new Set();
+    _mgNeighbors[sId].add(tId);
+    _mgNeighbors[tId].add(sId);
+    if (!_mgLinks[sId]) _mgLinks[sId] = new Set();
+    if (!_mgLinks[tId]) _mgLinks[tId] = new Set();
+    _mgLinks[sId].add(l);
+    _mgLinks[tId].add(l);
+  }
+
+  var _mgSelectedId = null;
+  var _mgHighlightNodes = new Set();
+  var _mgHighlightLinks = new Set();
+
+  function updateMGHighlight(nodeId) {
+    _mgHighlightLinks.clear();
+    _mgHighlightNodes.clear();
+    _mgSelectedId = nodeId;
+    if (nodeId) {
+      _mgHighlightNodes.add(nodeId);
+      var nb = _mgNeighbors[nodeId];
+      if (nb) nb.forEach(function(nId) { _mgHighlightNodes.add(nId); });
+      var lks = _mgLinks[nodeId];
+      if (lks) lks.forEach(function(link) { _mgHighlightLinks.add(link); });
+    }
+  }
+
+  var rect = container.getBoundingClientRect();
+
+  // Destroy previous instance
+  if (memoryGraph3dInstance) {
+    try { memoryGraph3dInstance._destructor && memoryGraph3dInstance._destructor(); } catch(e) {}
+  }
+
+  var graph3d = ForceGraph3D({ controlType: 'orbit' })(container)
+    .width(rect.width)
+    .height(rect.height)
+    .backgroundColor('#0f172a')
+    .showNavInfo(false)
+    .nodeLabel(function(n) {
+      var memType = (n._props || {}).memoryType || '';
+      var content = (n._props || {}).content || n.label || '';
+      var importance = (n._props || {}).importance;
+      var isMem = n._isMem;
+      var typeBadge = '';
+      if (isMem && memType) {
+        var typeIcons = { decision:'🏗️', bugfix:'🐛', pattern:'📐', insight:'💡', preference:'⚙️', summary:'📝' };
+        typeBadge = '<span style="font-size:10px;background:rgba(99,102,241,0.3);padding:1px 6px;border-radius:3px;">' + (typeIcons[memType] || '') + ' ' + memType + '</span>';
+      }
+      var impBar = '';
+      if (isMem && importance != null) {
+        var pct = Math.round(importance * 100);
+        impBar = '<div style="margin-top:4px;"><span style="font-size:9px;color:#6b7280;">重要性: </span><span style="display:inline-block;width:50px;height:3px;background:#374151;border-radius:2px;vertical-align:middle;"><span style="display:block;height:100%;width:' + pct + '%;background:linear-gradient(90deg,#6366f1,#a78bfa);border-radius:2px;"></span></span> <span style="font-size:9px;color:#9ca3af;">' + pct + '%</span></div>';
+      }
+      return '<div style="background:rgba(15,23,42,0.92);color:#e2e8f0;padding:8px 12px;border-radius:8px;font-size:12px;border:1px solid rgba(192,38,211,0.3);backdrop-filter:blur(4px);max-width:320px;">'
+        + '<div style="font-weight:600;margin-bottom:3px;">' + (n.label || n.id) + '</div>'
+        + (typeBadge ? '<div style="margin-bottom:3px;">' + typeBadge + '</div>' : '')
+        + (isMem && content ? '<div style="color:#94a3b8;font-size:11px;line-height:1.4;max-height:80px;overflow:hidden;">' + content + '</div>' : '')
+        + impBar
+        + '<div style="color:#4b5563;font-size:9px;margin-top:3px;">' + (n._type || '') + '</div>'
+        + '</div>';
+    })
+    .nodeColor(function(n) { return n._color; })
+    .nodeVal(function(n) { return n._val; })
+    .nodeOpacity(0.92)
+    .nodeResolution(16)
+    .nodeThreeObject(function(n) {
+      if (typeof THREE === 'undefined') return false;
+      var color = n._color;
+      var group = new THREE.Group();
+      var coreMesh;
+
+      if (n._isMem) {
+        // Memory nodes: dodecahedron (多面体)
+        var size = 2 + (n._val || 5) * 0.5;
+        var geo = new THREE.DodecahedronGeometry(size);
+        var mat = new THREE.MeshLambertMaterial({ color: color, transparent: true, opacity: 0.92, emissive: color, emissiveIntensity: 0.35 });
+        coreMesh = new THREE.Mesh(geo, mat);
+      } else if (n._type === 'project') {
+        var geo = new THREE.OctahedronGeometry(10);
+        var mat = new THREE.MeshLambertMaterial({ color: color, transparent: true, opacity: 0.92, emissive: color, emissiveIntensity: 0.4 });
+        coreMesh = new THREE.Mesh(geo, mat);
+      } else if (n._type === 'module') {
+        var size = 6;
+        var geo = new THREE.BoxGeometry(size, size, size);
+        var mat = new THREE.MeshLambertMaterial({ color: color, transparent: true, opacity: 0.92, emissive: color, emissiveIntensity: 0.3 });
+        coreMesh = new THREE.Mesh(geo, mat);
+      } else {
+        // Tasks, docs: sphere
+        var radius = 3 + (n._val || 5) * 0.2;
+        var geo = new THREE.SphereGeometry(radius, 12, 12);
+        var mat = new THREE.MeshLambertMaterial({ color: color, transparent: true, opacity: 0.85, emissive: color, emissiveIntensity: 0.2 });
+        coreMesh = new THREE.Mesh(geo, mat);
+      }
+      group.add(coreMesh);
+
+      // Glow sprite for memory nodes
+      if (n._isMem) {
+        var spriteMat = new THREE.SpriteMaterial({
+          map: createGlowTexture_mg(color),
+          transparent: true,
+          opacity: 0.4,
+          depthWrite: false,
+          blending: THREE.AdditiveBlending
+        });
+        var sprite = new THREE.Sprite(spriteMat);
+        var spriteSize = (n._val || 5) * 2.5;
+        sprite.scale.set(spriteSize, spriteSize, 1);
+        group.add(sprite);
+      }
+
+      return group;
+    })
+    .nodeThreeObjectExtend(false)
+    // Link styles
+    .linkColor(function(l) {
+      if (_mgSelectedId && !_mgHighlightLinks.has(l)) return 'rgba(55,65,81,0.15)';
+      return l._color;
+    })
+    .linkWidth(function(l) {
+      return _mgHighlightLinks.has(l) ? l._width * 2 : l._width;
+    })
+    .linkOpacity(0.7)
+    .linkDirectionalParticles(function(l) {
+      return _mgHighlightLinks.has(l) ? 3 : 0;
+    })
+    .linkDirectionalParticleWidth(2)
+    .linkDirectionalParticleSpeed(0.006)
+    .linkDirectionalParticleColor(function(l) { return l._color; })
+    // Interactions
+    .onNodeClick(function(node) {
+      if (_mgSelectedId === node.id) {
+        updateMGHighlight(null);
+      } else {
+        updateMGHighlight(node.id);
+      }
+      graph3d.nodeColor(graph3d.nodeColor()); // trigger refresh
+
+      // Show detail in panel if available
+      if (typeof showPanel === 'function') {
+        var panelNode = {
+          id: node.id,
+          label: node.label,
+          _type: node._type,
+          _props: node._props
+        };
+        showPanel(panelNode);
+      }
+    })
+    .onBackgroundClick(function() {
+      updateMGHighlight(null);
+      graph3d.nodeColor(graph3d.nodeColor());
+      if (typeof closePanel === 'function') closePanel();
+    })
+    .graphData({ nodes: nodes3d, links: links3d });
+
+  // Force simulation tuning for memory network
+  graph3d.d3Force('charge').strength(-120).distanceMax(300);
+  graph3d.d3Force('link').distance(function(l) {
+    return l._label === 'memory_relates' ? 40 : 80;
+  });
+
+  memoryGraph3dInstance = graph3d;
+
+  // Auto-zoom to fit
+  setTimeout(function() {
+    try { graph3d.zoomToFit(800, 40); } catch(e) {}
+  }, 1500);
+}
+
+// Glow texture generator for memory nodes
+function createGlowTexture_mg(colorHex) {
+  if (typeof document === 'undefined') return null;
+  var size = 128;
+  var canvas = document.createElement('canvas');
+  canvas.width = size;
+  canvas.height = size;
+  var ctx = canvas.getContext('2d');
+  if (!ctx) return null;
+  var gradient = ctx.createRadialGradient(size / 2, size / 2, 0, size / 2, size / 2, size / 2);
+  gradient.addColorStop(0, colorHex);
+  gradient.addColorStop(0.3, colorHex + 'aa');
+  gradient.addColorStop(0.7, colorHex + '33');
+  gradient.addColorStop(1, 'transparent');
+  ctx.fillStyle = gradient;
+  ctx.fillRect(0, 0, size, size);
+  var tex = new THREE.CanvasTexture(canvas);
+  return tex;
+}
+
 // ========== Memory Generate ==========
 var memGenCandidates = [];
 var memGenSelected = {};
@@ -1283,6 +1625,7 @@ function saveSelectedCandidates() {
         content: memContent,
         tags: c.suggestedTags || [],
         relatedTaskId: c.sourceType === 'task' ? c.sourceId : undefined,
+        sourceId: c.sourceId,
         importance: c.suggestedImportance || 0.5,
       })
     }).then(function(r) { return r.json(); }).then(function() {
@@ -1337,6 +1680,209 @@ function showPhasePickerForGenerate() {
   }).catch(function() {
     alert('获取阶段列表失败');
   });
+}
+
+// ========== 一键全量导入 ==========
+var _autoImportCancelled = false;
+
+function autoImportAllMemories() {
+  // close dropdown
+  var dd = document.getElementById('memGenDropdown');
+  if (dd) dd.classList.remove('show');
+
+  _autoImportCancelled = false;
+
+  // show progress overlay
+  var overlay = document.getElementById('memAutoImportOverlay');
+  if (overlay) overlay.style.display = 'flex';
+
+  var titleEl = document.getElementById('memAutoImportTitle');
+  var statusEl = document.getElementById('memAutoImportStatus');
+  var detailEl = document.getElementById('memAutoImportDetail');
+  var progressEl = document.getElementById('memAutoImportProgress');
+  var cancelBtn = document.getElementById('memAutoImportCancelBtn');
+  if (titleEl) titleEl.textContent = '⚡ 一键全量导入';
+  if (statusEl) statusEl.textContent = '正在获取候选项...';
+  if (detailEl) detailEl.textContent = '';
+  if (progressEl) progressEl.style.width = '0%';
+  if (cancelBtn) { cancelBtn.disabled = false; cancelBtn.textContent = '取消'; }
+
+  var totalSaved = 0;
+  var totalFailed = 0;
+  var totalSkipped = 0;
+  var batchNum = 0;
+  // Phase-44: Memory Tree — 记录 sourceId → entityId 映射，用于建立 suggestedRelations
+  var sourceIdToEntityId = {};
+  var pendingRelations = [];
+  var totalRelationsCreated = 0;
+
+  function loadAndSaveBatch() {
+    if (_autoImportCancelled) { finishImport('已取消'); return; }
+
+    batchNum++;
+    if (statusEl) statusEl.textContent = '第 ' + batchNum + ' 批 — 获取候选项...';
+    if (detailEl) detailEl.textContent = '已累计保存: ' + totalSaved + ' 条' + (totalSkipped > 0 ? ' · 跳过: ' + totalSkipped : '');
+
+    fetch('/api/memories/generate?source=both&limit=50').then(function(r) { return r.json(); }).then(function(data) {
+      var candidates = data.candidates || [];
+      var skipped = (data.stats && data.stats.skippedWithMemory) || 0;
+      totalSkipped = skipped;
+
+      if (candidates.length === 0) {
+        finishImport('完成');
+        return;
+      }
+
+      if (statusEl) statusEl.textContent = '第 ' + batchNum + ' 批 — 保存 ' + candidates.length + ' 条...';
+
+      var batchSaved = 0;
+      var batchFailed = 0;
+
+      function saveOne(idx) {
+        if (_autoImportCancelled) { totalSaved += batchSaved; totalFailed += batchFailed; finishImport('已取消'); return; }
+        if (idx >= candidates.length) {
+          totalSaved += batchSaved;
+          totalFailed += batchFailed;
+          // continue to next batch
+          setTimeout(loadAndSaveBatch, 300);
+          return;
+        }
+
+        var c = candidates[idx];
+        var memContent = c.content || c.sourceTitle || '';
+        if (memContent.length > 500) memContent = memContent.substring(0, 500) + '...';
+
+        // progress within batch
+        var pctBatch = Math.round(((idx + 1) / candidates.length) * 100);
+        if (progressEl) progressEl.style.width = pctBatch + '%';
+        var relCount = (c.suggestedRelations || []).length;
+        if (detailEl) detailEl.textContent = '批次 ' + batchNum + ': ' + (idx + 1) + '/' + candidates.length + ' · 累计保存: ' + (totalSaved + batchSaved) + ' 条' + (relCount > 0 ? ' · 关系: ' + relCount : '');
+
+        fetch('/api/memories/save', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            memoryType: c.suggestedMemoryType || 'summary',
+            content: memContent,
+            tags: c.suggestedTags || [],
+            relatedTaskId: c.sourceType === 'task' ? c.sourceId : undefined,
+            sourceId: c.sourceId,
+            importance: c.suggestedImportance || 0.5,
+          })
+        }).then(function(r) { return r.json(); }).then(function(result) {
+          batchSaved++;
+          // Phase-44: 记录 sourceId → entityId 映射，用于后续建立 suggestedRelations
+          if (result && result.memory && result.memory.id && c.sourceId) {
+            sourceIdToEntityId[c.sourceId] = result.memory.id;
+          }
+          // 收集 suggestedRelations 待后续处理
+          if (c.suggestedRelations && c.suggestedRelations.length > 0) {
+            pendingRelations.push({ sourceId: c.sourceId, relations: c.suggestedRelations });
+          }
+          saveOne(idx + 1);
+        }).catch(function() {
+          batchFailed++;
+          saveOne(idx + 1);
+        });
+      }
+
+      saveOne(0);
+    }).catch(function(err) {
+      if (statusEl) statusEl.textContent = '获取候选项失败';
+      if (detailEl) detailEl.textContent = err.message || String(err);
+      if (cancelBtn) { cancelBtn.textContent = '关闭'; cancelBtn.disabled = false; }
+    });
+  }
+
+  function finishImport(reason) {
+    if (progressEl) progressEl.style.width = '100%';
+    if (reason === '已取消') {
+      if (statusEl) statusEl.textContent = '已取消 — 保存了 ' + totalSaved + ' 条';
+      if (titleEl) titleEl.textContent = '⚡ 导入已取消';
+      showFinalStats();
+      return;
+    }
+
+    // Phase-44: 第二阶段 — 用 suggestedRelations 建立记忆间关系
+    if (pendingRelations.length > 0) {
+      if (statusEl) statusEl.textContent = '🔗 正在建立记忆关系...';
+      if (detailEl) detailEl.textContent = '已保存 ' + totalSaved + ' 条记忆，正在处理 ' + pendingRelations.length + ' 组关系建议';
+
+      var relIdx = 0;
+      function processNextRelation() {
+        if (relIdx >= pendingRelations.length) {
+          if (titleEl) titleEl.textContent = '✅ 导入完成（含记忆树）';
+          if (statusEl) statusEl.textContent = '🎉 记忆 + 关系全部导入完成！';
+          showFinalStats();
+          return;
+        }
+        var item = pendingRelations[relIdx];
+        var fromEntityId = sourceIdToEntityId[item.sourceId];
+        if (!fromEntityId) { relIdx++; processNextRelation(); return; }
+
+        var rels = item.relations || [];
+        var rIdx = 0;
+        function createNextRel() {
+          if (rIdx >= rels.length) { relIdx++; processNextRelation(); return; }
+          var rel = rels[rIdx];
+          var toEntityId = sourceIdToEntityId[rel.targetSourceId];
+          if (!toEntityId) { rIdx++; createNextRel(); return; }
+
+          fetch('/api/memories/relate', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+              fromId: fromEntityId,
+              toId: toEntityId,
+              relationType: rel.relationType || 'MEMORY_RELATES',
+              weight: rel.weight || 0.5,
+            })
+          }).then(function() {
+            totalRelationsCreated++;
+            if (detailEl) detailEl.textContent = '关系: ' + totalRelationsCreated + ' 条已建立';
+            rIdx++;
+            createNextRel();
+          }).catch(function() {
+            rIdx++;
+            createNextRel();
+          });
+        }
+        createNextRel();
+      }
+      processNextRelation();
+    } else {
+      if (titleEl) titleEl.textContent = '✅ 导入完成';
+      if (statusEl) statusEl.textContent = '🎉 全部导入完成！';
+      showFinalStats();
+    }
+  }
+
+  function showFinalStats() {
+    var failTxt = totalFailed > 0 ? ' · 失败: ' + totalFailed : '';
+    var relTxt = totalRelationsCreated > 0 ? ' · 关系: ' + totalRelationsCreated + ' 条' : '';
+    if (detailEl) detailEl.textContent = '共保存 ' + totalSaved + ' 条记忆' + failTxt + relTxt + ' · 跳过已有: ' + totalSkipped;
+    if (cancelBtn) { cancelBtn.textContent = '关闭'; cancelBtn.onclick = function() { closeAutoImport(); }; }
+
+    // refresh memory list
+    memoryLoaded = false;
+    setTimeout(function() {
+      closeAutoImport();
+      loadMemoryPage();
+    }, 2000);
+  }
+
+  loadAndSaveBatch();
+}
+
+function cancelAutoImport() {
+  _autoImportCancelled = true;
+  var cancelBtn = document.getElementById('memAutoImportCancelBtn');
+  if (cancelBtn) { cancelBtn.disabled = true; cancelBtn.textContent = '取消中...'; }
+}
+
+function closeAutoImport() {
+  var overlay = document.getElementById('memAutoImportOverlay');
+  if (overlay) overlay.style.display = 'none';
 }
 
 `;

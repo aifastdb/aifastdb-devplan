@@ -22,11 +22,35 @@ import {
   type VectorSearchConfig,
   type VectorSearchHit,
   VibeSynapse,
+  // Phase-52: Perception 预设 + 配置类型（Embedding 模型可配置化）
+  PerceptionPresets,
+  type PerceptionConfig,
+  resolveModelDimension,
+  // Phase-52: TextSearch 类型（Tantivy BM25 三路混合搜索）
+  type TextSearchHit,
+  type TextSearchConfig,
+  // Phase-46: 导入 Phase-109 Memory Tree 类型接口（供 Phase-47~51 使用）
+  type MemoryTreeConfig,
+  // DecomposedEntity — 仅 Rust 层 memoryTreeDetectConflicts 使用，TS 层冲突检测不再需要
+  type DecomposedRelation,
+  type DecompositionResult,
+  type MemoryTreeEmbeddingInput,
+  type MemoryTreeStoreResult,
+  type ActivatedMemory as RustActivatedMemory,
+  type ActivationResult,
+  type MemoryScanReport,
+  // ConflictResult — TS 层冲突检测已重写为直接向量搜索，不再委托 Rust 层
 } from 'aifastdb';
 
 import * as path from 'path';
 import * as fs from 'fs';
 import type { IDevPlanStore } from './dev-plan-interface';
+import {
+  DEVPLAN_SHARD_NAMES,
+  DEVPLAN_TYPE_SHARD_MAPPING,
+  DEVPLAN_RELATION_SHARD_ID,
+  DEVPLAN_EXPECTED_SHARD_DIRS,
+} from './shard-config';
 import type {
   DevPlanSection,
   DevPlanDocInput,
@@ -65,6 +89,7 @@ import type {
   MemoryContext,
   MemoryCandidate,
   MemoryGenerateResult,
+  PerceptionPresetName,
 } from './types';
 
 // ============================================================================
@@ -96,6 +121,17 @@ const RT = {
   HAS_PROMPT: 'has_prompt',
   HAS_MEMORY: 'has_memory',
   MEMORY_FROM_TASK: 'memory_from_task',
+  // ---- Phase-37: 记忆网络关系类型 ----
+  /** 记忆 ↔ 记忆 语义关联（双向，带 similarity score 权重） */
+  MEMORY_RELATES: 'memory_relates',
+  /** 文档 → 记忆 来源关系（从文档提取的记忆） */
+  MEMORY_FROM_DOC: 'memory_from_doc',
+  /** 模块 → 记忆 归属关系（模块级记忆） */
+  MODULE_MEMORY: 'module_memory',
+  /** 记忆 → 记忆 替代/演化关系（新记忆替代旧记忆） */
+  MEMORY_SUPERSEDES: 'memory_supersedes',
+  /** 记忆 → 记忆 冲突关系（两条记忆互相矛盾，如 decision 冲突） */
+  MEMORY_CONFLICTS: 'memory_conflicts',
 } as const;
 
 // ============================================================================
@@ -138,6 +174,8 @@ export class DevPlanGraphStore implements IDevPlanStore {
   private synapse: VibeSynapse | null = null;
   /** 语义搜索是否成功初始化 */
   private semanticSearchReady: boolean = false;
+  /** Phase-52: Tantivy BM25 全文搜索是否可用 */
+  private textSearchReady: boolean = false;
 
   constructor(projectName: string, config: DevPlanGraphStoreConfig) {
     this.projectName = projectName;
@@ -148,28 +186,25 @@ export class DevPlanGraphStore implements IDevPlanStore {
     DevPlanGraphStore.migrateWalDirNames(config.graphPath);
 
     // 构建 SocialGraphV2 配置
+    // shardCount 由 SocialGraphV2 自动从 shardNames.length 推导（aifastdb >= 2.7.0）
+    // 所有分片定义集中在 shard-config.ts（单一数据源）
     const graphConfig: any = {
       path: config.graphPath,
-      shardCount: config.shardCount || 5,
       walEnabled: true,
       mode: 'balanced',
-      shardNames: ['tasks', 'relations', 'docs', 'modules', 'prompts'],
-      // 显式路由：DevPlan 实体类型 → 对应分片
-      typeShardMapping: {
-        'devplan-project': 0,      // 项目根节点 → tasks shard
-        'devplan-main-task': 0,    // 主任务     → tasks shard
-        'devplan-sub-task': 0,     // 子任务     → tasks shard
-        'devplan-doc': 2,          // 文档片段   → docs shard
-        'devplan-module': 3,       // 功能模块   → modules shard
-        'devplan-prompt': 4,       // Prompt 日志 → prompts shard
-        'devplan-memory': 4,       // 记忆实体   → prompts shard (复用)
-        '_default': 0,             // 未知类型   → tasks shard (fallback)
-      },
-      relationShardId: 1,          // 所有关系   → relations shard
+      shardNames: DEVPLAN_SHARD_NAMES,
+      typeShardMapping: DEVPLAN_TYPE_SHARD_MAPPING,
+      relationShardId: DEVPLAN_RELATION_SHARD_ID,
     };
 
     // 如果启用语义搜索，配置 SocialGraphV2 的向量搜索
-    const dimension = config.embeddingDimension || 384;
+    // 维度自动解析: explicitDimension > perception.dimension > MODEL_DIMENSION_REGISTRY[modelId] > 384
+    const perception = config.enableSemanticSearch
+      ? DevPlanGraphStore.resolvePerceptionConfig(config) : null;
+    const dimension = resolveModelDimension(
+      perception?.modelId,
+      config.embeddingDimension ?? perception?.dimension,
+    );
     if (config.enableSemanticSearch) {
       graphConfig.vectorSearch = {
         dimension,
@@ -181,14 +216,56 @@ export class DevPlanGraphStore implements IDevPlanStore {
       } satisfies VectorSearchConfig;
     }
 
+    // Phase-52: 如果启用 Tantivy BM25 全文搜索，配置 textSearch
+    if (config.enableTextSearch) {
+      graphConfig.textSearch = {
+        enableChinese: true,  // DevPlan 面向中文开发者，默认启用中文分词
+        autoCommit: true,     // 自动提交索引更新
+      } satisfies TextSearchConfig;
+    }
+
     this.graph = new SocialGraphV2(graphConfig);
 
-    // 恢复 WAL 数据（包括向量 WAL）
-    this.graph.recover();
+    // SocialStoreV2::new() 已在构造函数内自动调用 recover()（包括实体 WAL + 向量 WAL）
+    // ⚠️ 不要再手动调用 graph.recover()！第二次 recover() 会导致 HNSW 向量索引被清空
+    // 原因：recover_vector_index 在已有向量的 HNSW 上重复 insert_sync 引起状态混乱
+    // See: SocialStoreV2::new() → store.recover() (packages/core/src/social/store_v2/mod.rs:152)
+
+    // Phase-52: 检测 Tantivy 全文搜索是否就绪
+    if (config.enableTextSearch) {
+      try {
+        this.textSearchReady = this.graph.hasTextSearch();
+        if (this.textSearchReady) {
+          console.error('[DevPlan] Tantivy BM25 full-text search initialized');
+        } else {
+          console.warn('[DevPlan] Tantivy BM25 requested but hasTextSearch() returned false. ' +
+            'Ensure aifastdb was built with full-text-search feature.');
+        }
+      } catch {
+        console.warn('[DevPlan] Tantivy BM25 initialization check failed. Falling back to literal search.');
+        this.textSearchReady = false;
+      }
+    }
 
     // 初始化 VibeSynapse（用于 Embedding 生成）
     if (config.enableSemanticSearch) {
-      this.initSynapse(config.graphPath, dimension);
+      this.initSynapse(config);
+    }
+
+    // Phase-52: 向量索引启动诊断
+    if (config.enableSemanticSearch) {
+      try {
+        const vc = this.graph.vectorCount();
+        const vd = this.graph.vectorDimension();
+        if (vc > 0) {
+          console.error(`[DevPlan] Vector index recovered: ${vc} vectors (dim=${vd})`);
+        } else if (this.semanticSearchReady) {
+          console.warn(
+            `[DevPlan] Vector index is empty (dim=${vd}). ` +
+            'Run devplan_rebuild_index to populate vectors for semantic search.'
+          );
+        }
+      } catch { /* vectorCount may not be available */ }
     }
 
     // 确保项目根实体存在
@@ -196,29 +273,69 @@ export class DevPlanGraphStore implements IDevPlanStore {
   }
 
   /**
+   * Phase-52: 解析 Perception 配置
+   *
+   * 优先级: perceptionConfig > perceptionPreset > 默认 miniLM
+   * 所有预设都启用 autoDownload（首次运行自动下载模型）。
+   */
+  private static resolvePerceptionConfig(config: DevPlanGraphStoreConfig): PerceptionConfig {
+    // 1. 完整配置对象优先
+    if (config.perceptionConfig) {
+      return {
+        ...config.perceptionConfig,
+        autoDownload: config.perceptionConfig.autoDownload ?? true,
+      };
+    }
+
+    // 2. 预设名称
+    if (config.perceptionPreset) {
+      const presetFn = PerceptionPresets[config.perceptionPreset];
+      if (presetFn) {
+        const preset = presetFn();
+        return { ...preset, autoDownload: preset.autoDownload ?? true };
+      }
+      console.warn(
+        `[DevPlan] Unknown perception preset "${config.perceptionPreset}", ` +
+        `available: ${Object.keys(PerceptionPresets).join(', ')}. Falling back to miniLM.`
+      );
+    }
+
+    // 3. 默认 miniLM
+    return { ...PerceptionPresets.miniLM(), autoDownload: true };
+  }
+
+  /**
    * 初始化 VibeSynapse Embedding 引擎
    *
-   * 使用 Candle MiniLM (384维) 作为默认模型，支持零配置离线使用。
+   * Phase-52: 支持通过 perceptionPreset / perceptionConfig 配置不同模型。
+   * 默认使用 Candle MiniLM (384维)，支持零配置离线使用。
    * 初始化失败时降级为纯字面搜索（graceful degradation）。
    */
-  private initSynapse(graphPath: string, dimension: number): void {
+  private initSynapse(config: DevPlanGraphStoreConfig): void {
+    const perception = DevPlanGraphStore.resolvePerceptionConfig(config);
+    // 维度自动解析: explicitDimension > perception.dimension > MODEL_DIMENSION_REGISTRY[modelId] > 384
+    // ⚠️ 维度一旦初始化不可变更，否则 HNSW 索引与向量维度不匹配
+    const dimension = resolveModelDimension(
+      perception.modelId,
+      config.embeddingDimension ?? perception.dimension,
+    );
+    const modelLabel = perception.modelId || perception.engineType || 'unknown';
+
     try {
-      const synapsePath = path.resolve(graphPath, '..', 'synapse-data');
+      const synapsePath = path.resolve(config.graphPath, '..', 'synapse-data');
       this.synapse = new VibeSynapse({
         storage: synapsePath,
-        dimension,
-        perception: {
-          engineType: 'candle',
-          modelId: 'sentence-transformers/all-MiniLM-L6-v2',
-          autoDownload: true,
-        },
+        // dimension 由 VibeSynapse 从 perception.modelId 自动解析，无需显式传递
+        // 但如果用户在 config 中显式指定了 embeddingDimension，则作为 Matryoshka 截断维度
+        ...(config.embeddingDimension ? { dimension: config.embeddingDimension } : {}),
+        perception,
       });
 
       // 验证 perception engine 是否真正可用
       if (!this.synapse.hasPerception) {
         console.warn(
-          '[DevPlan] VibeSynapse created but perception engine not available. ' +
-          'Candle MiniLM may not be installed. Falling back to literal search.'
+          `[DevPlan] VibeSynapse created but perception engine not available (model: ${modelLabel}). ` +
+          'Falling back to literal search.'
         );
         this.synapse = null;
         this.semanticSearchReady = false;
@@ -229,15 +346,15 @@ export class DevPlanGraphStore implements IDevPlanStore {
       try {
         this.synapse.embed('test');
         this.semanticSearchReady = true;
-        console.error('[DevPlan] Semantic search initialized (Candle MiniLM)');
+        console.error(`[DevPlan] Semantic search initialized (model: ${modelLabel}, dim: ${dimension})`);
       } catch {
-        console.warn('[DevPlan] VibeSynapse embed() dry-run failed. Falling back to literal search.');
+        console.warn(`[DevPlan] VibeSynapse embed() dry-run failed (model: ${modelLabel}). Falling back to literal search.`);
         this.synapse = null;
         this.semanticSearchReady = false;
       }
     } catch (e) {
       console.warn(
-        `[DevPlan] Failed to initialize VibeSynapse for semantic search: ${
+        `[DevPlan] Failed to initialize VibeSynapse (model: ${modelLabel}): ${
           e instanceof Error ? e.message : String(e)
         }. Falling back to literal search.`
       );
@@ -251,21 +368,25 @@ export class DevPlanGraphStore implements IDevPlanStore {
   // ==========================================================================
 
   /**
-   * 一次性迁移：将旧 WAL 目录名重命名为语义化新名。
+   * WAL 目录迁移 + 分片目录补全。
    *
-   * 映射表：
-   * - shard_0_entities → shard_0_tasks
-   * - shard_2_index    → shard_2_docs
-   * - shard_3_meta     → shard_3_modules
-   * - shard_1_relations 不变
+   * 1. 旧名重命名（幂等）：
+   *    - shard_0_entities → shard_0_tasks
+   *    - shard_2_index    → shard_2_docs
+   *    - shard_3_meta     → shard_3_modules
+   *
+   * 2. 确保所有预期的分片目录存在（Phase-36: shard_5_memory）：
+   *    SocialGraphV2 (Rust) 根据磁盘上的目录数确定分片数量，
+   *    如果新增分片目录不存在会导致 index out of bounds panic。
+   *    因此必须在 SocialGraphV2 构造之前创建缺失的目录。
    *
    * 该方法必须在 `new SocialGraphV2(config)` 之前调用。
-   * 幂等：如果旧目录不存在或新目录已存在则跳过。
    */
   private static migrateWalDirNames(graphPath: string): void {
     const walBase = path.join(graphPath, 'wal');
     if (!fs.existsSync(walBase)) return; // 全新安装，无需迁移
 
+    // ── Step 1: 旧名 → 新名 重命名 ──
     const renames: Array<[string, string]> = [
       ['shard_0_entities', 'shard_0_tasks'],
       ['shard_2_index',    'shard_2_docs'],
@@ -289,6 +410,26 @@ export class DevPlanGraphStore implements IDevPlanStore {
         }
       }
     }
+
+    // ── Step 2: 确保所有预期分片目录存在 ──
+    // 当新增分片时（如 shard_5_memory），旧项目缺少对应目录，
+    // 必须提前创建空目录，否则 Rust SocialGraphV2 会 panic。
+    // 分片列表从 shard-config.ts 自动推导，不再硬编码。
+    for (const shardName of DEVPLAN_EXPECTED_SHARD_DIRS) {
+      const shardDir = path.join(walBase, shardName);
+      if (!fs.existsSync(shardDir)) {
+        try {
+          fs.mkdirSync(shardDir, { recursive: true });
+          console.error(`[DevPlan] Created missing shard dir: ${shardName}`);
+        } catch (e) {
+          console.warn(
+            `[DevPlan] Failed to create shard dir ${shardName}: ${
+              e instanceof Error ? e.message : String(e)
+            }`
+          );
+        }
+      }
+    }
   }
 
   // ==========================================================================
@@ -302,8 +443,8 @@ export class DevPlanGraphStore implements IDevPlanStore {
         createdAt: Date.now(),
       }
     );
-    this.projectEntityId = entity.id;
-    this.graph.flush();
+      this.projectEntityId = entity.id;
+      this.graph.flush();
   }
 
   private findProjectEntity(): Entity | null {
@@ -425,15 +566,25 @@ export class DevPlanGraphStore implements IDevPlanStore {
 
   /** 获取实体的出向关系 */
   private getOutRelations(entityId: string, relationType?: string): Relation[] {
+    // Phase-44: 优先使用 outgoingByType（直接查询分片，O(出度)），
+    //           避免 listRelations 的全量扫描 O(关系总数)
+    // Phase-46: 移除 as any 断言 — aifastdb ≥2.8.0 已有正式类型
+    if (relationType) {
+      return this.graph.outgoingByType(entityId, relationType) as Relation[];
+    }
     const filter: any = { sourceId: entityId };
-    if (relationType) filter.relationType = relationType;
     return this.graph.listRelations(filter);
   }
 
   /** 获取实体的入向关系 */
   private getInRelations(entityId: string, relationType?: string): Relation[] {
+    // Phase-44: 优先使用 incomingByType（直接查询分片，O(入度)），
+    //           避免 listRelations 的全量扫描 O(关系总数)
+    // Phase-46: 移除 as any 断言 — aifastdb ≥2.8.0 已有正式类型
+    if (relationType) {
+      return this.graph.incomingByType(entityId, relationType) as Relation[];
+    }
     const filter: any = { targetId: entityId };
-    if (relationType) filter.relationType = relationType;
     return this.graph.listRelations(filter);
   }
 
@@ -630,19 +781,19 @@ export class DevPlanGraphStore implements IDevPlanStore {
       : input.section;
     const entity = this.graph.upsertEntityByProp(
       ET.DOC, 'sectionKey', sectionKey, input.title, {
-        projectName: this.projectName,
-        section: input.section,
+      projectName: this.projectName,
+      section: input.section,
         sectionKey,
-        title: input.title,
-        content: input.content,
-        version,
-        subSection: input.subSection || null,
-        relatedSections: input.relatedSections || [],
-        relatedTaskIds: input.relatedTaskIds || [],
-        moduleId: finalModuleId || null,
-        parentDoc: finalParentDoc || null,
-        createdAt: now,
-        updatedAt: now,
+      title: input.title,
+      content: input.content,
+      version,
+      subSection: input.subSection || null,
+      relatedSections: input.relatedSections || [],
+      relatedTaskIds: input.relatedTaskIds || [],
+      moduleId: finalModuleId || null,
+      parentDoc: finalParentDoc || null,
+      createdAt: now,
+      updatedAt: now,
       }
     );
 
@@ -731,11 +882,14 @@ export class DevPlanGraphStore implements IDevPlanStore {
   /**
    * 高级搜索：支持 literal / semantic / hybrid 三种模式
    *
-   * - literal: 纯字面匹配（标题+内容包含查询词）
+   * - literal: 纯字面匹配（标题+内容包含查询词），当 Tantivy 可用时自动升级为 BM25
    * - semantic: 纯语义搜索（embed(query) → searchEntitiesByVector）
-   * - hybrid: 字面+语义 RRF 融合排序
+   * - hybrid: 三路 RRF 融合（vector + BM25/literal + graph）
    *
-   * 当 VibeSynapse 不可用时，semantic/hybrid 模式自动降级为 literal。
+   * Phase-52: 当 Tantivy BM25 可用时，literal 通道自动升级为 BM25 搜索，
+   * 提供更精准的全文匹配（支持中文分词、同义词、TF-IDF 评分）。
+   *
+   * 当 VibeSynapse 不可用时，semantic/hybrid 模式自动降级为 literal/BM25。
    */
   searchSectionsAdvanced(query: string, options?: {
     mode?: SearchMode;
@@ -746,12 +900,35 @@ export class DevPlanGraphStore implements IDevPlanStore {
     const limit = options?.limit || 10;
     const minScore = options?.minScore || 0;
 
-    // ---- Literal Search ----
-    const literalResults = this.literalSearch(query);
+    // ---- BM25 / Literal Search ----
+    // Phase-52: 当 Tantivy 可用时，优先使用 BM25 搜索替代朴素字面匹配
+    let textResults: Array<{ id: string; score?: number; doc?: DevPlanDoc }> = [];
+    if (this.textSearchReady) {
+      try {
+        const bm25Hits: TextSearchHit[] = this.graph.searchEntitiesByText(query, ET.DOC, limit * 2);
+        textResults = bm25Hits
+          .filter(h => (h.entity.properties as any)?.projectName === this.projectName)
+          .map(h => ({
+            id: h.entityId,
+            score: h.score,
+            doc: this.entityToDevPlanDoc(h.entity),
+          }));
+      } catch (e) {
+        console.warn(`[DevPlan] Tantivy BM25 search failed: ${e instanceof Error ? e.message : String(e)}. Falling back to literal.`);
+        // 降级为朴素字面搜索
+        textResults = this.literalSearch(query).map(d => ({ id: d.id, doc: d }));
+      }
+    } else {
+      // 无 Tantivy：使用朴素字面匹配
+      textResults = this.literalSearch(query).map(d => ({ id: d.id, doc: d }));
+    }
 
     // ---- If no semantic search or literal-only mode ----
     if (mode === 'literal' || !this.semanticSearchReady || !this.synapse) {
-      return literalResults.slice(0, limit).map((doc) => ({ ...doc, score: undefined }));
+      return textResults.slice(0, limit).map(r => ({
+        ...(r.doc || this.entityToDevPlanDoc(this.graph.getEntity(r.id)!)),
+        score: r.score,
+      }));
     }
 
     // ---- Semantic Search ----
@@ -761,8 +938,11 @@ export class DevPlanGraphStore implements IDevPlanStore {
       semanticHits = this.graph.searchEntitiesByVector(embedding, limit * 2, ET.DOC);
     } catch (e) {
       console.warn(`[DevPlan] Semantic search failed: ${e instanceof Error ? e.message : String(e)}`);
-      // 降级为字面搜索
-      return literalResults.slice(0, limit).map((doc) => ({ ...doc, score: undefined }));
+      // 降级为 text-only 搜索
+      return textResults.slice(0, limit).map(r => ({
+        ...(r.doc || this.entityToDevPlanDoc(this.graph.getEntity(r.id)!)),
+        score: r.score,
+      }));
     }
 
     if (mode === 'semantic') {
@@ -779,8 +959,8 @@ export class DevPlanGraphStore implements IDevPlanStore {
       return docs;
     }
 
-    // ---- Hybrid Mode: RRF Fusion ----
-    return this.rrfFusion(semanticHits, literalResults, limit, minScore);
+    // ---- Hybrid Mode: Three-way RRF Fusion (vector + BM25/literal) ----
+    return this.rrfFusionThreeWay(semanticHits, textResults, limit, minScore);
   }
 
   /**
@@ -888,22 +1068,22 @@ export class DevPlanGraphStore implements IDevPlanStore {
     const order = input.order != null ? input.order : this.getNextMainTaskOrder();
     const entity = this.graph.upsertEntityByProp(
       ET.MAIN_TASK, 'taskId', input.taskId, input.title, {
-        projectName: this.projectName,
-        taskId: input.taskId,
-        title: input.title,
-        priority: input.priority,
-        description: input.description || '',
-        estimatedHours: input.estimatedHours || 0,
-        relatedSections: input.relatedSections || [],
-        relatedPromptIds: input.relatedPromptIds || [],
-        moduleId: input.moduleId || null,
-        totalSubtasks: 0,
-        completedSubtasks: 0,
-        status: 'pending',
-        order,
-        createdAt: now,
-        updatedAt: now,
-        completedAt: null,
+      projectName: this.projectName,
+      taskId: input.taskId,
+      title: input.title,
+      priority: input.priority,
+      description: input.description || '',
+      estimatedHours: input.estimatedHours || 0,
+      relatedSections: input.relatedSections || [],
+      relatedPromptIds: input.relatedPromptIds || [],
+      moduleId: input.moduleId || null,
+      totalSubtasks: 0,
+      completedSubtasks: 0,
+      status: 'pending',
+      order,
+      createdAt: now,
+      updatedAt: now,
+      completedAt: null,
       }
     );
 
@@ -975,32 +1155,39 @@ export class DevPlanGraphStore implements IDevPlanStore {
     const finalModuleId = input.moduleId || existing.moduleId;
     const finalOrder = input.order != null ? input.order : existing.order;
 
-    this.graph.updateEntity(existing.id, {
-      name: input.title,
-      properties: {
+    // Phase-45: 使用 upsertEntityByProp 代替 updateEntity（修复分片路由不一致）
+    const upsertedEntity = this.graph.upsertEntityByProp(
+      ET.MAIN_TASK, 'taskId', input.taskId, input.title, {
+        projectName: this.projectName,
+        taskId: input.taskId,
         title: input.title,
         priority: input.priority,
         description: input.description || existing.description || '',
         estimatedHours: input.estimatedHours || existing.estimatedHours || 0,
         relatedSections: input.relatedSections || existing.relatedSections || [],
+        relatedPromptIds: input.relatedPromptIds || existing.relatedPromptIds || [],
         moduleId: finalModuleId || null,
+        totalSubtasks: existing.totalSubtasks,
+        completedSubtasks: existing.completedSubtasks,
         status: finalStatus,
         order: finalOrder,
+        createdAt: existing.createdAt,
         updatedAt: now,
         completedAt,
-      },
-    });
+      }
+    );
+    const upsertedId = upsertedEntity?.id || existing.id;
 
     // 更新模块关系
     if (finalModuleId && finalModuleId !== existing.moduleId) {
-      this.updateModuleTaskRelation(existing.id, existing.moduleId, finalModuleId);
+      this.updateModuleTaskRelation(upsertedId, existing.moduleId, finalModuleId);
     }
 
     // 更新 task -> doc 关系
     const newRelatedSections = input.relatedSections || existing.relatedSections || [];
     if (newRelatedSections.length) {
       // 删除旧的 TASK_HAS_DOC 关系
-      const oldDocRels = this.getOutRelations(existing.id, RT.TASK_HAS_DOC);
+      const oldDocRels = this.getOutRelations(upsertedId, RT.TASK_HAS_DOC);
       for (const rel of oldDocRels) {
         this.graph.deleteRelation(rel.id);
       }
@@ -1009,15 +1196,14 @@ export class DevPlanGraphStore implements IDevPlanStore {
         const [sec, sub] = sk.split('|');
         const docEntity = this.findDocEntityBySection(sec, sub);
         if (docEntity) {
-          this.graph.putRelation(existing.id, docEntity.id, RT.TASK_HAS_DOC);
+          this.graph.putRelation(upsertedId, docEntity.id, RT.TASK_HAS_DOC);
         }
       }
     }
 
     this.graph.flush();
 
-    const updated = this.graph.getEntity(existing.id);
-    return updated ? this.entityToMainTask(updated) : existing;
+    return this.getMainTask(input.taskId) || existing;
   }
 
   getMainTask(taskId: string): MainTask | null {
@@ -1055,17 +1241,32 @@ export class DevPlanGraphStore implements IDevPlanStore {
     const now = Date.now();
     const completedAt = status === 'completed' ? now : mainTask.completedAt;
 
-    this.graph.updateEntity(mainTask.id, {
-      properties: {
+    // Phase-45: 使用 upsertEntityByProp 代替 updateEntity
+    // 原因：updateEntity 依赖 UUID 直接查找，在分片路由变更后可能写入错误分片，
+    //       导致更新不可见。upsertEntityByProp 按属性查找实体，路由始终正确。
+    this.graph.upsertEntityByProp(
+      ET.MAIN_TASK, 'taskId', taskId, mainTask.title, {
+        projectName: this.projectName,
+        taskId,
+        title: mainTask.title,
+        priority: mainTask.priority,
+        description: mainTask.description || '',
+        estimatedHours: mainTask.estimatedHours || 0,
+        relatedSections: mainTask.relatedSections || [],
+        relatedPromptIds: mainTask.relatedPromptIds || [],
+        moduleId: mainTask.moduleId || null,
+        totalSubtasks: mainTask.totalSubtasks,
+        completedSubtasks: mainTask.completedSubtasks,
         status,
+        order: mainTask.order,
+        createdAt: mainTask.createdAt,
         updatedAt: now,
         completedAt,
-      },
-    });
+      }
+    );
 
     this.graph.flush();
-    const updated = this.graph.getEntity(mainTask.id);
-    return updated ? this.entityToMainTask(updated) : null;
+    return this.getMainTask(taskId);
   }
 
   // ==========================================================================
@@ -1089,18 +1290,18 @@ export class DevPlanGraphStore implements IDevPlanStore {
     const order = input.order != null ? input.order : this.getNextSubTaskOrder(input.parentTaskId);
     const entity = this.graph.upsertEntityByProp(
       ET.SUB_TASK, 'taskId', input.taskId, input.title, {
-        projectName: this.projectName,
-        taskId: input.taskId,
-        parentTaskId: input.parentTaskId,
-        title: input.title,
-        estimatedHours: input.estimatedHours || 0,
-        relatedFiles: input.relatedFiles || [],
-        description: input.description || '',
-        status: 'pending',
-        order,
-        createdAt: now,
-        updatedAt: now,
-        completedAt: null,
+      projectName: this.projectName,
+      taskId: input.taskId,
+      parentTaskId: input.parentTaskId,
+      title: input.title,
+      estimatedHours: input.estimatedHours || 0,
+      relatedFiles: input.relatedFiles || [],
+      description: input.description || '',
+      status: 'pending',
+      order,
+      createdAt: now,
+      updatedAt: now,
+      completedAt: null,
       }
     );
 
@@ -1132,18 +1333,18 @@ export class DevPlanGraphStore implements IDevPlanStore {
       const order = input.order != null ? input.order : this.getNextSubTaskOrder(input.parentTaskId);
       const entity = this.graph.upsertEntityByProp(
         ET.SUB_TASK, 'taskId', input.taskId, input.title, {
-          projectName: this.projectName,
-          taskId: input.taskId,
-          parentTaskId: input.parentTaskId,
-          title: input.title,
-          estimatedHours: input.estimatedHours || 0,
-          relatedFiles: input.relatedFiles || [],
-          description: input.description || '',
-          status: targetStatus,
-          order,
-          createdAt: now,
-          updatedAt: now,
-          completedAt: targetStatus === 'completed' ? now : null,
+        projectName: this.projectName,
+        taskId: input.taskId,
+        parentTaskId: input.parentTaskId,
+        title: input.title,
+        estimatedHours: input.estimatedHours || 0,
+        relatedFiles: input.relatedFiles || [],
+        description: input.description || '',
+        status: targetStatus,
+        order,
+        createdAt: now,
+        updatedAt: now,
+        completedAt: targetStatus === 'completed' ? now : null,
         }
       );
 
@@ -1237,19 +1438,28 @@ export class DevPlanGraphStore implements IDevPlanStore {
       : (status === 'pending' ? null : subTask.completedAtCommit);
     const revertReason = options?.revertReason || (status === 'pending' ? null : subTask.revertReason);
 
-    this.graph.updateEntity(subTask.id, {
-      properties: {
+    // Phase-45: 使用 upsertEntityByProp 代替 updateEntity（修复分片路由不一致）
+    this.graph.upsertEntityByProp(
+      ET.SUB_TASK, 'taskId', taskId, subTask.title, {
+        projectName: this.projectName,
+        taskId,
+        parentTaskId: subTask.parentTaskId,
+        title: subTask.title,
+        description: subTask.description || '',
+        estimatedHours: subTask.estimatedHours || 0,
+        relatedFiles: subTask.relatedFiles || [],
         status,
+        order: subTask.order,
+        createdAt: subTask.createdAt,
         updatedAt: now,
         completedAt,
         completedAtCommit: completedAtCommit || null,
         revertReason: revertReason || null,
-      },
-    });
+      }
+    );
 
     this.graph.flush();
-    const updated = this.graph.getEntity(subTask.id);
-    return updated ? this.entityToSubTask(updated) : null;
+    return this.getSubTask(taskId);
   }
 
   // ==========================================================================
@@ -1433,13 +1643,13 @@ export class DevPlanGraphStore implements IDevPlanStore {
 
     const entity = this.graph.upsertEntityByProp(
       ET.MODULE, 'moduleId', input.moduleId, input.name, {
-        projectName: this.projectName,
-        moduleId: input.moduleId,
-        name: input.name,
-        description: input.description || '',
-        status,
-        createdAt: now,
-        updatedAt: now,
+      projectName: this.projectName,
+      moduleId: input.moduleId,
+      name: input.name,
+      description: input.description || '',
+      status,
+      createdAt: now,
+      updatedAt: now,
       }
     );
 
@@ -1785,6 +1995,7 @@ export class DevPlanGraphStore implements IDevPlanStore {
           memoryType: input.memoryType,
           tags: input.tags || oldProps.tags || [],
           importance: input.importance ?? oldProps.importance ?? 0.5,
+          sourceId: input.sourceId || oldProps.sourceId || null,
           updatedAt: now,
         },
       });
@@ -1813,6 +2024,7 @@ export class DevPlanGraphStore implements IDevPlanStore {
       content: input.content,
       tags: input.tags || [],
       relatedTaskId: input.relatedTaskId || null,
+      sourceId: input.sourceId || null,
       importance: input.importance ?? 0.5,
       hitCount: 0,
       lastAccessedAt: null,
@@ -1832,9 +2044,10 @@ export class DevPlanGraphStore implements IDevPlanStore {
     }
 
     // 向量索引（如启用语义搜索）
+    let embedding: number[] | null = null;
     if (this.semanticSearchReady && this.synapse) {
       try {
-        const embedding = this.synapse.embed(input.content);
+        embedding = this.synapse.embed(input.content);
         this.graph.indexEntity(entity.id, embedding);
       } catch (e) {
         console.warn(
@@ -1845,8 +2058,568 @@ export class DevPlanGraphStore implements IDevPlanStore {
       }
     }
 
+    // ---- Phase-37: 自动建立记忆间关联（MEMORY_RELATES） ----
+    if (embedding && this.semanticSearchReady) {
+      this.autoLinkSimilarMemories(entity.id, embedding);
+    }
+
+    // ---- Phase-37: 从文档生成的记忆自动建立 MEMORY_FROM_DOC 关系 ----
+    if (input.sourceId) {
+      this.autoLinkMemoryToDoc(entity.id, input.sourceId);
+    }
+
+    // ---- Phase-37: 模块级记忆自动建立 MODULE_MEMORY 关系 ----
+    if (input.moduleId) {
+      this.autoLinkMemoryToModule(entity.id, input.moduleId);
+    }
+
+    // ---- Phase-47: 记忆分解器集成 ----
+    let decompositionSummary: Memory['decomposition'] | undefined;
+    const decomposeMode: 'rule' | 'llm' | undefined =
+      input.decompose === true || input.decompose === 'rule' ? 'rule'
+        : input.decompose === 'llm' ? 'llm'
+          : undefined;
+    if (decomposeMode) {
+      decompositionSummary = this.decomposeAndStoreMemoryTree(
+        entity.id,
+        input.content,
+        decomposeMode,
+        input.decomposeContext,
+        input.llmDecompositionJson,
+      );
+    }
+
+    // ---- Phase-51: 冲突检测 — 自动建立 SUPERSEDES/CONFLICTS 关系 ----
+    let conflictsDetected: Memory['conflicts'] | undefined;
+    if (embedding) {
+      conflictsDetected = this.detectMemoryConflicts(entity, embedding);
+    }
+
     this.graph.flush();
-    return this.entityToMemory(entity);
+    const result = this.entityToMemory(entity);
+    if (decompositionSummary) {
+      result.decomposition = decompositionSummary;
+    }
+    if (conflictsDetected && conflictsDetected.length > 0) {
+      result.conflicts = conflictsDetected;
+    }
+    return result;
+  }
+
+  /**
+   * Phase-37→44: 自动建立记忆间语义关联
+   *
+   * 用向量搜索找到最相似的 N 条已有记忆（minScore >= 0.7），
+   * 建立 MEMORY_RELATES 双向关系，权重为 similarity score。
+   *
+   * Phase-44: 使用 applyMutations 批量创建关系（单次 Rust 调用），
+   * 替代逐条 putRelation 的多次跨层调用。
+   */
+  private autoLinkSimilarMemories(
+    newMemoryId: string,
+    embedding: number[],
+    maxLinks: number = 3,
+    minScore: number = 0.7,
+  ): void {
+    try {
+      const hits = this.graph.searchEntitiesByVector(embedding, maxLinks + 5, ET.MEMORY);
+
+      // 收集需要创建的关系
+      const relationsToCreate: Array<{ targetId: string; score: number }> = [];
+      for (const hit of hits) {
+        if (relationsToCreate.length >= maxLinks) break;
+        if (hit.entityId === newMemoryId) continue;
+        if (hit.score < minScore) continue;
+
+        const target = this.graph.getEntity(hit.entityId);
+        if (!target) continue;
+        const p = target.properties as any;
+        if (p.projectName !== this.projectName) continue;
+
+        relationsToCreate.push({ targetId: hit.entityId, score: hit.score });
+      }
+
+      if (relationsToCreate.length === 0) return;
+
+      // Phase-44: 使用 applyMutations 批量创建（单次 Rust 调用）
+      // Phase-46: 移除 as any 断言 — aifastdb ≥2.8.0 已有正式类型
+      {
+        const mutations: any[] = [];
+        for (const { targetId, score } of relationsToCreate) {
+          // 正向关系
+          mutations.push({
+            type: 'PutRelation',
+            relation: {
+              source: newMemoryId,
+              target: targetId,
+              relation_type: RT.MEMORY_RELATES,
+              weight: score,
+            },
+          });
+          // 反向关系（双向）
+          mutations.push({
+            type: 'PutRelation',
+            relation: {
+              source: targetId,
+              target: newMemoryId,
+              relation_type: RT.MEMORY_RELATES,
+              weight: score,
+            },
+          });
+        }
+        this.graph.applyMutations(mutations).catch((e: any) => {
+          console.warn(`[DevPlan] applyMutations for memory links failed: ${e}`);
+        });
+      }
+
+      console.log(`[DevPlan] Memory ${newMemoryId.slice(0, 8)}... auto-linked to ${relationsToCreate.length} similar memories`);
+    } catch (e) {
+      console.warn(`[DevPlan] autoLinkSimilarMemories failed: ${e instanceof Error ? e.message : String(e)}`);
+    }
+  }
+
+  /**
+   * Phase-37: 从文档生成的记忆自动建立 MEMORY_FROM_DOC 关系
+   *
+   * 当 sourceId 格式为 "section" 或 "section|subSection" 时，
+   * 找到对应的文档 Entity 并建立 MEMORY_FROM_DOC 关系。
+   */
+  private autoLinkMemoryToDoc(memoryId: string, sourceId: string): void {
+    try {
+      // sourceId 格式："section" 或 "section|subSection"
+      // 任务格式："phase-7"（以 phase- 或 T 开头的不是文档）
+      if (sourceId.startsWith('phase-') || sourceId.startsWith('T')) return;
+
+      // 解析 section 和 subSection
+      const parts = sourceId.split('|');
+      const section = parts[0];
+      const subSection = parts[1];
+
+      // 查找文档 Entity
+      const docs = this.findEntitiesByType(ET.DOC);
+      const docEntity = docs.find((e) => {
+        const p = e.properties as any;
+        if (p.projectName !== this.projectName) return false;
+        if (p.section !== section) return false;
+        if (subSection && p.subSection !== subSection) return false;
+        if (!subSection && p.subSection) return false;
+        return true;
+      });
+
+      if (docEntity) {
+        this.graph.putRelation(docEntity.id, memoryId, RT.MEMORY_FROM_DOC);
+      }
+    } catch (e) {
+      console.warn(`[DevPlan] autoLinkMemoryToDoc failed: ${e instanceof Error ? e.message : String(e)}`);
+    }
+  }
+
+  /**
+   * Phase-37: 模块级记忆自动建立 MODULE_MEMORY 关系
+   */
+  private autoLinkMemoryToModule(memoryId: string, moduleId: string): void {
+    try {
+      const modEntity = this.findEntityByProp(ET.MODULE, 'moduleId', moduleId);
+      if (modEntity) {
+        this.graph.putRelation(modEntity.id, memoryId, RT.MODULE_MEMORY);
+      }
+    } catch (e) {
+      console.warn(`[DevPlan] autoLinkMemoryToModule failed: ${e instanceof Error ? e.message : String(e)}`);
+    }
+  }
+
+  /**
+   * Phase-51: 冲突检测 — 检测新记忆与已有记忆的语义矛盾
+   *
+   * 在 TypeScript 层实现 devplan-memory 实体级别的冲突检测。
+   * 使用向量搜索找到高度相似的已有记忆，根据 memoryType 分类冲突：
+   *
+   * 冲突分类逻辑:
+   * - decision vs decision (similarity ≥ 0.85) → "Conflicts"：决策冲突，自动建立 MEMORY_CONFLICTS 关系
+   * - 同 memoryType (similarity ≥ 0.90) → "Supersedes"：内容替代，自动建立 MEMORY_SUPERSEDES 关系
+   * - 同 memoryType (similarity ≥ 0.80) → "HighSimilarity"：高相似度警告，仅报告不建立关系
+   *
+   * 设计原则：不删除旧记忆，只通过关系标记演化链条。
+   *
+   * 注意：此方法不依赖 Rust 层 memoryTreeDetectConflicts（那只处理 FACT/DECISION 子实体）。
+   * 分解子图的冲突检测由 decomposeAndStoreMemoryTree → memoryTreeStore 内部处理。
+   *
+   * @param newEntity - 刚创建的记忆实体
+   * @param embedding - 新记忆的向量嵌入
+   * @returns 冲突列表，或 undefined 如果检测失败或无冲突
+   */
+  private detectMemoryConflicts(
+    newEntity: Entity,
+    embedding: number[],
+  ): Memory['conflicts'] | undefined {
+    try {
+      if (!this.semanticSearchReady) return undefined;
+
+      const newProps = newEntity.properties as any;
+      const newMemoryType: string = newProps?.memoryType || '';
+
+      // 向量搜索：找到最相似的 devplan-memory 实体（top-6，多取 1 个用于排除自身）
+      const hits = this.graph.searchEntitiesByVector(embedding, 6, ET.MEMORY);
+      if (!hits || hits.length === 0) return undefined;
+
+      const conflicts: NonNullable<Memory['conflicts']> = [];
+      const SUPERSEDES_THRESHOLD = 0.90;
+      const CONFLICTS_THRESHOLD = 0.85;
+      const HIGH_SIM_THRESHOLD = 0.80;
+
+      for (const hit of hits) {
+        // 排除自身
+        if (hit.entityId === newEntity.id) continue;
+        // 最多检测 5 个候选
+        if (conflicts.length >= 5) break;
+
+        const existing = this.graph.getEntity(hit.entityId);
+        if (!existing) continue;
+        const existProps = existing.properties as any;
+        // 只比较同一项目的记忆
+        if (existProps.projectName !== this.projectName) continue;
+
+        const existMemoryType: string = existProps?.memoryType || '';
+        const similarity = hit.score;
+
+        // ---- 冲突分类 ----
+        let conflictType: string | null = null;
+        let shouldCreateRelation = false;
+
+        if (newMemoryType === 'decision' && existMemoryType === 'decision' && similarity >= CONFLICTS_THRESHOLD) {
+          // 决策 vs 决策 → 冲突（可能矛盾）
+          conflictType = 'Conflicts';
+          shouldCreateRelation = true;
+        } else if (newMemoryType === existMemoryType && similarity >= SUPERSEDES_THRESHOLD) {
+          // 同类型 + 极高相似度 → 替代
+          conflictType = 'Supersedes';
+          shouldCreateRelation = true;
+        } else if (newMemoryType === existMemoryType && similarity >= HIGH_SIM_THRESHOLD) {
+          // 同类型 + 高相似度 → 仅警告
+          conflictType = 'HighSimilarity';
+          shouldCreateRelation = false;
+        }
+
+        if (!conflictType) continue;
+
+        // ---- 建立关系（如需） ----
+        let relationCreated: string | undefined;
+        if (shouldCreateRelation) {
+          if (conflictType === 'Supersedes') {
+            // new → old (MEMORY_SUPERSEDES)
+            this.graph.putRelation(newEntity.id, existing.id, RT.MEMORY_SUPERSEDES, similarity, false);
+            relationCreated = RT.MEMORY_SUPERSEDES;
+          } else if (conflictType === 'Conflicts') {
+            // new → old (MEMORY_CONFLICTS)
+            this.graph.putRelation(newEntity.id, existing.id, RT.MEMORY_CONFLICTS, similarity, false);
+            relationCreated = RT.MEMORY_CONFLICTS;
+          }
+        }
+
+        conflicts.push({
+          existingEntityId: existing.id,
+          similarity,
+          conflictType,
+          relationCreated,
+        });
+      }
+
+      if (conflicts.length === 0) return undefined;
+
+      console.log(
+        `[DevPlan] Memory ${newEntity.id.slice(0, 8)}... conflict detection: ${conflicts.length} conflict(s) found ` +
+        `(${conflicts.filter(c => c.relationCreated).length} relations created)`
+      );
+
+      return conflicts;
+    } catch (e) {
+      // 冲突检测失败不应阻止记忆保存
+      console.warn(`[DevPlan] detectMemoryConflicts failed: ${e instanceof Error ? e.message : String(e)}`);
+      return undefined;
+    }
+  }
+
+  /**
+   * Phase-47: 记忆分解器 — 将记忆内容分解为 Episode + Entities + Relations 子图
+   *
+   * 调用 Rust 层 memoryTreeDecompose（rule-based）或 memoryTreeParseLlmDecomposition（LLM），
+   * 然后通过 memoryTreeStore 将分解后的子图一次性写入图引擎。
+   *
+   * 分解后的子图通过 CONTAINS 关系连接到原始记忆实体，
+   * 实现"记忆树"结构：Memory → Episode → [Fact, Concept, Decision, Actor...]
+   *
+   * @param memoryEntityId - 已创建的记忆实体 ID（作为子图的锚点）
+   * @param content - 记忆内容文本
+   * @param mode - 分解模式: 'rule' | 'llm'
+   * @param context - 可选的分解上下文
+   * @param llmJson - 可选的 LLM 分解 JSON（仅 mode='llm' 时使用）
+   * @returns 分解结果摘要，或 undefined 如果分解失败
+   */
+  private decomposeAndStoreMemoryTree(
+    memoryEntityId: string,
+    content: string,
+    mode: 'rule' | 'llm',
+    context?: string,
+    llmJson?: string,
+  ): Memory['decomposition'] | undefined {
+    try {
+      // Step 1: 分解文本
+      let decomposition: DecompositionResult;
+
+      if (mode === 'llm' && llmJson) {
+        // LLM 模式: 解析外部 LLM 生成的 JSON
+        decomposition = this.graph.memoryTreeParseLlmDecomposition(
+          llmJson,
+          this.projectName, // userId = projectName
+          context,
+          content,          // sourceText = original content
+        );
+      } else {
+        // Rule-based 模式: 使用 TypeScript 安全分解器（替代 Rust 层）
+        // 原因: Rust RuleBasedDecomposer 中 &text[..100] 按字节截断，
+        //        对中文等多字节 UTF-8 文本会导致 panic → 进程崩溃。
+        //        TypeScript 原生支持 Unicode，不存在此问题。
+        decomposition = this.ruleBasedDecomposeTS(content, context);
+      }
+
+      // 分解结果校验 — 至少需要 episode + 1 个实体才值得存储
+      if (!decomposition || !decomposition.episode || decomposition.entities.length === 0) {
+        return undefined;
+      }
+
+      // Step 2: 为分解出的实体生成向量嵌入
+      // 优化: 使用 embedBatch 批量生成向量，将 N+1 次同步 NAPI 调用合并为 1 次
+      // 典型 3 句记忆: 6 次 embed(~3s) → 1 次 embedBatch(~0.8s)
+      const embeddings: MemoryTreeEmbeddingInput[] = [];
+      if (this.semanticSearchReady && this.synapse) {
+        try {
+          // 收集所有需要 embed 的文本和对应的实体 ID
+          const textsToEmbed: string[] = [];
+          const entityIds: string[] = [];
+
+          // Episode 文本
+          textsToEmbed.push(decomposition.episode.content || content);
+          entityIds.push(decomposition.episode.id);
+
+          // 子实体文本
+          for (const ent of decomposition.entities) {
+            const text = ent.content || ent.name || '';
+            if (text) {
+              textsToEmbed.push(text);
+              entityIds.push(ent.id);
+            }
+          }
+
+          // 一次性批量 embed
+          const batchEmbeddings = this.synapse.embedBatch(textsToEmbed);
+
+          // 映射回实体
+          for (let i = 0; i < batchEmbeddings.length; i++) {
+            if (batchEmbeddings[i] && batchEmbeddings[i].length > 0) {
+              embeddings.push({ entityId: entityIds[i], embedding: batchEmbeddings[i] });
+            }
+          }
+        } catch (e) {
+          // embedBatch 失败时回退到逐条 embed（兼容旧版 native 模块）
+          console.warn(`[DevPlan] embedBatch failed, falling back to individual embed: ${
+            e instanceof Error ? e.message : String(e)
+          }`);
+        try {
+          const epEmb = this.synapse.embed(decomposition.episode.content || content);
+          embeddings.push({ entityId: decomposition.episode.id, embedding: epEmb });
+        } catch { /* skip */ }
+        for (const ent of decomposition.entities) {
+          try {
+            const entEmb = this.synapse.embed(ent.content || ent.name || '');
+            embeddings.push({ entityId: ent.id, embedding: entEmb });
+            } catch { /* skip */ }
+          }
+        }
+      }
+
+      // Step 3: 一次性存储子图（Rust 层处理实体+关系+向量+冲突检测）
+      const storeResult = this.graph.memoryTreeStore(
+        decomposition,
+        embeddings,
+      );
+
+      // Step 4: 建立原始记忆实体 → Episode 的关联
+      // 让传统的记忆查询仍能通过图遍历发现分解出的子图
+      if (storeResult && storeResult.episode_id) {
+        this.graph.putRelation(
+          memoryEntityId,
+          storeResult.episode_id,
+          'memory_has_episode', // 自定义关系类型
+          1.0,
+          false,               // 非双向
+        );
+      }
+
+      const summary: NonNullable<Memory['decomposition']> = {
+        episodeId: storeResult.episode_id,
+        entitiesStored: storeResult.entities_stored,
+        relationsStored: storeResult.relations_stored,
+        vectorsIndexed: storeResult.vectors_indexed,
+        conflictsDetected: storeResult.conflicts_detected,
+      };
+
+      // Step 5: 将分解统计持久化到原始记忆实体 properties
+      // 这样 entityToMemory 查询时能直接恢复 decomposition 字段
+      try {
+        const memEntity = this.graph.getEntity(memoryEntityId);
+        if (memEntity) {
+          const props = { ...(memEntity.properties as Record<string, unknown>) };
+          props._decomp_episodeId = summary.episodeId;
+          props._decomp_entitiesStored = summary.entitiesStored;
+          props._decomp_relationsStored = summary.relationsStored;
+          props._decomp_vectorsIndexed = summary.vectorsIndexed;
+          props._decomp_conflictsDetected = summary.conflictsDetected;
+          this.graph.updateEntity(memoryEntityId, { properties: props });
+        }
+      } catch {
+        // 非致命 — 统计丢失不影响核心功能
+      }
+
+      return summary;
+    } catch (e) {
+      console.warn(
+        `[DevPlan] decomposeAndStoreMemoryTree failed (mode=${mode}): ${
+          e instanceof Error ? e.message : String(e)
+        }`
+      );
+      return undefined;
+    }
+  }
+
+  // ==========================================================================
+  // TypeScript Rule-Based Decomposer (UTF-8 安全版)
+  // ==========================================================================
+
+  /**
+   * TypeScript 层规则分解器 — 替代 Rust 层 RuleBasedDecomposer
+   *
+   * 产生与 Rust 版本完全相同格式的 DecompositionResult：
+   * - Episode 根实体（内容截断到前 100 字符，UTF-8 安全）
+   * - 按句子拆分为 FACT 子实体
+   * - CONTAINS 关系（Episode → Fact）
+   * - RELATES 关系（顺序 Fact 间）
+   *
+   * 替代原因: Rust RuleBasedDecomposer 中 `&text[..100]` 按字节截断，
+   * 对中文/日文等多字节 UTF-8 文本会导致 byte boundary panic → Node.js 进程崩溃。
+   * TypeScript 的 string.slice() 天然按字符操作，不存在此问题。
+   */
+  private ruleBasedDecomposeTS(
+    text: string,
+    context?: string,
+  ): DecompositionResult {
+    const now = Date.now();
+    const rand = ((now & 0xFFFFFFFF) >>> 0).toString(16).padStart(8, '0');
+    const episodeId = `ep-${rand}`;
+    const ctx = context || 'unknown';
+
+    // Episode 根实体 — UTF-8 安全截断（按字符，非字节）
+    const episodeContent = text.length > 100
+      ? `${text.slice(0, 100)}...`
+      : text;
+
+    const episode = {
+      id: episodeId,
+      entity_type: 'mem:episode',
+      content: episodeContent,
+      name: undefined as string | undefined,
+      confidence: 1.0,
+      properties: {
+        timestamp: now,
+        context: ctx,
+        user_id: this.projectName,
+      } as Record<string, unknown>,
+    };
+
+    const entities: Array<{
+      id: string;
+      entity_type: string;
+      content: string;
+      name?: string;
+      confidence: number;
+      properties: Record<string, unknown>;
+    }> = [];
+
+    const relations: Array<{
+      id: string;
+      source: string;
+      target: string;
+      relation_type: string;
+      weight: number;
+      metadata: Record<string, unknown>;
+    }> = [];
+
+    // 按句子分割（与 Rust 版本一致的分隔符）
+    const sentences = text
+      .split(/[.。！？\n]/)
+      .map(s => s.trim())
+      .filter(s => s.length > 5);
+
+    for (let i = 0; i < sentences.length; i++) {
+      const factId = `${episodeId}-fact-${i + 1}`;
+
+      entities.push({
+        id: factId,
+        entity_type: 'mem:fact',
+        content: sentences[i],
+        confidence: 0.7,
+        properties: {},
+      });
+
+      // Episode -[CONTAINS]-> Fact
+      relations.push({
+        id: `rel-${episodeId}-${i + 1}`,
+        source: episodeId,
+        target: factId,
+        relation_type: 'mem:CONTAINS',
+        weight: 1.0,
+        metadata: {},
+      });
+
+      // 相邻 Fact 间 -[RELATES]-> 顺序关系
+      if (i > 0) {
+        const prevFactId = `${episodeId}-fact-${i}`;
+        relations.push({
+          id: `rel-seq-${episodeId}-${i}`,
+          source: prevFactId,
+          target: factId,
+          relation_type: 'mem:RELATES',
+          weight: 0.5,
+          metadata: { sequence: true },
+        });
+      }
+    }
+
+    // 无法拆分时，整段作为单条 Fact
+    if (entities.length === 0) {
+      const factId = `${episodeId}-fact-1`;
+      entities.push({
+        id: factId,
+        entity_type: 'mem:fact',
+        content: text,
+        confidence: 0.5,
+        properties: {},
+      });
+      relations.push({
+        id: `rel-${episodeId}-1`,
+        source: episodeId,
+        target: factId,
+        relation_type: 'mem:CONTAINS',
+        weight: 1.0,
+        metadata: {},
+      });
+    }
+
+    return {
+      episode,
+      entities,
+      relations,
+      source_text: text,
+    } as DecompositionResult;
   }
 
   /**
@@ -1881,8 +2654,9 @@ export class DevPlanGraphStore implements IDevPlanStore {
   }
 
   /**
-   * 智能召回记忆 — 语义向量搜索 + 字面过滤
+   * 智能召回记忆 — 语义向量搜索 + 图谱遍历扩展 + RRF 融合
    *
+   * Phase-38 增强: 向量搜索结果沿 MEMORY_RELATES 关系扩展，发现关联记忆。
    * 如语义搜索不可用，退化为字面匹配。
    * 命中的记忆自动更新 hitCount 和 lastAccessedAt。
    */
@@ -1892,91 +2666,46 @@ export class DevPlanGraphStore implements IDevPlanStore {
     minScore?: number;
     /** 是否包含文档搜索（统一召回，默认 true） */
     includeDocs?: boolean;
+    /** Phase-38: 是否启用图谱关联扩展（默认 true） */
+    graphExpand?: boolean;
+    /** Phase-49: 是否使用记忆树激活引擎搜索（默认 true，不可用时自动回退） */
+    useActivation?: boolean;
   }): ScoredMemory[] {
     const limit = options?.limit || 10;
     const minScore = options?.minScore || 0;
     const includeDocs = options?.includeDocs !== false; // 默认 true
+    const graphExpand = options?.graphExpand !== false; // 默认 true
+    const useActivation = options?.useActivation !== false; // 默认 true
     const now = Date.now();
 
-    // ---- 1. 记忆召回 ----
+    // ---- Phase-49: 优先使用记忆树激活引擎 ----
     let memoryResults: ScoredMemory[] = [];
+    let activationUsed = false;
 
-    // 尝试语义搜索
-    if (this.semanticSearchReady && this.synapse) {
+    if (useActivation && this.semanticSearchReady && this.synapse) {
       try {
-        const embedding = this.synapse.embed(query);
-        const hits = this.graph.searchEntitiesByVector(embedding, limit * 3, ET.MEMORY);
-
-        for (const hit of hits) {
-          if (minScore > 0 && hit.score < minScore) continue;
-          const entity = this.graph.getEntity(hit.entityId);
-          if (!entity) continue;
-          const p = entity.properties as any;
-          if (p.projectName !== this.projectName) continue;
-          if (options?.memoryType && p.memoryType !== options.memoryType) continue;
-
-          // 更新访问统计
-          this.graph.updateEntity(entity.id, {
-            properties: {
-              ...p,
-              hitCount: (p.hitCount || 0) + 1,
-              lastAccessedAt: now,
-            },
-          });
-
-          memoryResults.push({
-            ...this.entityToMemory(entity),
-            hitCount: (p.hitCount || 0) + 1,
-            lastAccessedAt: now,
-            score: hit.score,
-            sourceKind: 'memory',
-          });
-          if (memoryResults.length >= limit) break;
-        }
-
-        if (memoryResults.length > 0) {
-          this.graph.flush();
-        }
+        memoryResults = this.recallViaActivationEngine(query, limit, minScore, options?.memoryType, now);
+        activationUsed = memoryResults.length > 0;
       } catch (e) {
-        console.warn(`[DevPlan] Semantic memory recall failed: ${e instanceof Error ? e.message : String(e)}`);
+        console.warn(`[DevPlan] Activation engine recall failed, falling back: ${e instanceof Error ? e.message : String(e)}`);
       }
     }
 
-    // 如果语义搜索无结果，fallback 到字面匹配
-    if (memoryResults.length === 0) {
-      const entities = this.findEntitiesByType(ET.MEMORY);
-      const queryLower = query.toLowerCase();
+    // ---- 回退: 传统向量搜索 + 图谱扩展 ----
+    if (!activationUsed) {
+      memoryResults = this.recallViaLegacySearch(query, limit, minScore, options?.memoryType, now);
 
-      for (const e of entities) {
-        const p = e.properties as any;
-        if (p.projectName !== this.projectName) continue;
-        if (options?.memoryType && p.memoryType !== options.memoryType) continue;
-
-        const content = (p.content || '').toLowerCase();
-        const tags = (p.tags || []).join(' ').toLowerCase();
-        if (content.includes(queryLower) || tags.includes(queryLower)) {
-          this.graph.updateEntity(e.id, {
-            properties: {
-              ...p,
-              hitCount: (p.hitCount || 0) + 1,
-              lastAccessedAt: now,
-            },
-          });
-
-          memoryResults.push({
-            ...this.entityToMemory(e),
-            hitCount: (p.hitCount || 0) + 1,
-            lastAccessedAt: now,
-            score: 0.5,
-            sourceKind: 'memory',
-          });
+      // Phase-38: 图谱关联扩展（仅旧路径需要，激活引擎已内含图遍历）
+      if (graphExpand && memoryResults.length > 0) {
+        const graphExpanded = this.expandMemoriesByGraph(memoryResults, options?.memoryType, limit);
+        if (graphExpanded.length > 0) {
+          memoryResults = this.rrfMergeMemories(memoryResults, graphExpanded, limit);
         }
       }
 
-      memoryResults.sort((a, b) => b.importance - a.importance);
-      memoryResults = memoryResults.slice(0, limit);
-      if (memoryResults.length > 0) {
-        this.graph.flush();
+      // Phase-44: 赫布学习（旧路径 — 逐对 adjustRelationWeight）
+      if (memoryResults.length >= 2) {
+        this.hebbianStrengthen(memoryResults.filter(m => m.sourceKind === 'memory'));
       }
     }
 
@@ -2076,12 +2805,545 @@ export class DevPlanGraphStore implements IDevPlanStore {
       }
     }
 
+    // Phase-39: 对记忆类结果施加热度加权（文档不受影响）
     const merged = Array.from(scoreMap.values())
+      .map(({ item, rrfScore }) => {
+        if (item.sourceKind === 'memory' || !item.sourceKind) {
+          const hotness = this.computeMemoryHotness(item);
+          const hotnessMultiplier = 0.5 + hotness; // [0.5, 1.5]
+          return { item, rrfScore: rrfScore * hotnessMultiplier };
+        }
+        return { item, rrfScore };
+      })
       .sort((a, b) => b.rrfScore - a.rrfScore)
       .slice(0, limit)
       .map(({ item, rrfScore }) => ({ ...item, score: rrfScore }));
 
     return merged;
+  }
+
+  /**
+   * Phase-38→44: 沿 MEMORY_RELATES 图谱关系扩展发现关联记忆
+   *
+   * Phase-44 增强: 优先使用 extractSubgraph 在 Rust 层完成 N-hop 遍历，
+   * Phase-49: 使用 Rust 记忆树激活引擎搜索
+   *
+   * 调用 memoryTreeSearch 实现三维激活搜索:
+   * 1. Vector: embedding 相似度
+   * 2. Proximity: 图谱 N-hop 近邻
+   * 3. Weight: 关系权重积累
+   *
+   * 搜索完成后自动调用 memoryTreeStrengthen 进行 Hebbian 共激活强化。
+   */
+  private recallViaActivationEngine(
+    query: string,
+    limit: number,
+    minScore: number,
+    memoryType: MemoryType | undefined,
+    now: number,
+  ): ScoredMemory[] {
+    if (!this.synapse) return [];
+
+    const embedding = this.synapse.embed(query);
+
+    // 调用 Rust 激活引擎
+    const activation: ActivationResult = this.graph.memoryTreeSearch(
+      embedding,
+      this.projectName,  // userId = projectName
+    );
+
+    if (!activation || !activation.memories || activation.memories.length === 0) {
+      return [];
+    }
+
+    const results: ScoredMemory[] = [];
+
+    for (const mem of activation.memories) {
+      if (minScore > 0 && mem.score.combined < minScore) continue;
+
+      // 尝试用 entity 获取完整记忆信息
+      const entity = this.graph.getEntity(mem.entity_id);
+      if (!entity) continue;
+
+      const p = entity.properties as any;
+      if (p.projectName !== this.projectName) continue;
+      if (memoryType && p.memoryType !== memoryType) continue;
+
+      // 更新访问统计
+      this.graph.updateEntity(entity.id, {
+        properties: {
+          ...p,
+          hitCount: (p.hitCount || 0) + 1,
+          lastAccessedAt: now,
+        },
+      });
+
+      // 检查 entity_type — 只返回 MEMORY 类型的实体
+      // 激活引擎可能返回 episode/fact/concept 等子图实体
+      if (entity.entity_type === ET.MEMORY) {
+        results.push({
+          ...this.entityToMemory(entity),
+          hitCount: (p.hitCount || 0) + 1,
+          lastAccessedAt: now,
+          score: mem.score.combined,
+          sourceKind: 'memory',
+        });
+      }
+
+      if (results.length >= limit) break;
+    }
+
+    if (results.length > 0) {
+      this.graph.flush();
+
+      // Phase-49/T49.3: 自动 Hebbian 强化 — 用 Rust 原生实现替代逐对调整
+      try {
+        const activatedIds = results.map(m => m.id);
+        if (activatedIds.length >= 2) {
+          this.graph.memoryTreeStrengthen(activatedIds);
+        }
+      } catch (e) {
+        console.warn(`[DevPlan] memoryTreeStrengthen failed: ${e instanceof Error ? e.message : String(e)}`);
+      }
+    }
+
+    return results;
+  }
+
+  /**
+   * Phase-49/52: 传统向量搜索回退路径（增强版）
+   *
+   * 当激活引擎不可用或搜索失败时使用。
+   * Phase-52: 三路搜索策略（按可用性自动选择最优路径）：
+   *   1. vector + BM25 → hybridSearchTantivy（Rust 层融合，最优）
+   *   2. vector only → searchEntitiesByVector（纯语义）
+   *   3. BM25 only → searchEntitiesByText（纯全文）
+   *   4. neither → 朴素字面 includes 匹配（最终兜底）
+   */
+  private recallViaLegacySearch(
+    query: string,
+    limit: number,
+    minScore: number,
+    memoryType: MemoryType | undefined,
+    now: number,
+  ): ScoredMemory[] {
+    let memoryResults: ScoredMemory[] = [];
+    const fetchLimit = limit * 3;
+
+    // ---- 路径 1: Vector + BM25 混合搜索 (hybridSearchTantivy) ----
+    if (this.semanticSearchReady && this.textSearchReady && this.synapse) {
+      try {
+        const embedding = this.synapse.embed(query);
+        // hybridSearchTantivy(embedding, textQuery, entityTypeFilter, topK, rrfK)
+        // RRF K=60 是标准值，Rust 层自动执行 vector + BM25 的 RRF 融合
+        const hits = this.graph.hybridSearchTantivy(embedding, query, ET.MEMORY, fetchLimit);
+
+        memoryResults = this.processMemorySearchHits(
+          hits.map(h => ({ entityId: h.entityId, score: h.score })),
+          memoryType, minScore, limit, now,
+        );
+        if (memoryResults.length > 0) return memoryResults;
+        // 如果混合搜索无结果，继续尝试下面的路径
+      } catch (e) {
+        console.warn(`[DevPlan] Hybrid memory recall failed: ${e instanceof Error ? e.message : String(e)}`);
+      }
+    }
+
+    // ---- 路径 2: 纯向量搜索 ----
+    if (memoryResults.length === 0 && this.semanticSearchReady && this.synapse) {
+      try {
+        const embedding = this.synapse.embed(query);
+        const hits = this.graph.searchEntitiesByVector(embedding, fetchLimit, ET.MEMORY);
+
+        memoryResults = this.processMemorySearchHits(
+          hits, memoryType, minScore, limit, now,
+        );
+        if (memoryResults.length > 0) return memoryResults;
+      } catch (e) {
+        console.warn(`[DevPlan] Semantic memory recall failed: ${e instanceof Error ? e.message : String(e)}`);
+      }
+    }
+
+    // ---- 路径 3: 纯 BM25 全文搜索 ----
+    if (memoryResults.length === 0 && this.textSearchReady) {
+      try {
+        const hits = this.graph.searchEntitiesByText(query, ET.MEMORY, fetchLimit);
+
+        memoryResults = this.processMemorySearchHits(
+          hits.map(h => ({ entityId: h.entityId, score: h.score })),
+          memoryType, minScore, limit, now,
+        );
+        if (memoryResults.length > 0) return memoryResults;
+      } catch (e) {
+        console.warn(`[DevPlan] BM25 memory recall failed: ${e instanceof Error ? e.message : String(e)}`);
+      }
+    }
+
+    // ---- 路径 4: 朴素字面匹配（最终兜底） ----
+    if (memoryResults.length === 0) {
+      const entities = this.findEntitiesByType(ET.MEMORY);
+      const queryLower = query.toLowerCase();
+
+      for (const e of entities) {
+        const p = e.properties as any;
+        if (p.projectName !== this.projectName) continue;
+        if (memoryType && p.memoryType !== memoryType) continue;
+
+        const content = (p.content || '').toLowerCase();
+        const tags = (p.tags || []).join(' ').toLowerCase();
+        if (content.includes(queryLower) || tags.includes(queryLower)) {
+          this.graph.updateEntity(e.id, {
+            properties: {
+              ...p,
+              hitCount: (p.hitCount || 0) + 1,
+              lastAccessedAt: now,
+            },
+          });
+
+          memoryResults.push({
+            ...this.entityToMemory(e),
+            hitCount: (p.hitCount || 0) + 1,
+            lastAccessedAt: now,
+            score: 0.5,
+            sourceKind: 'memory',
+          });
+        }
+      }
+
+      memoryResults.sort((a, b) => b.importance - a.importance);
+      memoryResults = memoryResults.slice(0, limit);
+      if (memoryResults.length > 0) {
+        this.graph.flush();
+      }
+    }
+
+    return memoryResults;
+  }
+
+  /**
+   * Phase-52: 统一处理搜索命中结果 → ScoredMemory[]
+   *
+   * 将向量/BM25/混合搜索返回的 { entityId, score } 列表
+   * 过滤、更新访问统计、转换为 ScoredMemory。
+   */
+  private processMemorySearchHits(
+    hits: Array<{ entityId: string; score: number }>,
+    memoryType: MemoryType | undefined,
+    minScore: number,
+    limit: number,
+    now: number,
+  ): ScoredMemory[] {
+    const results: ScoredMemory[] = [];
+
+    for (const hit of hits) {
+      if (minScore > 0 && hit.score < minScore) continue;
+      const entity = this.graph.getEntity(hit.entityId);
+      if (!entity) continue;
+      const p = entity.properties as any;
+      if (p.projectName !== this.projectName) continue;
+      if (memoryType && p.memoryType !== memoryType) continue;
+
+      this.graph.updateEntity(entity.id, {
+        properties: {
+          ...p,
+          hitCount: (p.hitCount || 0) + 1,
+          lastAccessedAt: now,
+        },
+      });
+
+      results.push({
+        ...this.entityToMemory(entity),
+        hitCount: (p.hitCount || 0) + 1,
+        lastAccessedAt: now,
+        score: hit.score,
+        sourceKind: 'memory',
+      });
+      if (results.length >= limit) break;
+    }
+
+    if (results.length > 0) {
+      this.graph.flush();
+    }
+
+    return results;
+  }
+
+  /**
+   * 避免 JS 层逐跳手动查询的 N 次跨层调用开销。
+   *
+   * 从向量搜索命中的记忆出发，沿 MEMORY_RELATES 关系探索 1-2 跳，
+   * 发现未被向量搜索直接命中但图谱关联的记忆。
+   * 关联分数 = 原始记忆分数 × 关系权重^depth × 衰减因子
+   */
+  private expandMemoriesByGraph(
+    seedMemories: ScoredMemory[],
+    memoryType?: MemoryType,
+    limit: number = 10,
+  ): ScoredMemory[] {
+    // Phase-44: 使用 extractSubgraph — 单次 Rust 调用完成 N-hop 遍历
+    // Phase-46: 移除 as any 断言 — aifastdb ≥2.8.0 已有正式类型，直接调用
+    return this.expandMemoriesBySubgraph(seedMemories, memoryType, limit);
+  }
+
+  /**
+   * Phase-44: 用 extractSubgraph 实现高效图谱扩展
+   *
+   * 对每个种子记忆调用 extractSubgraph(seedId, {max_hops:2, direction:'both',
+   * relation_type_filter:['memory_relates'], entity_type_filter:['devplan-memory']}),
+   * Rust 层在分片内一次性完成 BFS 遍历，返回子图的 entities + depth_map。
+   */
+  private expandMemoriesBySubgraph(
+    seedMemories: ScoredMemory[],
+    memoryType?: MemoryType,
+    limit: number = 10,
+  ): ScoredMemory[] {
+    // Phase-46: 移除 as any 断言 — aifastdb ≥2.8.0 已有正式类型
+    const seenIds = new Set(seedMemories.map((m) => m.id));
+    const expanded: ScoredMemory[] = [];
+    const hopDecay = 0.7;
+
+    for (const seed of seedMemories.slice(0, 5)) {
+      try {
+        const subgraph = this.graph.extractSubgraph(seed.id, {
+          max_hops: 2,
+          direction: 'both',
+          relation_type_filter: [RT.MEMORY_RELATES],
+          entity_type_filter: [ET.MEMORY],
+          max_nodes: limit * 2,
+        });
+
+        if (!subgraph || !subgraph.entities || !subgraph.depth_map) continue;
+
+        // 遍历子图中的实体，按 depth 计算衰减分数
+        const entityEntries = Object.entries(subgraph.entities) as [string, any][];
+        for (const [entityId, entity] of entityEntries) {
+          if (seenIds.has(entityId)) continue;
+          if (!entity) continue;
+
+          const p = entity.properties || {};
+          if (p.projectName !== this.projectName) continue;
+          if (memoryType && p.memoryType !== memoryType) continue;
+
+          seenIds.add(entityId);
+          const depth = subgraph.depth_map[entityId] || 1;
+          const expandedScore = seed.score * Math.pow(hopDecay, depth);
+
+          expanded.push({
+            ...this.entityToMemory(entity),
+            score: expandedScore,
+            sourceKind: 'memory',
+          });
+
+          if (expanded.length >= limit) break;
+        }
+      } catch (e) {
+        console.warn(`[DevPlan] extractSubgraph failed for ${seed.id}: ${e instanceof Error ? e.message : String(e)}`);
+      }
+
+      if (expanded.length >= limit) break;
+    }
+
+    return expanded;
+  }
+
+  /**
+   * Phase-38 原始实现: 手动逐跳遍历（Fallback）
+   */
+  private expandMemoriesByManualTraversal(
+    seedMemories: ScoredMemory[],
+    memoryType?: MemoryType,
+    limit: number = 10,
+  ): ScoredMemory[] {
+    const seenIds = new Set(seedMemories.map((m) => m.id));
+    const expanded: ScoredMemory[] = [];
+    const hopDecay = 0.7;
+
+    for (const seed of seedMemories.slice(0, 5)) {
+      const outRels = this.getOutRelations(seed.id, RT.MEMORY_RELATES);
+      const inRels = this.getInRelations(seed.id, RT.MEMORY_RELATES);
+      const allRels = [...outRels, ...inRels];
+
+      for (const rel of allRels) {
+        const neighborId = rel.source === seed.id ? rel.target : rel.source;
+        if (seenIds.has(neighborId)) continue;
+
+        const neighbor = this.graph.getEntity(neighborId);
+        if (!neighbor) continue;
+        const p = neighbor.properties as any;
+        if (p.projectName !== this.projectName) continue;
+        if (memoryType && p.memoryType !== memoryType) continue;
+
+        seenIds.add(neighborId);
+        const relWeight = rel.weight || 0.5;
+        const expandedScore = seed.score * relWeight * hopDecay;
+
+        expanded.push({
+          ...this.entityToMemory(neighbor),
+          score: expandedScore,
+          sourceKind: 'memory',
+        });
+
+        if (expanded.length >= limit) break;
+
+        // 2跳
+        const hop2OutRels = this.getOutRelations(neighborId, RT.MEMORY_RELATES);
+        const hop2InRels = this.getInRelations(neighborId, RT.MEMORY_RELATES);
+        for (const hop2Rel of [...hop2OutRels, ...hop2InRels]) {
+          const hop2Id = hop2Rel.source === neighborId ? hop2Rel.target : hop2Rel.source;
+          if (seenIds.has(hop2Id)) continue;
+
+          const hop2Entity = this.graph.getEntity(hop2Id);
+          if (!hop2Entity) continue;
+          const hp = hop2Entity.properties as any;
+          if (hp.projectName !== this.projectName) continue;
+          if (memoryType && hp.memoryType !== memoryType) continue;
+
+          seenIds.add(hop2Id);
+          const hop2Weight = hop2Rel.weight || 0.5;
+          const hop2Score = expandedScore * hop2Weight * hopDecay;
+
+          expanded.push({
+            ...this.entityToMemory(hop2Entity),
+            score: hop2Score,
+            sourceKind: 'memory',
+          });
+
+          if (expanded.length >= limit) break;
+        }
+      }
+      if (expanded.length >= limit) break;
+    }
+
+    return expanded;
+  }
+
+  /**
+   * Phase-44: 赫布学习 — 共同激活的记忆自动增强连接权重
+   *
+   * "Neurons that fire together, wire together."
+   * 当多条记忆在同一次召回中被共同激活，增强它们之间 MEMORY_RELATES 关系的权重。
+   *
+   * - 使用 adjustRelationWeight（Rust 原子操作），delta = +0.05
+   * - 仅增强已有 MEMORY_RELATES 连接（不创建新连接）
+   * - 上限 top5 记忆的 C(5,2) = 10 对，避免大量关系更新
+   */
+  /**
+   * Phase-50: Hebbian 共激活强化
+   *
+   * 优先使用 Rust 原生 memoryTreeStrengthen（批量处理所有共激活对）;
+   * 不可用时回退到 TS 层逐对 adjustRelationWeight。
+   */
+  private hebbianStrengthen(coActivatedMemories: ScoredMemory[]): void {
+    if (coActivatedMemories.length < 2) return;
+    const top = coActivatedMemories.slice(0, 5);
+    const ids = top.map(m => m.id);
+
+    // Phase-50: 优先使用 Rust 原生批量强化
+    try {
+      this.graph.memoryTreeStrengthen(ids);
+      return; // 成功则直接返回
+    } catch {
+      // Rust API 不可用（旧版 aifastdb），回退到 TS 实现
+    }
+
+    // 回退: TS 层逐对 adjustRelationWeight
+    const HEBBIAN_DELTA = 0.05;
+    for (let i = 0; i < ids.length; i++) {
+      for (let j = i + 1; j < ids.length; j++) {
+        const a = ids[i];
+        const b = ids[j];
+
+        const outRels = this.getOutRelations(a, RT.MEMORY_RELATES);
+        const rel = outRels.find((r: Relation) => r.target === b);
+        if (rel) {
+          this.graph.adjustRelationWeight(rel.id, a, HEBBIAN_DELTA).catch(() => { /* silent */ });
+        }
+
+        const reverseRels = this.getOutRelations(b, RT.MEMORY_RELATES);
+        const reverseRel = reverseRels.find((r: Relation) => r.target === a);
+        if (reverseRel) {
+          this.graph.adjustRelationWeight(reverseRel.id, b, HEBBIAN_DELTA).catch(() => { /* silent */ });
+        }
+      }
+    }
+  }
+
+  /**
+   * Phase-39: 计算记忆热度分数 — 模拟遗忘曲线
+   *
+   * 综合 hitCount + 时间衰减 + importance，输出 0~1 的热度值。
+   * - 高频访问 + 近期访问 → 热度高
+   * - 长期未访问 → 热度衰减（半衰期 7 天）
+   * - importance 作为基线加成
+   */
+  private computeMemoryHotness(memory: {
+    hitCount: number;
+    lastAccessedAt: number | null;
+    importance: number;
+    createdAt: number;
+  }): number {
+    const now = Date.now();
+    const HALF_LIFE_MS = 7 * 24 * 60 * 60 * 1000; // 7天半衰期
+    const LN2 = Math.LN2;
+
+    // 时间衰减：基于最后访问时间（如无访问则用创建时间）
+    const lastAccess = memory.lastAccessedAt || memory.createdAt;
+    const elapsed = Math.max(0, now - lastAccess);
+    const timeDecay = Math.exp(-(LN2 / HALF_LIFE_MS) * elapsed); // 0~1
+
+    // 频率分数：hitCount 的对数缩放，避免过高值主导
+    const freqScore = Math.min(1, Math.log2(1 + (memory.hitCount || 0)) / 5); // log2(32)/5 = 1.0
+
+    // importance 基线 (0~1)
+    const importanceBase = memory.importance || 0.5;
+
+    // 综合: importance 40% + frequency 30% + recency 30%
+    return importanceBase * 0.4 + freqScore * 0.3 + timeDecay * 0.3;
+  }
+
+  /**
+   * Phase-38 + Phase-39: RRF 融合记忆向量搜索结果和图谱扩展结果
+   *
+   * Phase-39 增强：热度加权融合 — 每条记忆的 RRF 分数乘以热度系数（0.5~1.5），
+   * 高频+近期记忆获得排序提升，冷门记忆自动下沉。
+   */
+  private rrfMergeMemories(
+    vectorResults: ScoredMemory[],
+    graphResults: ScoredMemory[],
+    limit: number,
+  ): ScoredMemory[] {
+    const k_vector = 20;  // 向量搜索 RRF 常数（权重更高）
+    const k_graph = 40;   // 图谱扩展 RRF 常数
+
+    const scoreMap = new Map<string, { item: ScoredMemory; rrfScore: number }>();
+
+    for (let i = 0; i < vectorResults.length; i++) {
+      const item = vectorResults[i];
+      const rrfScore = 1.0 / (k_vector + i + 1);
+      scoreMap.set(item.id, { item, rrfScore });
+    }
+
+    for (let i = 0; i < graphResults.length; i++) {
+      const item = graphResults[i];
+      const rrfScore = 1.0 / (k_graph + i + 1);
+      const existing = scoreMap.get(item.id);
+      if (existing) {
+        existing.rrfScore += rrfScore;
+      } else {
+        scoreMap.set(item.id, { item, rrfScore });
+      }
+    }
+
+    // Phase-39: 热度加权 — hotness 映射到 [0.5, 1.5] 的乘法系数
+    return Array.from(scoreMap.values())
+      .map(({ item, rrfScore }) => {
+        const hotness = this.computeMemoryHotness(item);
+        const hotnessMultiplier = 0.5 + hotness; // [0.5, 1.5]
+        return { item, rrfScore: rrfScore * hotnessMultiplier };
+      })
+      .sort((a, b) => b.rrfScore - a.rrfScore)
+      .slice(0, limit)
+      .map(({ item, rrfScore }) => ({ ...item, score: rrfScore }));
   }
 
   /**
@@ -2133,6 +3395,38 @@ export class DevPlanGraphStore implements IDevPlanStore {
     } catch {
       return false;
     }
+  }
+
+  /**
+   * 批量清除当前项目的所有记忆
+   *
+   * @param memoryType - 可选：仅清除指定类型的记忆。省略则清除所有。
+   * @returns { deleted: number } 实际删除的数量
+   */
+  clearAllMemories(memoryType?: MemoryType): { deleted: number } {
+    const entities = this.findEntitiesByType(ET.MEMORY);
+    const toDelete = entities.filter((e) => {
+      const p = e.properties as any;
+      if (p.projectName !== this.projectName) return false;
+      if (memoryType && p.memoryType !== memoryType) return false;
+      return true;
+    });
+
+    let deleted = 0;
+    for (const e of toDelete) {
+      try {
+        this.graph.deleteEntity(e.id);
+        deleted++;
+      } catch {
+        // 跳过单条删除失败
+      }
+    }
+
+    if (deleted > 0) {
+      this.graph.flush();
+    }
+
+    return { deleted };
   }
 
   /**
@@ -2205,6 +3499,29 @@ export class DevPlanGraphStore implements IDevPlanStore {
       // 非关键路径，忽略错误
     }
 
+    // 7. Phase-38: 模块级关联记忆 — 图谱遍历 in_progress 任务 → 模块 → MODULE_MEMORY
+    const moduleMemories = this.getModuleMemoriesFromActiveTasks(recentTasks);
+
+    // 8. Phase-40: 记忆主题集群概览（仅摘要，不含完整记忆）
+    let memoryClusters: MemoryContext['memoryClusters'];
+    try {
+      const clusters = this.getMemoryClusters();
+      // 只保留有意义的集群（2条以上记忆，排除 uncategorized）
+      const significantClusters = clusters
+        .filter((c) => c.clusterId > 0 && c.memoryCount >= 2)
+        .map((c) => ({
+          clusterId: c.clusterId,
+          theme: c.theme,
+          memoryCount: c.memoryCount,
+          topMemoryTypes: c.topMemoryTypes,
+        }));
+      if (significantClusters.length > 0) {
+        memoryClusters = significantClusters;
+      }
+    } catch (_e) {
+      // 非关键路径，忽略错误
+    }
+
     return {
       projectName: this.projectName,
       recentTasks,
@@ -2213,7 +3530,211 @@ export class DevPlanGraphStore implements IDevPlanStore {
       recentDecisions,
       totalMemories,
       relatedDocs: relatedDocs.length > 0 ? relatedDocs : undefined,
+      moduleMemories: moduleMemories.length > 0 ? moduleMemories : undefined,
+      memoryClusters,
     };
+  }
+
+  /**
+   * Phase-38: 从进行中的任务出发，通过图谱遍历获取模块级记忆
+   *
+   * 路径: in_progress task → MODULE_HAS_TASK(反向) → module → MODULE_MEMORY → memories
+   */
+  private getModuleMemoriesFromActiveTasks(
+    recentTasks: Array<{ taskId: string; status: string }>,
+  ): Array<{ moduleId: string; moduleName: string; memories: Memory[] }> {
+    const results: Array<{ moduleId: string; moduleName: string; memories: Memory[] }> = [];
+    const seenModuleIds = new Set<string>();
+
+    // 只从 in_progress 任务出发
+    const activeTasks = recentTasks.filter((t) => t.status === 'in_progress');
+
+    for (const task of activeTasks) {
+      const taskEntity = this.findEntityByProp(ET.MAIN_TASK, 'taskId', task.taskId);
+      if (!taskEntity) continue;
+
+      // 查找该任务所属的模块（反向: module → MODULE_HAS_TASK → task）
+      const inRels = this.getInRelations(taskEntity.id, RT.MODULE_HAS_TASK);
+      for (const rel of inRels) {
+        const moduleEntity = this.graph.getEntity(rel.source);
+        if (!moduleEntity) continue;
+        const mp = moduleEntity.properties as any;
+        const moduleId = mp.moduleId;
+        if (!moduleId || seenModuleIds.has(moduleId)) continue;
+        seenModuleIds.add(moduleId);
+
+        // 获取模块下的所有记忆（module → MODULE_MEMORY → memory）
+        const memRels = this.getOutRelations(moduleEntity.id, RT.MODULE_MEMORY);
+        const memories: Memory[] = [];
+        for (const memRel of memRels) {
+          const memEntity = this.graph.getEntity(memRel.target);
+          if (!memEntity) continue;
+          const memP = memEntity.properties as any;
+          if (memP.projectName !== this.projectName) continue;
+          memories.push(this.entityToMemory(memEntity));
+        }
+
+        if (memories.length > 0) {
+          results.push({
+            moduleId,
+            moduleName: mp.name || moduleId,
+            memories: memories.slice(0, 10), // 每模块最多10条
+          });
+        }
+      }
+    }
+
+    return results;
+  }
+
+  // ============================================================================
+  // Phase-40: 记忆主题集群 — 基于 MEMORY_RELATES 连通分量聚类
+  // ============================================================================
+
+  /**
+   * Phase-40: 获取记忆主题集群
+   *
+   * 基于 MEMORY_RELATES 关系图的连通分量检测，自动将语义关联的记忆
+   * 聚合为主题集群。每个集群包含一个自动生成的主题标签和成员记忆列表。
+   *
+   * 算法：BFS 连通分量检测（适合中小规模记忆网络）
+   */
+  getMemoryClusters(): Array<{
+    clusterId: number;
+    theme: string;
+    memoryCount: number;
+    topMemoryTypes: string[];
+    memories: Memory[];
+  }> {
+    // 1. 获取所有本项目的记忆
+    const allEntities = this.findEntitiesByType(ET.MEMORY);
+    const projectMemories = allEntities.filter(
+      (e) => (e.properties as any).projectName === this.projectName
+    );
+
+    if (projectMemories.length === 0) return [];
+
+    // 2. 构建邻接表（基于 MEMORY_RELATES 关系）
+    const adjacency = new Map<string, Set<string>>();
+    for (const mem of projectMemories) {
+      adjacency.set(mem.id, new Set());
+    }
+
+    for (const mem of projectMemories) {
+      const outRels = this.getOutRelations(mem.id, RT.MEMORY_RELATES);
+      const inRels = this.getInRelations(mem.id, RT.MEMORY_RELATES);
+      for (const rel of [...outRels, ...inRels]) {
+        const neighborId = rel.source === mem.id ? rel.target : rel.source;
+        if (adjacency.has(neighborId)) {
+          adjacency.get(mem.id)!.add(neighborId);
+          adjacency.get(neighborId)!.add(mem.id);
+        }
+      }
+    }
+
+    // 3. BFS 连通分量检测
+    const visited = new Set<string>();
+    const components: string[][] = [];
+
+    for (const mem of projectMemories) {
+      if (visited.has(mem.id)) continue;
+
+      const component: string[] = [];
+      const queue = [mem.id];
+      visited.add(mem.id);
+
+      while (queue.length > 0) {
+        const current = queue.shift()!;
+        component.push(current);
+
+        const neighbors = adjacency.get(current) || new Set();
+        for (const neighbor of neighbors) {
+          if (!visited.has(neighbor)) {
+            visited.add(neighbor);
+            queue.push(neighbor);
+          }
+        }
+      }
+
+      components.push(component);
+    }
+
+    // 4. 转化为集群结果（按大小降序排列，孤立记忆归入"未分类"）
+    const clusters: Array<{
+      clusterId: number;
+      theme: string;
+      memoryCount: number;
+      topMemoryTypes: string[];
+      memories: Memory[];
+    }> = [];
+
+    // 实体 ID → Memory 的快速查找
+    const entityMap = new Map(projectMemories.map((e) => [e.id, e]));
+
+    let clusterId = 0;
+    const isolatedMemories: Memory[] = [];
+
+    for (const component of components.sort((a, b) => b.length - a.length)) {
+      const memories = component
+        .map((id) => entityMap.get(id))
+        .filter(Boolean)
+        .map((e) => this.entityToMemory(e!));
+
+      if (component.length <= 1) {
+        // 孤立记忆收集，后续归入"未分类"集群
+        isolatedMemories.push(...memories);
+        continue;
+      }
+
+      clusterId++;
+
+      // 统计 memoryType 分布，取出现最多的类型
+      const typeCounts = new Map<string, number>();
+      for (const m of memories) {
+        typeCounts.set(m.memoryType, (typeCounts.get(m.memoryType) || 0) + 1);
+      }
+      const topMemoryTypes = Array.from(typeCounts.entries())
+        .sort((a, b) => b[1] - a[1])
+        .slice(0, 3)
+        .map(([t]) => t);
+
+      // 自动主题：取高频 tags + 高频 memoryType
+      const tagCounts = new Map<string, number>();
+      for (const m of memories) {
+        for (const tag of m.tags || []) {
+          tagCounts.set(tag, (tagCounts.get(tag) || 0) + 1);
+        }
+      }
+      const topTags = Array.from(tagCounts.entries())
+        .sort((a, b) => b[1] - a[1])
+        .slice(0, 3)
+        .map(([t]) => t);
+
+      const theme = topTags.length > 0
+        ? topTags.join(' / ')
+        : `${topMemoryTypes[0] || 'mixed'} cluster`;
+
+      clusters.push({
+        clusterId,
+        theme,
+        memoryCount: memories.length,
+        topMemoryTypes,
+        memories,
+      });
+    }
+
+    // 孤立记忆归入"未分类"集群（如果有的话）
+    if (isolatedMemories.length > 0) {
+      clusters.push({
+        clusterId: 0,
+        theme: 'uncategorized',
+        memoryCount: isolatedMemories.length,
+        topMemoryTypes: ['mixed'],
+        memories: isolatedMemories,
+      });
+    }
+
+    return clusters;
   }
 
   /**
@@ -2244,19 +3765,33 @@ export class DevPlanGraphStore implements IDevPlanStore {
    */
   private entityToMemory(e: Entity): Memory {
     const p = e.properties as any;
-    return {
+    const mem: Memory = {
       id: e.id,
       projectName: this.projectName,
       memoryType: p.memoryType || 'insight',
       content: p.content || '',
       tags: p.tags || [],
       relatedTaskId: p.relatedTaskId || undefined,
+      sourceId: p.sourceId || undefined,
       importance: p.importance ?? 0.5,
       hitCount: p.hitCount || 0,
       lastAccessedAt: p.lastAccessedAt || null,
       createdAt: p.createdAt || e.created_at,
       updatedAt: p.updatedAt || p.createdAt || e.created_at,
     };
+
+    // Phase-48: 恢复分解摘要 — 从实体 properties 读取
+    if (p._decomp_episodeId) {
+      mem.decomposition = {
+        episodeId: p._decomp_episodeId,
+        entitiesStored: p._decomp_entitiesStored ?? 0,
+        relationsStored: p._decomp_relationsStored ?? 0,
+        vectorsIndexed: p._decomp_vectorsIndexed ?? 0,
+        conflictsDetected: p._decomp_conflictsDetected ?? 0,
+      };
+    }
+
+    return mem;
   }
 
   // ==========================================================================
@@ -2273,6 +3808,86 @@ export class DevPlanGraphStore implements IDevPlanStore {
    *
    * AI 收到候选项后，分析 content 并调用 devplan_memory_save 批量生成记忆。
    */
+
+  // ============================================================================
+  // Phase-44: 记忆生命周期管理 — DynamicNode promote/demote
+  // ============================================================================
+
+  /**
+   * Phase-50: 运行记忆生命周期扫描
+   *
+   * 优先使用 Rust 原生 memoryTreeLifecycle（内置 memory-tree-aware 的 promote/demote/summary 逻辑）;
+   * 不可用时回退到 TS 层 dynamicScan 实现。
+   *
+   * Rust 原生实现的优势：
+   * - promote/demote 同时感知记忆子图（episode/entity），而非仅处理顶层记忆
+   * - 自动为 demoted 记忆创建摘要（summariesCreated）
+   * - 包含 Hebbian 权重更新（hebbian_updates）
+   *
+   * @param config 配置选项
+   * @returns 扫描报告（promoted/demoted/scanned 计数）
+   */
+  runMemoryLifecycle(config?: {
+    /** shadow 状态之前的闲置秒数（默认 30 天 = 2592000） */
+    demoteIdleTimeoutSecs?: number;
+    /** 从 shadow 恢复所需的最小 hitCount（默认 3） */
+    promoteHitThreshold?: number;
+  }): { promoted: number; demoted: number; scanned: number; durationMs: number; summariesCreated?: number; hebbianUpdates?: number } | null {
+    // Phase-50: 优先使用 Rust 原生 memoryTreeLifecycle
+    try {
+      const report: MemoryScanReport = this.graph.memoryTreeLifecycle({
+        demoteIdleTimeoutSecs: config?.demoteIdleTimeoutSecs ?? 2592000,
+        promoteHitThreshold: config?.promoteHitThreshold ?? 3,
+        preserveEntityTypes: [ET.PROJECT, ET.DOC, ET.MAIN_TASK, ET.SUB_TASK, ET.MODULE],
+      });
+
+      return {
+        promoted: report.promoted ?? 0,
+        demoted: report.demoted ?? 0,
+        scanned: report.entities_scanned ?? 0,
+        durationMs: 0,
+        summariesCreated: report.summaries_created ?? 0,
+        hebbianUpdates: report.hebbian_updates ?? 0,
+      };
+    } catch (rustErr) {
+      // Rust API 不可用，回退到 TS 层 dynamicScan
+      console.warn(`[DevPlan] memoryTreeLifecycle failed, falling back to dynamicScan: ${rustErr instanceof Error ? rustErr.message : String(rustErr)}`);
+    }
+
+    // 回退: TS 层 dynamicScan 实现
+    try {
+      const result = this.graph.dynamicScan({
+        promote_hit_threshold: config?.promoteHitThreshold ?? 3,
+        demote_idle_timeout_secs: config?.demoteIdleTimeoutSecs ?? 2592000,
+        scan_entity_types: [ET.MEMORY],
+        preserve_entity_types: [ET.PROJECT, ET.DOC, ET.MAIN_TASK, ET.SUB_TASK, ET.MODULE],
+      });
+
+      if (result && result.demoted > 0) {
+        const allMemories = this.findEntitiesByType(ET.MEMORY);
+        for (const mem of allMemories) {
+          const p = mem.properties as any;
+          if (p.projectName !== this.projectName) continue;
+          if (typeof (this.graph as any).isShadowEntity === 'function' && (this.graph as any).isShadowEntity(mem.id)) {
+            try {
+              this.graph.removeEntityVector(mem.id);
+            } catch { /* entity might not have vector */ }
+          }
+        }
+      }
+
+      return {
+        promoted: result?.promoted ?? 0,
+        demoted: result?.demoted ?? 0,
+        scanned: result?.scanned ?? 0,
+        durationMs: result?.duration_ms ?? 0,
+      };
+    } catch (e) {
+      console.warn(`[DevPlan] runMemoryLifecycle fallback (dynamicScan) failed: ${e instanceof Error ? e.message : String(e)}`);
+      return null;
+    }
+  }
+
   generateMemoryCandidates(options?: {
     source?: 'tasks' | 'docs' | 'both';
     taskId?: string;
@@ -2286,14 +3901,17 @@ export class DevPlanGraphStore implements IDevPlanStore {
     // 获取已有记忆，用于去重检查
     const existingMemories = this.listMemories ? this.listMemories() : [];
     const memoryByTaskId = new Set<string>();
+    const memoryBySourceId = new Set<string>();
     const memoryContentSet = new Set<string>();
     for (const m of existingMemories) {
       if (m.relatedTaskId) memoryByTaskId.add(m.relatedTaskId);
-      // 用前 50 字符作内容指纹
+      // Phase-35: sourceId 去重 — 最可靠的匹配方式
+      if (m.sourceId) memoryBySourceId.add(m.sourceId);
+      // 用前 50 字符作内容指纹（fallback，对旧记忆仍有效）
       memoryContentSet.add(m.content.slice(0, 50).toLowerCase());
     }
 
-    const candidates: MemoryCandidate[] = [];
+    const allEligible: MemoryCandidate[] = [];
     let totalCompletedPhases = 0;
     let totalDocuments = 0;
     let phasesWithMemory = 0;
@@ -2310,7 +3928,8 @@ export class DevPlanGraphStore implements IDevPlanStore {
       totalCompletedPhases = completedTasks.length;
 
       for (const task of completedTasks) {
-        const hasMemory = memoryByTaskId.has(task.taskId);
+        // Phase-35: 三重去重检查 — sourceId > relatedTaskId > tags
+        const hasMemory = memoryBySourceId.has(task.taskId) || memoryByTaskId.has(task.taskId);
         if (hasMemory) {
           phasesWithMemory++;
           skippedWithMemory++;
@@ -2337,7 +3956,7 @@ export class DevPlanGraphStore implements IDevPlanStore {
         // 推断重要性：P0 高优先级 → 0.8, P1 → 0.6, P2 → 0.5
         const importanceMap: Record<string, number> = { P0: 0.8, P1: 0.6, P2: 0.5 };
 
-        candidates.push({
+        allEligible.push({
           sourceType: 'task',
           sourceId: task.taskId,
           sourceTitle: task.title,
@@ -2347,13 +3966,11 @@ export class DevPlanGraphStore implements IDevPlanStore {
           suggestedTags: [task.taskId, task.priority],
           hasExistingMemory: false,
         });
-
-        if (candidates.length >= limit) break;
       }
     }
 
     // ========== 文档来源 ==========
-    if ((source === 'docs' || source === 'both') && candidates.length < limit) {
+    if (source === 'docs' || source === 'both') {
       let docs = this.listSections();
 
       // 可选过滤
@@ -2397,15 +4014,15 @@ export class DevPlanGraphStore implements IDevPlanStore {
       };
 
       for (const doc of docs) {
-        if (candidates.length >= limit) break;
-
         const docKey = doc.subSection
           ? `${doc.section}|${doc.subSection}`
           : doc.section;
 
-        // 检查是否已有对应记忆（通过内容前缀匹配）
+        // Phase-35: 三重去重检查 — sourceId（最可靠） > 内容指纹（fallback）
+        const hasMemoryBySourceId = memoryBySourceId.has(docKey);
         const contentFingerprint = doc.content.slice(0, 50).toLowerCase();
-        const hasMemory = memoryContentSet.has(contentFingerprint);
+        const hasMemoryByFingerprint = memoryContentSet.has(contentFingerprint);
+        const hasMemory = hasMemoryBySourceId || hasMemoryByFingerprint;
         if (hasMemory) {
           docsWithMemory++;
           skippedWithMemory++;
@@ -2449,7 +4066,7 @@ export class DevPlanGraphStore implements IDevPlanStore {
         if (doc.subSection) tags.push(doc.subSection);
         if (doc.relatedTaskIds) tags.push(...doc.relatedTaskIds);
 
-        candidates.push({
+        allEligible.push({
           sourceType: 'document',
           sourceId: docKey,
           sourceTitle: doc.title,
@@ -2462,6 +4079,86 @@ export class DevPlanGraphStore implements IDevPlanStore {
       }
     }
 
+    // ========== Phase-44: 构建 suggestedRelations ==========
+    // 为候选项之间推断关联关系，帮助 AI 用 applyMutations 构建记忆子图
+    const candidateIdSet = new Set(allEligible.map(c => c.sourceId));
+
+    for (const candidate of allEligible) {
+      const relations: Array<{ relationType: string; targetSourceId: string; weight?: number; reason?: string }> = [];
+
+      if (candidate.sourceType === 'task') {
+        // 任务 → 关联文档: DERIVED_FROM
+        const taskEntity = this.listMainTasks().find(t => t.taskId === candidate.sourceId);
+        if (taskEntity?.relatedSections) {
+          for (const docRef of taskEntity.relatedSections) {
+            if (candidateIdSet.has(docRef)) {
+              relations.push({ targetSourceId: docRef, relationType: 'mem:DERIVED_FROM', weight: 0.7, reason: 'task references this document' });
+            }
+          }
+        }
+        // 任务 → 同模块任务: RELATES
+        if (taskEntity?.moduleId) {
+          for (const other of allEligible) {
+            if (other.sourceId !== candidate.sourceId && other.sourceType === 'task') {
+              const otherTask = this.listMainTasks().find(t => t.taskId === other.sourceId);
+              if (otherTask?.moduleId === taskEntity.moduleId) {
+                relations.push({ targetSourceId: other.sourceId, relationType: 'mem:RELATES', weight: 0.5, reason: `same module: ${taskEntity.moduleId}` });
+              }
+            }
+          }
+        }
+        // 任务 → 相邻阶段: TEMPORAL_NEXT (phase-N → phase-N+1)
+        const phaseMatch = candidate.sourceId.match(/^phase-(\d+)/);
+        if (phaseMatch) {
+          const nextPhaseId = `phase-${parseInt(phaseMatch[1]) + 1}`;
+          if (candidateIdSet.has(nextPhaseId)) {
+            relations.push({ targetSourceId: nextPhaseId, relationType: 'mem:TEMPORAL_NEXT', weight: 0.6, reason: 'consecutive phases' });
+          }
+        }
+      } else if (candidate.sourceType === 'document') {
+        // 文档 → 关联任务: DERIVED_FROM
+        const docEntity = this.listSections().find(d => {
+          const key = d.subSection ? `${d.section}|${d.subSection}` : d.section;
+          return key === candidate.sourceId;
+        });
+        if (docEntity?.relatedTaskIds) {
+          for (const taskId of docEntity.relatedTaskIds) {
+            if (candidateIdSet.has(taskId)) {
+              relations.push({ targetSourceId: taskId, relationType: 'mem:DERIVED_FROM', weight: 0.7, reason: 'document references this task' });
+            }
+          }
+        }
+        // 文档 → 父文档: CONTAINS (反向)
+        if (docEntity?.parentDoc) {
+          if (candidateIdSet.has(docEntity.parentDoc)) {
+            relations.push({ targetSourceId: docEntity.parentDoc, relationType: 'mem:CONTAINS', weight: 0.8, reason: 'child document of parent' });
+          }
+        }
+        // 文档 → 同section文档: RELATES
+        if (docEntity) {
+          for (const other of allEligible) {
+            if (other.sourceId !== candidate.sourceId && other.sourceType === 'document') {
+              const otherDoc = this.listSections().find(d => {
+                const key = d.subSection ? `${d.section}|${d.subSection}` : d.section;
+                return key === other.sourceId;
+              });
+              if (otherDoc && otherDoc.section === docEntity.section && otherDoc.subSection !== docEntity.subSection) {
+                relations.push({ targetSourceId: other.sourceId, relationType: 'mem:RELATES', weight: 0.4, reason: `same section: ${docEntity.section}` });
+              }
+            }
+          }
+        }
+      }
+
+      if (relations.length > 0) {
+        candidate.suggestedRelations = relations;
+      }
+    }
+
+    // 按 limit 截取，计算 remaining
+    const candidates = allEligible.slice(0, limit);
+    const remaining = Math.max(0, allEligible.length - limit);
+
     return {
       candidates,
       stats: {
@@ -2471,6 +4168,7 @@ export class DevPlanGraphStore implements IDevPlanStore {
         docsWithMemory,
         skippedWithMemory,
         candidatesReturned: candidates.length,
+        remaining,
       },
     };
   }
@@ -2749,7 +4447,9 @@ export class DevPlanGraphStore implements IDevPlanStore {
     // Memory 节点
     {
       const memories = this.listMemories ? this.listMemories() : [];
+      const memoryIdSet = new Set<string>();
       for (const mem of memories) {
+        memoryIdSet.add(mem.id);
         const label = `${mem.memoryType}: ${mem.content.slice(0, 30)}...`;
         nodes.push({
           id: mem.id,
@@ -2776,6 +4476,39 @@ export class DevPlanGraphStore implements IDevPlanStore {
               from: mem.id,
               to: taskEntity.id,
               label: RT.MEMORY_FROM_TASK,
+            });
+          }
+        }
+      }
+
+      // Phase-37/51: 记忆网络关系 — MEMORY_RELATES / MEMORY_FROM_DOC / MODULE_MEMORY / MEMORY_SUPERSEDES / MEMORY_CONFLICTS
+      const memoryRelTypes = [RT.MEMORY_RELATES, RT.MEMORY_FROM_DOC, RT.MODULE_MEMORY, RT.MEMORY_SUPERSEDES, RT.MEMORY_CONFLICTS];
+      const edgeDedup = new Set<string>();
+      for (const memId of memoryIdSet) {
+        for (const relType of memoryRelTypes) {
+          const rels = this.getOutRelations(memId, relType);
+          for (const rel of rels) {
+            const key = `${rel.source}-${rel.target}-${relType}`;
+            if (edgeDedup.has(key)) continue;
+            edgeDedup.add(key);
+            edges.push({
+              from: rel.source,
+              to: rel.target,
+              label: relType,
+              properties: rel.weight != null ? { weight: rel.weight } : undefined,
+            });
+          }
+          // 也检查入边（双向关系如 MEMORY_RELATES 的另一方向）
+          const inRels = this.getInRelations(memId, relType);
+          for (const rel of inRels) {
+            const key = `${rel.source}-${rel.target}-${relType}`;
+            if (edgeDedup.has(key)) continue;
+            edgeDedup.add(key);
+            edges.push({
+              from: rel.source,
+              to: rel.target,
+              label: relType,
+              properties: rel.weight != null ? { weight: rel.weight } : undefined,
             });
           }
         }
@@ -2856,6 +4589,101 @@ export class DevPlanGraphStore implements IDevPlanStore {
             label: RT.MODULE_HAS_TASK,
           });
         }
+      }
+    }
+
+    // Phase-41: 记忆节点 + 全部记忆关系
+    const allMemoryEntities = this.findEntitiesByType(ET.MEMORY)
+      .filter((e) => (e.properties as any).projectName === this.projectName);
+
+    for (const memEntity of allMemoryEntities) {
+      const mem = this.entityToMemory(memEntity);
+      nodes.push({
+        id: mem.id,
+        label: `${mem.memoryType}: ${mem.content.slice(0, 30)}...`,
+        type: 'memory',
+        properties: {
+          memoryType: mem.memoryType,
+          content: mem.content.length > 120 ? mem.content.slice(0, 120) + '...' : mem.content,
+          importance: mem.importance,
+          hitCount: mem.hitCount,
+          tags: mem.tags,
+          relatedTaskId: mem.relatedTaskId || null,
+          sourceId: mem.sourceId || null,
+        },
+      });
+
+      // project → memory (HAS_MEMORY)
+      edges.push({
+        from: this.getProjectId(),
+        to: mem.id,
+        label: RT.HAS_MEMORY,
+      });
+
+      // memory → task (MEMORY_FROM_TASK)
+      if (mem.relatedTaskId) {
+        const taskEntity = this.findEntityByProp(ET.MAIN_TASK, 'taskId', mem.relatedTaskId);
+        if (taskEntity) {
+          edges.push({
+            from: mem.id,
+            to: taskEntity.id,
+            label: RT.MEMORY_FROM_TASK,
+          });
+        }
+      }
+
+      // memory ↔ memory (MEMORY_RELATES，仅导出出向避免重复)
+      const memRelates = this.getOutRelations(mem.id, RT.MEMORY_RELATES);
+      for (const rel of memRelates) {
+        // 仅导出 source < target 的一侧，避免双向重复
+        if (mem.id < rel.target) {
+          edges.push({
+            from: mem.id,
+            to: rel.target,
+            label: RT.MEMORY_RELATES,
+            properties: rel.weight != null ? { weight: rel.weight } : undefined,
+          });
+        }
+      }
+
+      // doc → memory (MEMORY_FROM_DOC，反向查找)
+      const fromDocRels = this.getInRelations(mem.id, RT.MEMORY_FROM_DOC);
+      for (const rel of fromDocRels) {
+        edges.push({
+          from: rel.source,
+          to: mem.id,
+          label: RT.MEMORY_FROM_DOC,
+        });
+      }
+
+      // module → memory (MODULE_MEMORY，反向查找)
+      const moduleMemRels = this.getInRelations(mem.id, RT.MODULE_MEMORY);
+      for (const rel of moduleMemRels) {
+        edges.push({
+          from: rel.source,
+          to: mem.id,
+          label: RT.MODULE_MEMORY,
+        });
+      }
+
+      // memory → memory (MEMORY_SUPERSEDES)
+      const supersedesRels = this.getOutRelations(mem.id, RT.MEMORY_SUPERSEDES);
+      for (const rel of supersedesRels) {
+        edges.push({
+          from: mem.id,
+          to: rel.target,
+          label: RT.MEMORY_SUPERSEDES,
+        });
+      }
+
+      // memory → memory (MEMORY_CONFLICTS)
+      const conflictsRels = this.getOutRelations(mem.id, RT.MEMORY_CONFLICTS);
+      for (const rel of conflictsRels) {
+        edges.push({
+          from: mem.id,
+          to: rel.target,
+          label: RT.MEMORY_CONFLICTS,
+        });
       }
     }
 
@@ -2942,7 +4770,8 @@ export class DevPlanGraphStore implements IDevPlanStore {
 
     try {
       // Call Rust SocialGraphV2.exportGraphPaginated via NAPI
-      const result = (this.graph as any).exportGraphPaginated({
+      // Phase-46: 移除 as any 断言 — aifastdb ≥2.8.0 已有正式类型
+      const result = this.graph.exportGraphPaginated({
         offset,
         limit,
         entityTypes,
@@ -2968,9 +4797,9 @@ export class DevPlanGraphStore implements IDevPlanStore {
           // If still not found, look up the actual entity (fast hash lookup)
           if (!etStr || typeof etStr !== 'string') {
             try {
-              const entity = (this.graph as any).getEntity(n.id);
+              const entity = this.graph.getEntity(n.id);
               if (entity) {
-                etStr = entity.entity_type || entity.entityType;
+                etStr = entity.entity_type;
               }
             } catch { /* ignore — fall through to group */ }
           }
@@ -3002,11 +4831,11 @@ export class DevPlanGraphStore implements IDevPlanStore {
         return {
           nodes,
           edges,
-          totalNodes: result.total_nodes ?? result.totalNodes ?? nodes.length,
-          totalEdges: result.total_edges ?? result.totalEdges ?? edges.length,
+          totalNodes: result.totalNodes ?? nodes.length,
+          totalEdges: result.totalEdges ?? edges.length,
           offset: result.offset ?? offset,
           limit: result.limit ?? limit,
-          hasMore: result.has_more ?? result.hasMore ?? false,
+          hasMore: result.hasMore ?? false,
         };
       }
     } catch {
@@ -3049,7 +4878,8 @@ export class DevPlanGraphStore implements IDevPlanStore {
    */
   exportGraphCompact(): Buffer | null {
     try {
-      const buf = (this.graph as any).exportGraphCompact({
+      // Phase-46: 移除 as any 断言 — aifastdb ≥2.8.0 已有正式类型
+      const buf = this.graph.exportGraphCompact({
         maxNodes: 1000000,
         includeTags: true,
         includeCompanies: true,
@@ -3075,16 +4905,19 @@ export class DevPlanGraphStore implements IDevPlanStore {
    */
   getEntityGroupSummary(): EntityGroupAggregation | null {
     try {
-      const result = (this.graph as any).getEntityGroupSummary();
+      // Phase-46: 移除 as any 断言 — aifastdb ≥2.8.0 已有正式类型
+      const result = this.graph.getEntityGroupSummary();
       if (result && typeof result === 'object') {
+        // Phase-46: result.groups 是 Record<string, GroupSummary>，转换为 DevPlan 格式
+        const groupEntries = Object.entries(result.groups || {});
         return {
-          groups: (result.groups || []).map((g: any) => ({
-            entityType: g.entity_type ?? g.entityType ?? '',
-            count: g.count ?? 0,
-            sampleIds: g.sample_ids ?? g.sampleIds ?? [],
+          groups: groupEntries.map(([entityType, summary]) => ({
+            entityType,
+            count: summary.count ?? 0,
+            sampleIds: summary.sampleIds ?? [],
           })),
-          totalEntities: result.total_entities ?? result.totalEntities ?? 0,
-          totalRelations: result.total_relations ?? result.totalRelations ?? 0,
+          totalEntities: result.totalEntities ?? 0,
+          totalRelations: result.totalRelations ?? 0,
         };
       }
     } catch {
@@ -3169,17 +5002,104 @@ export class DevPlanGraphStore implements IDevPlanStore {
       return mainTask;
     }
 
-    this.graph.updateEntity(mainTask.id, {
-      properties: {
+    const now = Date.now();
+    // Phase-45: 使用 upsertEntityByProp 代替 updateEntity（修复分片路由不一致）
+    this.graph.upsertEntityByProp(
+      ET.MAIN_TASK, 'taskId', mainTaskId, mainTask.title, {
+        projectName: this.projectName,
+        taskId: mainTaskId,
+        title: mainTask.title,
+        priority: mainTask.priority,
+        description: mainTask.description || '',
+        estimatedHours: mainTask.estimatedHours || 0,
+        relatedSections: mainTask.relatedSections || [],
+        relatedPromptIds: mainTask.relatedPromptIds || [],
+        moduleId: mainTask.moduleId || null,
         totalSubtasks: subs.length,
         completedSubtasks: completedCount,
-        updatedAt: Date.now(),
-      },
-    });
+        status: mainTask.status,
+        order: mainTask.order,
+        createdAt: mainTask.createdAt,
+        updatedAt: now,
+        completedAt: mainTask.completedAt,
+      }
+    );
 
     this.graph.flush();
-    const updated = this.graph.getEntity(mainTask.id);
-    return updated ? this.entityToMainTask(updated) : mainTask;
+    return this.getMainTask(mainTaskId) || mainTask;
+  }
+
+  /**
+   * Phase-45: 修复存量数据 — 遍历所有主任务，重新计算子任务计数和自动完成状态。
+   * 用于修复因 updateEntity 路由不一致导致的 completedSubtasks=0 和 status=in_progress 的 Bug。
+   * @returns 修复报告
+   */
+  repairAllMainTaskCounts(): { repaired: number; autoCompleted: number; details: Array<{ taskId: string; action: string }> } {
+    const allMainTasks = this.listMainTasks();
+    const report = { repaired: 0, autoCompleted: 0, details: [] as Array<{ taskId: string; action: string }> };
+
+    for (const mt of allMainTasks) {
+      if (mt.status === 'cancelled') continue;
+
+      const subs = this.listSubTasks(mt.taskId);
+      const completedCount = subs.filter((s) => s.status === 'completed').length;
+      const totalCount = subs.length;
+
+      let needsRepair = false;
+      let needsAutoComplete = false;
+
+      // 检查计数是否正确
+      if (mt.totalSubtasks !== totalCount || mt.completedSubtasks !== completedCount) {
+        needsRepair = true;
+      }
+
+      // 检查是否应自动完成
+      if (totalCount > 0 && completedCount >= totalCount && mt.status !== 'completed') {
+        needsAutoComplete = true;
+        needsRepair = true;
+      }
+
+      if (!needsRepair) continue;
+
+      const now = Date.now();
+      const finalStatus = needsAutoComplete ? 'completed' as TaskStatus : mt.status;
+      const finalCompletedAt = needsAutoComplete ? now : mt.completedAt;
+
+      this.graph.upsertEntityByProp(
+        ET.MAIN_TASK, 'taskId', mt.taskId, mt.title, {
+          projectName: this.projectName,
+          taskId: mt.taskId,
+          title: mt.title,
+          priority: mt.priority,
+          description: mt.description || '',
+          estimatedHours: mt.estimatedHours || 0,
+          relatedSections: mt.relatedSections || [],
+          relatedPromptIds: mt.relatedPromptIds || [],
+          moduleId: mt.moduleId || null,
+          totalSubtasks: totalCount,
+          completedSubtasks: completedCount,
+          status: finalStatus,
+          order: mt.order,
+          createdAt: mt.createdAt,
+          updatedAt: now,
+          completedAt: finalCompletedAt,
+        }
+      );
+
+      report.repaired++;
+      if (needsAutoComplete) {
+        report.autoCompleted++;
+        report.details.push({ taskId: mt.taskId, action: `auto-completed (${completedCount}/${totalCount} subtasks done)` });
+      } else {
+        report.details.push({ taskId: mt.taskId, action: `counts fixed: ${mt.completedSubtasks}→${completedCount}/${totalCount}` });
+      }
+    }
+
+    if (report.repaired > 0) {
+      this.graph.flush();
+    }
+
+    return report;
   }
 
   private autoUpdateMilestones(completedMainTask: MainTask): void {
@@ -3348,7 +5268,7 @@ export class DevPlanGraphStore implements IDevPlanStore {
   }
 
   /**
-   * RRF (Reciprocal Rank Fusion) 融合排序
+   * RRF (Reciprocal Rank Fusion) 融合排序（双路：vector + literal）
    *
    * 将语义搜索和字面搜索的结果通过 RRF 公式融合：
    *   score(d) = Σ 1/(k + rank_i(d))
@@ -3390,6 +5310,68 @@ export class DevPlanGraphStore implements IDevPlanStore {
       if (results.length >= limit) break;
 
       // 优先从 docMap 获取（字面搜索已解析过的），否则从图中获取
+      let doc = docMap.get(id);
+      if (!doc) {
+        const entity = this.graph.getEntity(id);
+        if (entity && (entity.properties as any)?.projectName === this.projectName) {
+          doc = this.entityToDevPlanDoc(entity);
+        }
+      }
+
+      if (doc) {
+        results.push({ ...doc, score });
+      }
+    }
+
+    return results;
+  }
+
+  /**
+   * Phase-52: 三路 RRF 融合排序 (vector + BM25/literal)
+   *
+   * 当 Tantivy BM25 可用时，textResults 携带 BM25 score；
+   * 否则降级为朴素字面匹配（按出现顺序排名）。
+   *
+   * RRF 公式：score(d) = Σ 1/(k + rank_i(d))
+   * k=60 是标准 RRF 常数。
+   */
+  private rrfFusionThreeWay(
+    semanticHits: VectorSearchHit[],
+    textResults: Array<{ id: string; score?: number; doc?: DevPlanDoc }>,
+    limit: number,
+    minScore: number,
+  ): ScoredDevPlanDoc[] {
+    const RRF_K = 60;
+    const rrfScores = new Map<string, number>();
+    const docMap = new Map<string, DevPlanDoc>();
+
+    // 通道 1: 语义搜索结果贡献
+    for (let i = 0; i < semanticHits.length; i++) {
+      const hit = semanticHits[i];
+      const rrf = 1 / (RRF_K + i + 1);
+      rrfScores.set(hit.entityId, (rrfScores.get(hit.entityId) || 0) + rrf);
+    }
+
+    // 通道 2: BM25 / literal 搜索结果贡献
+    for (let i = 0; i < textResults.length; i++) {
+      const r = textResults[i];
+      const rrf = 1 / (RRF_K + i + 1);
+      rrfScores.set(r.id, (rrfScores.get(r.id) || 0) + rrf);
+      if (r.doc) {
+        docMap.set(r.id, r.doc);
+      }
+    }
+
+    // 按 RRF 评分排序
+    const sorted = Array.from(rrfScores.entries())
+      .sort((a, b) => b[1] - a[1]);
+
+    // 组装结果
+    const results: ScoredDevPlanDoc[] = [];
+    for (const [id, score] of sorted) {
+      if (minScore > 0 && score < minScore) continue;
+      if (results.length >= limit) break;
+
       let doc = docMap.get(id);
       if (!doc) {
         const entity = this.graph.getEntity(id);

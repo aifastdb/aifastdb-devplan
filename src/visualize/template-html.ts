@@ -121,6 +121,7 @@ export function getHTML(projectName: string): string {
         <div class="legend-item toggle active" data-type="main-task" onclick="toggleFilter('main-task')" title="点击切换主任务显隐"><input type="checkbox" class="filter-cb" id="cb-main-task" checked><div class="legend-icon circle"></div> 主任务</div>
         <div class="legend-item toggle active" data-type="sub-task" onclick="toggleFilter('sub-task')" title="点击切换子任务显隐"><input type="checkbox" class="filter-cb" id="cb-sub-task" checked><div class="legend-icon dot"></div> 子任务</div>
         <div class="legend-item toggle active" data-type="document" onclick="toggleFilter('document')" title="点击切换文档显隐"><input type="checkbox" class="filter-cb" id="cb-document" checked><div class="legend-icon square"></div> 文档</div>
+        <div class="legend-item toggle active" data-type="memory" onclick="toggleFilter('memory')" title="点击切换记忆显隐"><input type="checkbox" class="filter-cb" id="cb-memory" checked><div class="legend-icon hexagon"></div> 记忆</div>
         <div class="legend-divider"></div>
         <!-- 边类型图例 -->
         <div class="legend-item"><div class="legend-line solid"></div> 主任务</div>
@@ -187,7 +188,7 @@ export function getHTML(projectName: string): string {
               <button style="flex-shrink:0;background:none;border:1px solid #374151;border-radius:6px;padding:4px 10px;color:#9ca3af;font-size:11px;cursor:pointer;transition:all 0.15s;" onmouseover="this.style.borderColor='#6366f1';this.style.color='#a5b4fc'" onmouseout="this.style.borderColor='#374151';this.style.color='#9ca3af'" onclick="backToChat()" title="返回对话搜索">← 返回搜索</button>
             </div>
             <div class="docs-reader-wrap">
-              <div class="docs-content-body" id="docsContentBody">
+            <div class="docs-content-body" id="docsContentBody">
                 <div class="docs-reader-inner">
                   <div class="mdv-body" id="docsContentInner"></div>
                 </div>
@@ -211,6 +212,14 @@ export function getHTML(projectName: string): string {
             <p class="memory-header-desc">跨会话积累的开发知识：决策、模式、Bug 修复、洞察</p>
           </div>
           <div class="memory-header-right">
+            <div class="memory-view-toggle">
+              <button class="memory-view-btn active" data-view="list" onclick="switchMemoryView('list')" title="列表视图">
+                <span>📋</span> 列表
+              </button>
+              <button class="memory-view-btn" data-view="graph" onclick="switchMemoryView('graph')" title="3D 图谱">
+                <span>🌐</span> 图谱
+              </button>
+            </div>
             <div class="memory-generate-group">
               <button class="memory-generate-btn" onclick="generateMemories('both')" title="从文档和任务中提取记忆候选项">
                 ✨ 生成记忆
@@ -230,6 +239,11 @@ export function getHTML(projectName: string): string {
                 <div class="memory-generate-dropdown-item" onclick="showPhasePickerForGenerate()">
                   <span class="mg-icon">🎯</span> 从指定阶段...
                 </div>
+                <div class="memory-generate-dropdown-sep"></div>
+                <div class="memory-generate-dropdown-item auto-import" onclick="autoImportAllMemories()">
+                  <span class="mg-icon">⚡</span> 一键全量导入
+                  <span style="font-size:10px;color:#6b7280;margin-left:4px;">（自动保存全部）</span>
+                </div>
               </div>
             </div>
             <span class="memory-count" id="memoryCount">0 条记忆</span>
@@ -246,6 +260,22 @@ export function getHTML(projectName: string): string {
         </div>
         <div class="memory-list" id="memoryList">
           <div style="text-align:center;padding:60px;color:#6b7280;font-size:13px;">加载中...</div>
+        </div>
+        <!-- 3D Graph Container (hidden by default) -->
+        <div class="memory-graph-container" id="memoryGraphContainer" style="display:none;">
+          <div class="memory-graph-loading" id="memoryGraphLoading">
+            <div class="spinner" style="width:32px;height:32px;border-width:3px;margin:0 auto 12px;"></div>
+            <div>正在加载记忆网络...</div>
+          </div>
+          <div id="memoryGraph3D" style="width:100%;height:100%;"></div>
+          <div class="memory-graph-legend">
+            <div class="mg-legend-item"><span class="mg-legend-dot" style="background:#c026d3;"></span> 记忆</div>
+            <div class="mg-legend-item"><span class="mg-legend-dot" style="background:#3b82f6;"></span> 任务</div>
+            <div class="mg-legend-item"><span class="mg-legend-dot" style="background:#60a5fa;"></span> 文档</div>
+            <div class="mg-legend-item"><span class="mg-legend-dot" style="background:#ff8533;"></span> 模块</div>
+            <div class="mg-legend-item"><span class="mg-legend-dot" style="background:#6366f1;"></span> 项目</div>
+          </div>
+          <div class="memory-graph-stats" id="memoryGraphStats"></div>
         </div>
       </div>
 
@@ -279,6 +309,20 @@ export function getHTML(projectName: string): string {
           <div class="mem-gen-candidate-list" id="memGenCandidateList">
             <div style="text-align:center;padding:40px;color:#6b7280;">加载中...</div>
           </div>
+        </div>
+      </div>
+
+      <!-- 一键全量导入进度覆盖层 -->
+      <div class="mem-auto-import-overlay" id="memAutoImportOverlay" style="display:none;">
+        <div class="mem-auto-import-card">
+          <div class="mem-auto-import-icon">⚡</div>
+          <div class="mem-auto-import-title" id="memAutoImportTitle">一键全量导入</div>
+          <div class="mem-auto-import-progress-bar">
+            <div class="mem-auto-import-progress-fill" id="memAutoImportProgress" style="width:0%"></div>
+          </div>
+          <div class="mem-auto-import-status" id="memAutoImportStatus">准备中...</div>
+          <div class="mem-auto-import-detail" id="memAutoImportDetail"></div>
+          <button class="mem-auto-import-cancel" id="memAutoImportCancelBtn" onclick="cancelAutoImport()">取消</button>
         </div>
       </div>
     </div>
@@ -334,6 +378,11 @@ export function getHTML(projectName: string): string {
                     <span class="s3d-color-label"><span class="s3d-dot" style="background:#3b82f6;"></span> 文档</span>
                     <input type="color" class="s3d-color-input" id="ncColorDocument" value="#3b82f6" oninput="updateNodeColor('document',this.value)">
                     <span class="s3d-color-hex" id="ncColorDocumentHex">#3b82f6</span>
+                  </div>
+                  <div class="s3d-color-row">
+                    <span class="s3d-color-label"><span class="s3d-dot" style="background:#e879f9;border-radius:50%;"></span> 记忆</span>
+                    <input type="color" class="s3d-color-input" id="ncColorMemory" value="#e879f9" oninput="updateNodeColor('memory',this.value)">
+                    <span class="s3d-color-hex" id="ncColorMemoryHex">#e879f9</span>
                   </div>
                 </div>
                 <button class="s3d-reset-btn" style="margin-top:8px;font-size:11px;" onclick="resetNodeColors()">↩ 恢复默认颜色</button>

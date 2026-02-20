@@ -410,17 +410,128 @@ export interface DevPlanStoreConfig {
 }
 
 /**
+ * Perception 预设模型名称（对应 aifastdb PerceptionPresets 的键名）
+ *
+ * | 预设名 | 模型 | 维度 | 后端 | 适用场景 |
+ * |--------|------|------|------|---------|
+ * | miniLM | all-MiniLM-L6-v2 | 384 | candle | 轻量英文（默认） |
+ * | bgeSmall | bge-small-en-v1.5 | 384 | candle | 高质量英文 |
+ * | multilingualE5 | multilingual-e5-small | 384 | candle | 多语言 |
+ * | embeddingGemma | embedding-gemma | 768 | candle | 高维度 |
+ * | ollamaEmbeddingGemma | embeddinggemma | 768 | ollama | Ollama EmbeddingGemma |
+ * | ollamaQwen3Embedding | qwen3-embedding | 1024 | ollama | Ollama Qwen3 0.6B |
+ * | ollamaQwen3Embedding8b | qwen3-embedding:8b | 4096 | ollama | Ollama Qwen3 8B（最高质量） |
+ * | none | — | — | — | 禁用感知引擎 |
+ */
+export type PerceptionPresetName =
+  | 'miniLM'
+  | 'bgeSmall'
+  | 'multilingualE5'
+  | 'embeddingGemma'
+  | 'ollamaEmbeddingGemma'
+  | 'ollamaQwen3Embedding'
+  | 'ollamaQwen3Embedding8b'
+  | 'none';
+
+/**
  * DevPlanStore 配置（SocialGraphV2 模式）
  */
 export interface DevPlanGraphStoreConfig {
   /** SocialGraphV2 数据目录路径 */
   graphPath: string;
-  /** 分片数（0 = 自动） */
+  /**
+   * @deprecated 分片数现在由 shard-config.ts 的 DEVPLAN_SHARD_NAMES.length 自动推导，
+   * 且 SocialGraphV2 会从 shardNames.length 自动设置 shardCount。此字段已无效。
+   */
   shardCount?: number;
   /** 是否启用语义搜索（需要 VibeSynapse Embedding + SocialGraphV2 向量索引） */
   enableSemanticSearch?: boolean;
-  /** Embedding 向量维度（默认 384，MiniLM-L6-v2） */
+  /**
+   * Embedding 向量维度覆盖（Matryoshka 截断）
+   *
+   * - **通常不需要设置**：维度会从 modelId 自动解析（如 qwen3-embedding:8b → 4096d）
+   * - **仅在需要 Matryoshka 截断时设置**：如将 4096d 截断为 1024d 以节省 HNSW 存储
+   *
+   * ⚠️ **IMMUTABLE AFTER INIT**: 此值在数据库首次初始化后不可变更。
+   * 变更会导致 HNSW 向量索引与已有数据维度不匹配，造成搜索失败或数据损坏。
+   * 如需变更，必须删除旧数据并重新导入。
+   */
   embeddingDimension?: number;
+
+  /**
+   * Phase-52: Perception 预设名称 — 快捷选择 Embedding 模型
+   *
+   * 优先级：perceptionConfig > perceptionPreset > 默认 miniLM
+   *
+   * 在 .devplan/config.json 中配置：
+   * ```json
+   * { "perceptionPreset": "bgeSmall" }
+   * ```
+   */
+  perceptionPreset?: PerceptionPresetName;
+
+  /**
+   * Phase-52: 完整的 Perception 配置 — 自定义 Embedding 引擎
+   *
+   * 当需要使用非预设模型时，提供完整配置。优先级高于 perceptionPreset。
+   *
+   * 示例（本地 Candle）:
+   * ```json
+   * { "perceptionConfig": { "engineType": "candle", "modelId": "BAAI/bge-small-en-v1.5", "autoDownload": true } }
+   * ```
+   *
+   * 示例（Ollama qwen3-embedding:8b，维度自动解析为 4096d）:
+   * ```json
+   * { "perceptionConfig": {
+   *     "engineType": "ollama",
+   *     "modelId": "qwen3-embedding:8b",
+   *     "endpoint": "http://localhost:11434/v1"
+   *   }
+   * }
+   * ```
+   *
+   * 示例（Matryoshka 截断到 1024d + Ollama fallback）:
+   * ```json
+   * { "perceptionConfig": {
+   *     "engineType": "ollama",
+   *     "modelId": "qwen3-embedding:8b",
+   *     "dimension": 1024,
+   *     "endpoint": "http://localhost:11434/v1",
+   *     "fallbackEngineType": "candle",
+   *     "fallbackModelId": "sentence-transformers/all-MiniLM-L6-v2"
+   *   }
+   * }
+   * ```
+   */
+  perceptionConfig?: {
+    engineType?: string;
+    modelId?: string;
+    dimension?: number;
+    device?: string;
+    autoDownload?: boolean;
+    cacheDir?: string;
+    // Phase-110: Remote embedding fields (Ollama/HTTP)
+    endpoint?: string;
+    apiKey?: string;
+    timeoutSecs?: number;
+    fallbackEngineType?: string;
+    fallbackModelId?: string;
+  };
+
+  /**
+   * Phase-52: 是否启用 Tantivy BM25 全文搜索
+   *
+   * 启用后，SocialGraphV2 将初始化 Tantivy 索引，
+   * 支持三路混合搜索 (vector + BM25 + graph)。
+   * 需要 aifastdb >= 2.9.0（含 full-text-search feature）。
+   *
+   * 在 .devplan/config.json 中配置：
+   * ```json
+   * { "enableTextSearch": true }
+   * ```
+   */
+  enableTextSearch?: boolean;
+
   /** Git 操作的工作目录（多项目路由时指向项目根目录，默认 process.cwd()） */
   gitCwd?: string;
 }
@@ -498,6 +609,8 @@ export interface DevPlanGraphEdge {
   to: string;
   /** 关系类型 */
   label: string;
+  /** 附加属性（如 MEMORY_RELATES 的 similarity weight） */
+  properties?: Record<string, any>;
 }
 
 /**
@@ -724,6 +837,53 @@ export interface MemoryInput {
   relatedTaskId?: string;
   /** 重要性 (0~1，默认 0.5) */
   importance?: number;
+  /**
+   * 记忆来源 ID（可选）— 用于批量生成记忆时追踪已处理的候选项
+   *
+   * 格式约定：
+   * - 任务来源: taskId (如 "phase-7")
+   * - 文档来源: "section" 或 "section|subSection" (如 "overview", "technical_notes|security")
+   *
+   * generateMemoryCandidates 通过此字段去重，确保同一来源不会重复生成候选项。
+   */
+  sourceId?: string;
+  /**
+   * 关联的模块 ID（可选）— Phase-37 新增
+   *
+   * 当指定 moduleId 时，自动建立 MODULE_MEMORY 关系，
+   * 让记忆融入模块级知识图谱。
+   */
+  moduleId?: string;
+
+  /**
+   * 记忆分解模式（可选）— Phase-47 新增
+   *
+   * 启用后，content 会通过 Rust 层记忆树分解器拆解为
+   * Episode + Entities + Relations 子图，而非单一实体存储。
+   *
+   * - `false` (默认): 传统单实体存储（向后兼容）
+   * - `'rule'`: 使用内置规则分解器（RuleBasedDecomposer）
+   * - `'llm'`: 返回 LLM 提示模板，外部 LLM 生成 JSON 后用
+   *            memoryTreeParseLlmDecomposition 解析
+   * - `true`: 等同于 `'rule'`
+   */
+  decompose?: boolean | 'rule' | 'llm';
+
+  /**
+   * LLM 分解结果 JSON（仅当 decompose='llm' 时使用）— Phase-47 新增
+   *
+   * 外部 LLM 生成的分解 JSON 字符串，配合 decompose='llm' 使用。
+   * 如果提供了此字段，将直接调用 memoryTreeParseLlmDecomposition 解析。
+   */
+  llmDecompositionJson?: string;
+
+  /**
+   * 分解上下文（可选）— Phase-47 新增
+   *
+   * 为分解器提供额外上下文信息，帮助更准确地分解记忆内容。
+   * 例如: 当前任务描述、项目背景等。
+   */
+  decomposeContext?: string;
 }
 
 /**
@@ -752,6 +912,49 @@ export interface Memory {
   createdAt: number;
   /** 更新时间 */
   updatedAt: number;
+  /**
+   * 记忆来源 ID — 追踪该记忆由哪个文档/任务生成
+   *
+   * 格式：taskId (如 "phase-7") 或 "section|subSection" (如 "overview", "technical_notes|security")
+   */
+  sourceId?: string;
+
+  /**
+   * Phase-47: 分解结果摘要（当使用 decompose 模式时返回）
+   *
+   * 包含分解后的 episode ID、实体数、关系数等统计。
+   * 仅当 saveMemory 调用时启用了 decompose 选项时有值。
+   */
+  decomposition?: {
+    /** Episode 根实体 ID */
+    episodeId: string;
+    /** 分解出的实体数量 */
+    entitiesStored: number;
+    /** 分解出的关系数量 */
+    relationsStored: number;
+    /** 已索引的向量数量 */
+    vectorsIndexed: number;
+    /** 检测到的冲突数量 */
+    conflictsDetected: number;
+  };
+
+  /**
+   * Phase-51: 冲突检测结果（saveMemory 后自动运行）
+   *
+   * 当新记忆与已有记忆存在语义矛盾或替代关系时，
+   * Rust 层 memoryTreeDetectConflicts 自动建立 SUPERSEDES/CONFLICTS 关系，
+   * 并将冲突信息返回给 AI 供决策。
+   */
+  conflicts?: Array<{
+    /** 已有记忆实体 ID */
+    existingEntityId: string;
+    /** 语义相似度 (0~1) */
+    similarity: number;
+    /** 冲突类型: supersedes（新记忆替代旧记忆）/ contradicts（互相矛盾）/ supplements（补充） */
+    conflictType: string;
+    /** 自动创建的关系 ID（如有） */
+    relationCreated?: string;
+  }>;
 }
 
 /**
@@ -799,6 +1002,29 @@ export interface MemoryContext {
     /** 内容摘要（截取前 N 字符） */
     summary: string;
   }>;
+  /**
+   * Phase-38: 模块级关联记忆 — 通过图谱遍历 in_progress 任务 → 模块 → MODULE_MEMORY 获取
+   *
+   * 当存在进行中的任务时，自动沿图谱关系链路获取对应模块的记忆，
+   * 为 AI 提供当前工作上下文的深层知识。
+   */
+  moduleMemories?: Array<{
+    moduleId: string;
+    moduleName: string;
+    memories: Memory[];
+  }>;
+  /**
+   * Phase-40: 记忆主题集群概览 — 基于 MEMORY_RELATES 连通分量自动聚类
+   *
+   * 提供记忆网络的主题结构鸟瞰，帮助 AI 快速理解项目知识分布。
+   * 仅包含集群主题和大小信息（不含完整记忆内容，避免上下文爆炸）。
+   */
+  memoryClusters?: Array<{
+    clusterId: number;
+    theme: string;
+    memoryCount: number;
+    topMemoryTypes: string[];
+  }>;
 }
 
 // ============================================================================
@@ -827,6 +1053,24 @@ export interface MemoryCandidate {
   suggestedTags: string[];
   /** 此来源是否已有关联记忆 */
   hasExistingMemory: boolean;
+
+  // ---- Phase-44: Memory Tree 子图建议 ----
+  /**
+   * 建议的关系列表 — 引导 AI 在生成记忆时同时建立子图结构
+   *
+   * AI 可在 devplan_memory_save 后使用 applyMutations 批量创建这些关系。
+   * 每条建议包含 relationType（如 memory_relates）和 targetSourceId（目标候选项的 sourceId）。
+   */
+  suggestedRelations?: Array<{
+    /** 关系类型 */
+    relationType: string;
+    /** 目标候选项的 sourceId（AI 保存后需替换为实际 entity ID） */
+    targetSourceId: string;
+    /** 建议的关系权重 */
+    weight?: number;
+    /** 关系说明 */
+    reason?: string;
+  }>;
 }
 
 /**
@@ -849,6 +1093,8 @@ export interface MemoryGenerateResult {
     skippedWithMemory: number;
     /** 返回的候选项数（已排除有记忆的） */
     candidatesReturned: number;
+    /** 超出 limit 但仍有待处理的候选项数（用于 AI 批量工作流判断是否需继续） */
+    remaining: number;
   };
 }
 

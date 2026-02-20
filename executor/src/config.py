@@ -26,24 +26,34 @@ from pydantic_settings import BaseSettings
 class UIStatus(str, Enum):
     """屏幕 UI 状态枚举（视觉 AI 识别结果）
 
-    5 状态版 — 两种不同的检测机制：
+    10 状态版 — 三层检测机制：
 
-    即时检测（视觉 AI 单次识别）：
-      - CONNECTION_ERROR: 弹窗非常醒目，准确度 ⭐⭐⭐⭐⭐，单次识别立即判定
-      - PROVIDER_ERROR: Provider 返回错误弹窗，准确度 ⭐⭐⭐⭐，单次识别即判定
+    即时检测（Ollama gemma3:27b 视觉模型单次识别）：
+      - CONNECTION_ERROR: 连接错误弹窗，准确度 ⭐⭐⭐⭐⭐
+      - PROVIDER_ERROR: Provider 返回错误弹窗，准确度 ⭐⭐⭐⭐
+      - CONTEXT_OVERFLOW: 上下文/对话过长提示，准确度 ⭐⭐⭐⭐
+      - RATE_LIMIT: 模型限流/请求频率限制，准确度 ⭐⭐⭐⭐
+      - API_TIMEOUT: API 请求超时，准确度 ⭐⭐⭐
+      - RESPONSE_INTERRUPTED: AI 响应中途被中断，准确度 ⭐⭐⭐
+      - AI_GENERATING: AI 正在生成中（Stop 按钮可见），准确度 ⭐⭐⭐⭐⭐
 
     累积检测（连续截图对比）：
-      - RESPONSE_STALL: 屏幕连续 N 次无变化（默认 10 次），判定为响应中断
+      - RESPONSE_STALL: 屏幕连续 N 次无变化（默认 4 次），判定为响应中断
 
     兜底：
-      - IDLE: 非以上两种情况的兜底状态，准确度 ⭐⭐⭐⭐
+      - IDLE: 非以上状态的兜底，准确度 ⭐⭐⭐⭐
       - UNKNOWN: 分析失败时的兜底
     """
-    CONNECTION_ERROR = "CONNECTION_ERROR"    # 连接错误（弹窗 / Try again 按钮）— 单次识别
-    PROVIDER_ERROR = "PROVIDER_ERROR"        # Provider 错误（Provider returned an error）— 单次识别
-    RESPONSE_STALL = "RESPONSE_STALL"       # 响应中断（连续 N 次截图无变化）— 累积检测
-    IDLE = "IDLE"                            # 空闲 / 其他所有非错误状态的兜底
-    UNKNOWN = "UNKNOWN"                      # 视觉模型无法识别（分析失败时的兜底）
+    CONNECTION_ERROR = "CONNECTION_ERROR"          # 连接错误（弹窗 / Try again 按钮）— 单次识别
+    PROVIDER_ERROR = "PROVIDER_ERROR"              # Provider 错误（Provider returned an error）— 单次识别
+    CONTEXT_OVERFLOW = "CONTEXT_OVERFLOW"          # 上下文过长（对话太长/token 超限）— 单次识别
+    RATE_LIMIT = "RATE_LIMIT"                      # 模型限流（请求过于频繁/配额用尽）— 单次识别
+    API_TIMEOUT = "API_TIMEOUT"                    # API 超时（请求超时/响应太慢）— 单次识别
+    RESPONSE_INTERRUPTED = "RESPONSE_INTERRUPTED"  # AI 响应被中断（输出中途停止）— 单次识别
+    AI_GENERATING = "AI_GENERATING"                # AI 正在生成（Stop 按钮可见/文字流动）— 单次识别
+    RESPONSE_STALL = "RESPONSE_STALL"              # 响应中断（连续 N 次截图无变化）— 累积检测
+    IDLE = "IDLE"                                  # 空闲 / 其他所有非错误状态的兜底
+    UNKNOWN = "UNKNOWN"                            # 视觉模型无法识别（分析失败时的兜底）
 
 
 class ExecutorConfig(BaseSettings):
@@ -65,7 +75,7 @@ class ExecutorConfig(BaseSettings):
 
     # ── 轮询 & 超时 ──────────────────────────────────────────
     poll_interval: int = Field(
-        default=15,
+        default=10,
         description="主循环轮询间隔（秒）",
     )
     http_timeout: int = Field(
@@ -105,12 +115,12 @@ class ExecutorConfig(BaseSettings):
         description="连续截图间隔（秒），用于屏幕变化检测",
     )
     stall_threshold: int = Field(
-        default=10,
-        description="响应中断判定阈值：连续多少次截图无变化后判定为 RESPONSE_STALL",
+        default=4,
+        description="响应中断判定阈值：连续多少次截图无变化后判定为 RESPONSE_STALL（4 × 10s = 40s）",
     )
     fallback_no_change_timeout: int = Field(
-        default=180,
-        description="兜底策略超时（秒）：右下角截图连续无变化超过此时间且有待开发任务时，发送'请继续'（默认 180 秒 = 3 分钟）",
+        default=90,
+        description="兜底策略超时（秒）：右下角截图连续无变化超过此时间且有待开发任务时，发送'请继续'（默认 90 秒）",
     )
     roi_region: Optional[tuple[int, int, int, int]] = Field(
         default=None,
@@ -123,6 +133,34 @@ class ExecutorConfig(BaseSettings):
     quadrant_left_ratio: float = Field(
         default=0.35,
         description="左侧边栏占屏幕宽度的比例（0.35 表示左 35%% 是边栏，右 65%% 是内容区）",
+    )
+
+    # ── 日志监控（Channel 1）─────────────────────────────────
+    log_monitor_enabled: bool = Field(
+        default=True,
+        description="是否启用 Cursor renderer.log 日志监控（Channel 1）",
+    )
+    log_monitor_idle_threshold: int = Field(
+        default=30,
+        description="日志无新 ToolCall 事件超过此秒数后，判定 AI 停止工作并触发截图分析",
+    )
+
+    # ── 恢复策略 ──────────────────────────────────────────────
+    rate_limit_wait: int = Field(
+        default=60,
+        description="RATE_LIMIT 检测到限流后等待秒数（默认 60 秒）",
+    )
+    api_timeout_wait: int = Field(
+        default=5,
+        description="API_TIMEOUT 检测到超时后等待秒数（默认 5 秒）",
+    )
+    context_overflow_wait: int = Field(
+        default=3,
+        description="CONTEXT_OVERFLOW 检测到上下文溢出后，开新对话前等待秒数",
+    )
+    stall_escalate_threshold: int = Field(
+        default=3,
+        description="RESPONSE_STALL 连续发送'请继续'多少次无效后，升级为 CONTEXT_OVERFLOW 策略（开新对话）",
     )
 
     # ── Executor 标识 ────────────────────────────────────────
@@ -211,10 +249,7 @@ class ExecutorConfig(BaseSettings):
 # ── 状态标记配置（用于视觉 AI 模糊匹配） ─────────────────────
 
 STATUS_MARKERS: dict[str, list[str]] = {
-    # ── 高准确度的错误状态关键词 ──
-    # 其他状态（WORKING / TERMINAL_RUNNING / ERROR / INTERRUPTED）
-    # 在四象限截图模式下关键词误判率较高，已删除。
-    # 它们的功能由 screen_changing（截图对比）和 DevPlan API 状态代替。
+    # ── 高准确度的错误状态关键词（用于 _parse_status 兜底匹配）──
 
     "CONNECTION_ERROR": [
         "Connection failed", "Connection Error", "connection error",
@@ -231,6 +266,38 @@ STATUS_MARKERS: dict[str, list[str]] = {
         "trouble connecting to the model provider",
         "try again in a moment",
         "Provider 错误", "服务商错误",
+    ],
+
+    "CONTEXT_OVERFLOW": [
+        "conversation is getting long", "context length",
+        "token limit", "max tokens", "too long",
+        "start a new", "new conversation",
+        "上下文过长", "对话太长", "token 超限",
+        "context_length_exceeded",
+    ],
+
+    "RATE_LIMIT": [
+        "rate limit", "Rate limit", "too many requests",
+        "usage limit", "request limit", "slow down",
+        "try again in", "限流", "请求过于频繁",
+        "quota", "429",
+    ],
+
+    "API_TIMEOUT": [
+        "timed out", "timeout", "request timeout",
+        "took too long", "request failed",
+        "超时", "响应超时",
+    ],
+
+    "RESPONSE_INTERRUPTED": [
+        "interrupted", "Response interrupted",
+        "stopped", "no result from tool",
+        "响应被中断", "已中断",
+    ],
+
+    "AI_GENERATING": [
+        "Stop generating", "stop generating",
+        "Generating", "AI_GENERATING",
     ],
 }
 

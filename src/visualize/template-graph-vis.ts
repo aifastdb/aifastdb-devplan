@@ -454,7 +454,8 @@ var NODE_SIZE_RULES = {
   'module':    { min: 20, max: 45, baseFont: 12, maxFont: 16, scale: 2.8 },
   'main-task': { min: 14, max: 38, baseFont: 11, maxFont: 15, scale: 2.2 },
   'sub-task':  { min: 7,  max: 18, baseFont: 8,  maxFont: 11, scale: 1.5 },
-  'document':  { min: 12, max: 30, baseFont: 9,  maxFont: 13, scale: 1.8 }
+  'document':  { min: 12, max: 30, baseFont: 9,  maxFont: 13, scale: 1.8 },
+  'memory':    { min: 6,  max: 20, baseFont: 7,  maxFont: 11, scale: 1.2 }
 };
 
 /** 获取节点度数：纯后端下发，缺失视为 0 */
@@ -504,6 +505,10 @@ function nodeStyle(node, degree) {
     var _dc = _visUniStyle.document;
     return { shape: 'box', size: ns.size, color: { background: _dc.bg, border: _dc.border, highlight: { background: _dc.bg, border: '#fff' } }, font: { size: ns.fontSize, color: _dc.font }, borderWidth: 1 };
   }
+  if (t === 'memory') {
+    var _mc = _visUniStyle.memory;
+    return { shape: 'hexagon', size: ns.size, color: { background: _mc.bg, border: _mc.border, highlight: { background: _mc.bg, border: '#fff' } }, font: { size: ns.fontSize, color: _mc.font }, borderWidth: 1 };
+  }
   return { shape: 'dot', size: ns.size, color: { background: '#6b7280', border: '#4b5563' }, font: { size: ns.fontSize, color: '#9ca3af' } };
 }
 
@@ -518,6 +523,12 @@ function edgeStyle(edge) {
   if (label === 'has_module') return { width: 1.5, color: { color: EDGE_GRAY, highlight: '#ff8533', hover: '#ff8533' }, dashes: [3, 3], arrows: { to: { enabled: true, scaleFactor: 0.5 } }, _highlightColor: '#ff8533' };
   if (label === 'module_has_task') return { width: 1.5, color: { color: EDGE_GRAY, highlight: '#ff8533', hover: '#ff8533' }, dashes: [2, 4], arrows: { to: { enabled: true, scaleFactor: 0.5 } }, _highlightColor: '#ff8533' };
   if (label === 'task_has_doc') return { width: 1.5, color: { color: EDGE_GRAY, highlight: '#f59e0b', hover: '#f59e0b' }, dashes: [4, 3], arrows: { to: { enabled: true, scaleFactor: 0.5 } }, _highlightColor: '#f59e0b' };
+  if (label === 'has_memory') return { width: 1, color: { color: '#581c87', highlight: '#e879f9', hover: '#e879f9' }, dashes: [3, 3], arrows: { to: { enabled: true, scaleFactor: 0.3 } }, _highlightColor: '#e879f9' };
+  if (label === 'memory_relates') return { width: 1.5, color: { color: '#86198f', highlight: '#f0abfc', hover: '#f0abfc' }, dashes: false, arrows: { to: { enabled: false } }, _highlightColor: '#f0abfc' };
+  if (label === 'memory_from_task') return { width: 1, color: { color: '#581c87', highlight: '#c084fc', hover: '#c084fc' }, dashes: [4, 2], arrows: { to: { enabled: true, scaleFactor: 0.3 } }, _highlightColor: '#c084fc' };
+  if (label === 'memory_from_doc') return { width: 1, color: { color: '#581c87', highlight: '#a78bfa', hover: '#a78bfa' }, dashes: [2, 3], arrows: { to: { enabled: true, scaleFactor: 0.3 } }, _highlightColor: '#a78bfa' };
+  if (label === 'module_memory') return { width: 1, color: { color: '#581c87', highlight: '#d946ef', hover: '#d946ef' }, dashes: [3, 2], arrows: { to: { enabled: true, scaleFactor: 0.3 } }, _highlightColor: '#d946ef' };
+  if (label === 'memory_supersedes') return { width: 1, color: { color: '#701a75', highlight: '#f472b6', hover: '#f472b6' }, dashes: [6, 2], arrows: { to: { enabled: true, scaleFactor: 0.4 } }, _highlightColor: '#f472b6' };
   if (label === 'doc_has_child') return { width: 1.5, color: { color: EDGE_GRAY, highlight: '#c084fc', hover: '#c084fc' }, dashes: [6, 3], arrows: { to: { enabled: true, scaleFactor: 0.5 } }, _highlightColor: '#c084fc' };
   return { width: 1, color: { color: EDGE_GRAY, highlight: '#9ca3af', hover: '#9ca3af' }, dashes: false, _highlightColor: '#9ca3af' };
 }
@@ -732,7 +743,7 @@ function renderGraph() {
           labelHidden = true;
           var updates = [];
           nodesDataSet.forEach(function(n) {
-            if (n._type === 'sub-task' || n._type === 'document') {
+            if (n._type === 'sub-task' || n._type === 'document' || n._type === 'memory') {
               updates.push({ id: n.id, font: { size: 0 } });
             }
           });

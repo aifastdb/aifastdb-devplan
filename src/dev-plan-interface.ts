@@ -303,6 +303,12 @@ export interface IDevPlanStore {
   deleteMemory?(memoryId: string): boolean;
 
   /**
+   * 批量清除当前项目的所有记忆
+   * @param memoryType - 可选：仅清除指定类型
+   */
+  clearAllMemories?(memoryType?: string): { deleted: number };
+
+  /**
    * 获取新会话上下文 — 核心工具
    *
    * 聚合最近任务、相关记忆、项目偏好、最近决策，

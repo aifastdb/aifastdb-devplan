@@ -1,6 +1,8 @@
 {
   "defaultProject": "aifastdb-devplan",
   "enableSemanticSearch": true,
+  "enableTextSearch": true,
+  "perceptionPreset": "ollamaQwen3Embedding8b",
   "projects": {
     "ai_db": {
       "rootPath": "D:\\Project\\git\\ai_db"
