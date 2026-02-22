@@ -1217,6 +1217,34 @@ export interface Memory {
 export type RecallDepth = 'L1' | 'L2' | 'L3';
 
 /**
+ * 文档检索策略（Phase-125 新增）
+ *
+ * 控制 recallMemory 如何检索相关文档：
+ *
+ * - `"vector"` (默认): 传统模式 — 对文档库独立执行向量搜索，与记忆搜索并行，结果 RRF 融合。
+ *   全量搜索，token 消耗较高但覆盖面广。
+ *
+ * - `"guided"`: 记忆驱动模式 — 先召回记忆，再基于记忆中的图谱关系（MEMORY_FROM_DOC、
+ *   TASK_HAS_DOC、MODULE_HAS_DOC）反向遍历找到关联文档。精准、token 省，每篇文档
+ *   附带 guidedReason 说明选取理由。如果图遍历结果为空，自动降级到 vector 模式。
+ *
+ * - `"none"`: 不检索文档（等价于 includeDocs=false）。
+ *
+ * @example
+ * ```typescript
+ * // 传统全量搜索（向后兼容）
+ * recallMemory(query, { docStrategy: 'vector' })
+ *
+ * // 记忆驱动精准检索
+ * recallMemory(query, { docStrategy: 'guided' })
+ *
+ * // 仅搜索记忆，不返回文档
+ * recallMemory(query, { docStrategy: 'none' })
+ * ```
+ */
+export type DocStrategy = 'vector' | 'guided' | 'none';
+
+/**
  * 范围限定检索（Phase-124 新增）
  *
  * 参考 OpenViking 的 `target_uri` 限制检索范围，
@@ -1285,6 +1313,13 @@ export interface ScoredMemory extends Memory {
   docSubSection?: string;
   /** 当 sourceKind='doc' 时，文档标题 */
   docTitle?: string;
+
+  // ---- Phase-125: 记忆驱动文档检索 ----
+  /**
+   * 当 docStrategy='guided' 时，说明该文档被选取的理由。
+   * 每条理由描述一条图遍历路径（如 "记忆 X 的来源文档"、"与任务 phase-7 同属"）。
+   */
+  guidedReasons?: string[];
 
   // ---- Phase-57: 三维记忆召回增强 ----
   // anchorInfo 继承自 Memory（不重定义）

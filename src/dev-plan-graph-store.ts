@@ -92,6 +92,7 @@ import type {
   PerceptionPresetName,
   RecallDepth,
   RecallScope,
+  DocStrategy,
 } from './types';
 
 // ============================================================================
@@ -2977,6 +2978,128 @@ export class DevPlanGraphStore implements IDevPlanStore {
     });
   }
 
+  // ============================================================================
+  // Phase-125: Memory-Guided Document Retrieval（记忆驱动文档检索）
+  // ============================================================================
+
+  /**
+   * Phase-125: 基于记忆的图遍历查找关联文档
+   *
+   * 三条图遍历路径：
+   * 1. memory ──MEMORY_FROM_DOC──→ doc         （记忆的来源文档）
+   * 2. memory.relatedTaskId → task ──TASK_HAS_DOC──→ doc （任务关联文档）
+   * 3. memory ←─MODULE_MEMORY─── module ──MODULE_HAS_DOC──→ doc （模块关联文档）
+   *
+   * 每篇发现的文档附带 guidedReasons 说明选取理由。
+   * 如果同一文档被多条路径命中，累计得分更高。
+   *
+   * @param memories - 已召回的记忆列表（作为图遍历的种子）
+   * @param maxDocs  - 最多返回的文档数（默认 5）
+   * @returns 按累计得分排序的文档列表（ScoredMemory 格式，sourceKind='doc'）
+   */
+  private findGuidedDocuments(memories: ScoredMemory[], maxDocs: number = 5): ScoredMemory[] {
+    // 只处理真正的记忆（跳过 doc 类型）
+    const realMemories = memories.filter(m => m.sourceKind === 'memory' || !m.sourceKind);
+    if (realMemories.length === 0) return [];
+
+    // docEntityId → { score, reasons, entity }
+    const docMap = new Map<string, { score: number; reasons: string[]; entity: any }>();
+
+    const addDoc = (docEntityId: string, score: number, reason: string) => {
+      const existing = docMap.get(docEntityId);
+      if (existing) {
+        existing.score += score;
+        if (!existing.reasons.includes(reason)) {
+          existing.reasons.push(reason);
+        }
+      } else {
+        const entity = this.graph.getEntity(docEntityId);
+        if (entity && (entity.entity_type === ET.DOC)) {
+          docMap.set(docEntityId, { score, reasons: [reason], entity });
+        }
+      }
+    };
+
+    for (const mem of realMemories) {
+      const memLabel = (mem.content || '').substring(0, 30).replace(/\n/g, ' ');
+
+      // ---- 路径 1: MEMORY_FROM_DOC → 直接来源文档（权重最高）----
+      try {
+        const fromDocRels = this.getOutRelations(mem.id, RT.MEMORY_FROM_DOC);
+        for (const rel of fromDocRels) {
+          addDoc(rel.target, 1.0, `记忆「${memLabel}…」的来源文档`);
+        }
+      } catch { /* 关系查询失败，继续 */ }
+
+      // ---- 路径 2: relatedTaskId → task ──TASK_HAS_DOC──→ doc ----
+      if (mem.relatedTaskId) {
+        try {
+          const taskEntity = this.findEntityByProp(ET.MAIN_TASK, 'taskId', mem.relatedTaskId);
+          if (taskEntity) {
+            const taskDocRels = this.getOutRelations(taskEntity.id, RT.TASK_HAS_DOC);
+            for (const rel of taskDocRels) {
+              addDoc(rel.target, 0.8, `与任务 ${mem.relatedTaskId} 关联`);
+            }
+          }
+        } catch { /* 继续 */ }
+      }
+
+      // ---- 路径 3: MODULE_MEMORY(反向) → module ──MODULE_HAS_DOC──→ doc ----
+      try {
+        const moduleRels = this.getInRelations(mem.id, RT.MODULE_MEMORY);
+        for (const modRel of moduleRels) {
+          const modEntity = this.graph.getEntity(modRel.source);
+          if (!modEntity) continue;
+          const modProps = modEntity.properties as any;
+          const modLabel = modProps?.moduleId || modProps?.name || modRel.source;
+
+          const modDocRels = this.getOutRelations(modRel.source, RT.MODULE_HAS_DOC);
+          for (const rel of modDocRels) {
+            addDoc(rel.target, 0.6, `同属模块「${modLabel}」`);
+          }
+        }
+      } catch { /* 继续 */ }
+    }
+
+    if (docMap.size === 0) return [];
+
+    // 按累计得分排序，取 top N
+    const sorted = Array.from(docMap.entries())
+      .sort((a, b) => b[1].score - a[1].score)
+      .slice(0, maxDocs);
+
+    // 转换为 ScoredMemory 格式（与现有统一召回输出兼容）
+    const results: ScoredMemory[] = [];
+    for (const [docEntityId, { score, reasons, entity }] of sorted) {
+      const p = entity.properties as any;
+      const section = p.section || '';
+      const subSection = p.subSection || undefined;
+      const contentSnippet = (p.content || '').substring(0, 300);
+
+      results.push({
+        id: `doc:${section}${subSection ? '|' + subSection : ''}`,
+        projectName: this.projectName,
+        memoryType: this.docSectionToMemoryType(section),
+        content: contentSnippet + (p.content && p.content.length > 300 ? '...' : ''),
+        tags: [section, ...(subSection ? [subSection] : [])],
+        relatedTaskId: undefined,
+        importance: 0.6,
+        hitCount: 0,
+        lastAccessedAt: null,
+        createdAt: p.updatedAt || 0,
+        updatedAt: p.updatedAt || 0,
+        score: Math.min(score, 1.0), // 归一化到 0~1
+        sourceKind: 'doc',
+        docSection: section,
+        docSubSection: subSection,
+        docTitle: p.title || '',
+        guidedReasons: reasons,
+      });
+    }
+
+    return results;
+  }
+
   /**
    * Phase-51: 冲突检测 — 检测新记忆与已有记忆的语义矛盾
    *
@@ -3406,6 +3529,7 @@ export class DevPlanGraphStore implements IDevPlanStore {
    * 智能召回记忆 — 语义向量搜索 + 图谱遍历扩展 + RRF 融合
    *
    * Phase-38 增强: 向量搜索结果沿 MEMORY_RELATES 关系扩展，发现关联记忆。
+   * Phase-125 增强: docStrategy 支持 'vector'(默认) | 'guided'(记忆驱动) | 'none'。
    * 如语义搜索不可用，退化为字面匹配。
    * 命中的记忆自动更新 hitCount 和 lastAccessedAt。
    */
@@ -3413,7 +3537,7 @@ export class DevPlanGraphStore implements IDevPlanStore {
     memoryType?: MemoryType;
     limit?: number;
     minScore?: number;
-    /** 是否包含文档搜索（统一召回，默认 true） */
+    /** 是否包含文档搜索（统一召回，默认 true）。当 docStrategy 有值时此参数被忽略。 */
     includeDocs?: boolean;
     /** Phase-38: 是否启用图谱关联扩展（默认 true） */
     graphExpand?: boolean;
@@ -3434,15 +3558,34 @@ export class DevPlanGraphStore implements IDevPlanStore {
      * 多个条件为 AND 关系。
      */
     scope?: RecallScope;
+    /**
+     * Phase-125: 文档检索策略（默认 'vector'）
+     *
+     * - 'vector': 传统模式 — 对文档库独立向量搜索，与记忆并行，RRF 融合
+     * - 'guided': 记忆驱动 — 基于记忆中的图谱关系反向查找关联文档，精准且省 token
+     * - 'none':   不检索文档（等价于 includeDocs=false）
+     *
+     * 当 docStrategy 有值时，includeDocs 参数被忽略。
+     */
+    docStrategy?: DocStrategy;
   }): ScoredMemory[] {
     const limit = options?.limit || 10;
     const minScore = options?.minScore || 0;
-    const includeDocs = options?.includeDocs !== false; // 默认 true
     const graphExpand = options?.graphExpand !== false; // 默认 true
     const useActivation = options?.useActivation !== false; // 默认 true
     const depth: RecallDepth = options?.depth || 'L1'; // Phase-124: 默认 L1 摘要层
     const scope = options?.scope; // Phase-124: 范围限定
     const now = Date.now();
+
+    // Phase-125: 解析 docStrategy（兼容旧 includeDocs 参数）
+    let docStrategy: DocStrategy;
+    if (options?.docStrategy) {
+      docStrategy = options.docStrategy;
+    } else if (options?.includeDocs === false) {
+      docStrategy = 'none';
+    } else {
+      docStrategy = 'vector'; // 默认保持向后兼容
+    }
 
     // ---- Phase-49: 优先使用记忆树激活引擎 ----
     let memoryResults: ScoredMemory[] = [];
@@ -3480,16 +3623,62 @@ export class DevPlanGraphStore implements IDevPlanStore {
       memoryResults = this.filterMemoriesByScope(memoryResults, scope);
     }
 
-    // ---- 2. 文档召回（统一召回） ----
-    if (!includeDocs || options?.memoryType) {
-      // 如果不需要文档或指定了 memoryType 过滤，直接返回记忆结果
-      // Phase-57→124: 三维记忆层级下钻（受 depth 控制）
+    // ---- 2. 文档召回：根据 docStrategy 分流 ----
+
+    // 2a. 不检索文档（none / 指定了 memoryType 过滤时也跳过文档）
+    if (docStrategy === 'none' || options?.memoryType) {
       this.enrichMemoriesWithAnchorInfo(memoryResults, depth);
-      // Phase-54: LLM Reranking
       return this.rerankSearchResults(query, memoryResults, limit);
     }
 
-    let docResults: ScoredMemory[] = [];
+    // 2b. Phase-125: 记忆驱动文档检索（guided）
+    if (docStrategy === 'guided') {
+      let guidedDocs = this.findGuidedDocuments(memoryResults, Math.max(3, Math.floor(limit / 2)));
+
+      // Fallback: 图遍历结果为空时，降级到 vector 模式
+      if (guidedDocs.length === 0) {
+        guidedDocs = this.vectorSearchDocuments(query, limit, minScore);
+      }
+
+      let finalResults: ScoredMemory[];
+      if (guidedDocs.length === 0) {
+        finalResults = memoryResults;
+      } else if (memoryResults.length === 0) {
+        finalResults = guidedDocs.slice(0, limit);
+      } else {
+        // 记忆在前，guided 文档追加在后（不做 RRF，因为 guided 已按图关联排序）
+        finalResults = [...memoryResults, ...guidedDocs].slice(0, limit);
+      }
+
+      this.enrichMemoriesWithAnchorInfo(finalResults, depth);
+      return this.rerankSearchResults(query, finalResults, limit);
+    }
+
+    // 2c. 传统向量搜索文档（vector，默认路径）
+    let docResults: ScoredMemory[] = this.vectorSearchDocuments(query, limit, minScore);
+
+    // ---- 3. RRF 融合排序 ----
+    let finalResults: ScoredMemory[];
+    if (docResults.length === 0) {
+      finalResults = memoryResults;
+    } else if (memoryResults.length === 0) {
+      finalResults = docResults.slice(0, limit);
+    } else {
+      finalResults = this.rrfMergeResults(memoryResults, docResults, limit);
+    }
+
+    // Phase-57→124: 三维记忆层级下钻（受 depth 控制）
+    this.enrichMemoriesWithAnchorInfo(finalResults, depth);
+
+    // Phase-54: LLM Reranking 作为最终精排步骤
+    return this.rerankSearchResults(query, finalResults, limit);
+  }
+
+  /**
+   * Phase-125: 提取的向量搜索文档方法（从 recallMemory 中分离，供 vector/fallback 复用）
+   */
+  private vectorSearchDocuments(query: string, limit: number, minScore: number): ScoredMemory[] {
+    const docResults: ScoredMemory[] = [];
     try {
       const docHits = this.searchSectionsAdvanced(query, {
         mode: this.semanticSearchReady ? 'hybrid' : 'literal',
@@ -3499,7 +3688,6 @@ export class DevPlanGraphStore implements IDevPlanStore {
       });
 
       for (const doc of docHits) {
-        // 将文档结果包装为 ScoredMemory 格式（统一接口）
         const contentSnippet = (doc.content || '').substring(0, 300);
         docResults.push({
           id: `doc:${doc.section}${doc.subSection ? '|' + doc.subSection : ''}`,
@@ -3523,22 +3711,7 @@ export class DevPlanGraphStore implements IDevPlanStore {
     } catch (e) {
       console.warn(`[DevPlan] Document recall failed: ${e instanceof Error ? e.message : String(e)}`);
     }
-
-    // ---- 3. RRF 融合排序 ----
-    let finalResults: ScoredMemory[];
-    if (docResults.length === 0) {
-      finalResults = memoryResults;
-    } else if (memoryResults.length === 0) {
-      finalResults = docResults.slice(0, limit);
-    } else {
-      finalResults = this.rrfMergeResults(memoryResults, docResults, limit);
-    }
-
-    // Phase-57→124: 三维记忆层级下钻（受 depth 控制）
-    this.enrichMemoriesWithAnchorInfo(finalResults, depth);
-
-    // Phase-54: LLM Reranking 作为最终精排步骤
-    return this.rerankSearchResults(query, finalResults, limit);
+    return docResults;
   }
 
   /**

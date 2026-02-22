@@ -182,6 +182,17 @@ function createRingTexture(color, size) {
 // 缓存 glow 纹理 (避免每个节点重复创建)
 var _glowTextureCache = {};
 
+// Phase-75: 边类型 → 高亮色映射 (提升为全局，供增量注入使用)
+var LINK_3D_HIGHLIGHT_COLORS = {
+  'has_main_task':   '#93c5fd',
+  'has_sub_task':    '#818cf8',
+  'has_document':    '#60a5fa',
+  'has_module':      '#ff8533',
+  'module_has_task': '#ff8533',
+  'task_has_doc':    '#f59e0b',
+  'doc_has_child':   '#c084fc'
+};
+
 /**
  * 3D Force Graph 渲染器
  * 使用 Three.js WebGL + d3-force-3d 实现 3D 球体力导向可视化
@@ -203,16 +214,7 @@ function render3DGraph(container, visibleNodes, visibleEdges) {
   var _3dHighlightLinks = new Set();  // 选中节点的关联边 Set
   var _3dHighlightNodes = new Set();  // 选中节点 + 邻居节点 Set
 
-  // 边类型 → 高亮色映射（与 vis-network edgeStyle 对齐）
-  var LINK_HIGHLIGHT_COLORS = {
-    'has_main_task':   '#93c5fd',
-    'has_sub_task':    '#818cf8',
-    'has_document':    '#60a5fa',
-    'has_module':      '#ff8533',
-    'module_has_task': '#ff8533',
-    'task_has_doc':    '#f59e0b',
-    'doc_has_child':   '#c084fc'
-  };
+  // 使用全局 LINK_3D_HIGHLIGHT_COLORS (Phase-75: 提升为全局供增量注入使用)
 
   // 转换数据格式: vis-network edges → 3d-force-graph links
   var links3d = [];
@@ -224,7 +226,7 @@ function render3DGraph(container, visibleNodes, visibleEdges) {
       _label: e._label,
       _width: e.width || 1,
       _color: get3DLinkColor(e),
-      _highlightColor: LINK_HIGHLIGHT_COLORS[e._label] || '#a5b4fc',
+      _highlightColor: LINK_3D_HIGHLIGHT_COLORS[e._label] || '#a5b4fc',
       _projectEdgeHidden: !!e._projectEdgeHidden  // 主节点连线: 参与力模拟但不渲染
     });
   }
@@ -1082,10 +1084,144 @@ function render3DGraph(container, visibleNodes, visibleEdges) {
         }, 3000);
       }
     },
-    off: function() {}
+    off: function() {},
+    // Phase-75: 增量数据注入 (供渐进式加载 Stage 2/3 使用)
+    _addData: function(newNodes3d, newLinks3d) {
+      // ── 0) 检测当前布局模式 ──
+      var _isOrb = (_s3d.layoutMode === 'orbital');
+
+      // 行星轨道: 类型→轨道编号 (与初始化 ORBIT_MAP 一致)
+      var _ORBIT_MAP = { 'project': 0, 'module': 1, 'main-task': 2, 'sub-task': 3, 'document': 4 };
+      var _orbSpacing = _s3d.orbitSpacing || 80;
+
+      // 力导向分层: 类型→轨道层 (与初始化 TYPE_BAND 一致)
+      var _TYPE_BAND = { 'project': 0, 'module': 1, 'document': 2, 'main-task': 3, 'sub-task': 4 };
+      var _sepSpacing = _s3d.typeSepSpacing || 80;
+      var _doTypeSep = !_isOrb && _s3d.typeSeparation && _s3d.typeSepStrength > 0;
+
+      // ── 建立已有节点索引 ──
+      var curData = graph3d.graphData();
+      var existNodeMap = {};
+      for (var ei = 0; ei < curData.nodes.length; ei++) {
+        existNodeMap[curData.nodes[ei].id] = curData.nodes[ei];
+      }
+
+      // ── 建立新边的父子关系映射 ──
+      var newNodeParent = {};
+      for (var li = 0; li < newLinks3d.length; li++) {
+        var lnk = newLinks3d[li];
+        var srcId = typeof lnk.source === 'object' ? lnk.source.id : lnk.source;
+        var tgtId = typeof lnk.target === 'object' ? lnk.target.id : lnk.target;
+        if (existNodeMap[srcId] && !existNodeMap[tgtId]) {
+          newNodeParent[tgtId] = existNodeMap[srcId];
+        } else if (existNodeMap[tgtId] && !existNodeMap[srcId]) {
+          newNodeParent[srcId] = existNodeMap[tgtId];
+        }
+      }
+
+      // ── 为每个新节点设置布局属性 + 初始位置 ──
+      for (var ni = 0; ni < newNodes3d.length; ni++) {
+        var nn = newNodes3d[ni];
+        var nodeTargetR = 200; // 默认目标半径
+
+        if (_isOrb) {
+          // ★ 行星轨道模式: 设置 _orbitRadius / _orbitIndex
+          var orbIdx = _ORBIT_MAP[nn._type];
+          if (orbIdx === undefined) orbIdx = 3;
+          nn._orbitIndex = orbIdx;
+          nn._orbitRadius = orbIdx * _orbSpacing;
+          nodeTargetR = nn._orbitRadius;
+        } else if (_doTypeSep) {
+          // ★ 力导向分层模式: 设置 _targetBand / _targetRadius
+          var band = _TYPE_BAND[nn._type];
+          if (band === undefined) band = 4;
+          nn._targetBand = band;
+          nn._targetRadius = band * _sepSpacing;
+          nodeTargetR = nn._targetRadius;
+        }
+
+        // ── 智能初始位置 ──
+        var parent = newNodeParent[nn.id];
+        if (_isOrb && nodeTargetR > 0) {
+          // 行星轨道模式: 直接放置在目标轨道上 (XY 平面圆环 + 微小 Z 偏移)
+          // 这样轨道力只需微调，不用从远处飞入
+          var orbAngle = Math.random() * Math.PI * 2;
+          var orbJitter = nodeTargetR * 0.1; // 10% 抖动
+          nn.x = Math.cos(orbAngle) * (nodeTargetR + (Math.random() - 0.5) * orbJitter);
+          nn.y = Math.sin(orbAngle) * (nodeTargetR + (Math.random() - 0.5) * orbJitter);
+          nn.z = (Math.random() - 0.5) * nodeTargetR * 0.05; // 极小的 Z 偏移 (扁平)
+        } else if (parent && parent.x !== undefined) {
+          // 力导向模式: 从父节点向外延伸
+          var px = parent.x || 0, py = parent.y || 0, pz = parent.z || 0;
+          var pDist = Math.sqrt(px*px + py*py + pz*pz);
+          var spread = (_doTypeSep ? _sepSpacing : 50) * (0.5 + Math.random() * 0.5);
+          if (pDist > 1) {
+            nn.x = px + (px / pDist) * spread + (Math.random() - 0.5) * spread * 0.6;
+            nn.y = py + (py / pDist) * spread + (Math.random() - 0.5) * spread * 0.6;
+            nn.z = pz + (pz / pDist) * spread * 0.3 + (Math.random() - 0.5) * spread * 0.3;
+          } else {
+            var randA = Math.random() * Math.PI * 2;
+            nn.x = Math.cos(randA) * spread;
+            nn.y = Math.sin(randA) * spread;
+            nn.z = (Math.random() - 0.5) * spread * 0.3;
+          }
+        } else {
+          // 无父节点 → 按目标半径随机放置
+          var trFallback = nodeTargetR > 0 ? nodeTargetR : 200;
+          var rJitter = trFallback * (0.8 + Math.random() * 0.4);
+          var aFallback = Math.random() * Math.PI * 2;
+          var pFallback = (Math.random() - 0.5) * Math.PI * 0.3;
+          nn.x = Math.cos(aFallback) * Math.cos(pFallback) * rJitter;
+          nn.y = Math.sin(aFallback) * Math.cos(pFallback) * rJitter;
+          nn.z = Math.sin(pFallback) * rJitter * 0.3;
+        }
+      }
+
+      // ── 1) 更新邻接表 ──
+      for (var ai = 0; ai < newLinks3d.length; ai++) {
+        var al = newLinks3d[ai];
+        var aSrcId = typeof al.source === 'object' ? al.source.id : al.source;
+        var aTgtId = typeof al.target === 'object' ? al.target.id : al.target;
+        if (!_3dNodeNeighbors[aSrcId]) _3dNodeNeighbors[aSrcId] = new Set();
+        if (!_3dNodeNeighbors[aTgtId]) _3dNodeNeighbors[aTgtId] = new Set();
+        _3dNodeNeighbors[aSrcId].add(aTgtId);
+        _3dNodeNeighbors[aTgtId].add(aSrcId);
+        if (!_3dNodeLinks[aSrcId]) _3dNodeLinks[aSrcId] = new Set();
+        if (!_3dNodeLinks[aTgtId]) _3dNodeLinks[aTgtId] = new Set();
+        _3dNodeLinks[aSrcId].add(al);
+        _3dNodeLinks[aTgtId].add(al);
+      }
+      // ── 2) 合并到 graph3d 数据 ──
+      var mNodes = curData.nodes.concat(newNodes3d);
+      var mLinks = curData.links.concat(newLinks3d);
+      graph3d.graphData({ nodes: mNodes, links: mLinks });
+      // ── 3) reheat 让力模拟推动新节点到正确轨道/层 ──
+      setTimeout(function() {
+        try { graph3d.d3ReheatSimulation(); } catch(e) {}
+      }, 100);
+    },
+    // Phase-75: 增量移除 (供折叠等操作使用)
+    _removeData: function(removeNodeIds) {
+      var removeSet = {};
+      for (var ri = 0; ri < removeNodeIds.length; ri++) removeSet[removeNodeIds[ri]] = true;
+      // 清理邻接表
+      for (var ri = 0; ri < removeNodeIds.length; ri++) {
+        delete _3dNodeNeighbors[removeNodeIds[ri]];
+        delete _3dNodeLinks[removeNodeIds[ri]];
+      }
+      // 从图数据中移除
+      var curData = graph3d.graphData();
+      var fNodes = curData.nodes.filter(function(n) { return !removeSet[n.id]; });
+      var fLinks = curData.links.filter(function(l) {
+        var sId = typeof l.source === 'object' ? l.source.id : l.source;
+        var tId = typeof l.target === 'object' ? l.target.id : l.target;
+        return !removeSet[sId] && !removeSet[tId];
+      });
+      graph3d.graphData({ nodes: fNodes, links: fLinks });
+    }
   };
 
-  networkReusable = false; // 3D 模式不支持增量更新
+  networkReusable = true; // Phase-75: 3D 模式支持增量更新 (via _addData)
 
   // 隐藏加载指示器
   document.getElementById('loading').style.display = 'none';

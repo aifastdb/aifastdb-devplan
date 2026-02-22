@@ -1562,23 +1562,29 @@ function switchMemoryView(mode) {
   var listEl = document.getElementById('memoryList');
   var filtersEl = document.getElementById('memoryFilters');
   var graphEl = document.getElementById('memoryGraphContainer');
-  var genGroup = document.querySelector('.memory-generate-group');
+  var genBtn = document.querySelector('.memory-generate-btn');
 
   if (mode === 'graph') {
     if (listEl) listEl.style.display = 'none';
     if (filtersEl) filtersEl.style.display = 'none';
-    if (graphEl) graphEl.style.display = 'block';
-    if (genGroup) genGroup.style.display = 'none';
+    // Phase-71: 使用 flex 而非 block，确保容器正确参与 flex 布局计算高度
+    if (graphEl) { graphEl.style.display = 'flex'; graphEl.style.flexDirection = 'column'; }
+    if (genBtn) genBtn.style.display = 'none';
     loadMemoryGraph();
   } else {
     if (listEl) listEl.style.display = 'flex';
     if (filtersEl) filtersEl.style.display = 'flex';
     if (graphEl) graphEl.style.display = 'none';
-    if (genGroup) genGroup.style.display = 'flex';
+    if (genBtn) genBtn.style.display = 'inline-flex';
     // Destroy 3D graph to free memory
     if (memoryGraph3dInstance) {
       try { memoryGraph3dInstance._destructor && memoryGraph3dInstance._destructor(); } catch(e) {}
       memoryGraph3dInstance = null;
+    }
+    // Phase-71: 移除 resize handler
+    if (window._mgResizeHandler) {
+      window.removeEventListener('resize', window._mgResizeHandler);
+      window._mgResizeHandler = null;
     }
   }
 }
@@ -1624,6 +1630,24 @@ function renderMemoryGraph3D(data) {
 
   if (loadingEl) loadingEl.style.display = 'none';
 
+  // Phase-71: 确保容器有正确的尺寸（父容器可能刚从 display:none 切换为 block）
+  var parentContainer = document.getElementById('memoryGraphContainer');
+  if (parentContainer) {
+    // 强制容器参与 flex 布局计算高度
+    parentContainer.style.display = 'flex';
+    parentContainer.style.flexDirection = 'column';
+  }
+  // 确保 memoryGraph3D 容器填满父容器
+  container.style.flex = '1';
+  container.style.minHeight = '0';
+
+  var rect = container.getBoundingClientRect();
+  // 防御: 如果高度为 0 或过小，使用父容器尺寸或 min-height 兜底
+  var graphWidth = rect.width || (parentContainer ? parentContainer.getBoundingClientRect().width : 800);
+  var graphHeight = rect.height || (parentContainer ? parentContainer.getBoundingClientRect().height : 400);
+  if (graphHeight < 100) graphHeight = Math.max(400, window.innerHeight - 200);
+  if (graphWidth < 100) graphWidth = Math.max(600, window.innerWidth - 200);
+
   // Node color map
   var NODE_COLORS = {
     'memory': '#c026d3',
@@ -1643,6 +1667,11 @@ function renderMemoryGraph3D(data) {
     'has_memory': '#a78bfa',
     'memory_supersedes': '#f87171'
   };
+
+  // Phase-71: 根据节点数量自适应参数
+  var nodeCount = data.nodes.length;
+  var isLargeGraph = nodeCount > 200;
+  var isHugeGraph = nodeCount > 500;
 
   // Build nodes
   var nodes3d = [];
@@ -1721,16 +1750,19 @@ function renderMemoryGraph3D(data) {
     }
   }
 
-  var rect = container.getBoundingClientRect();
-
   // Destroy previous instance
   if (memoryGraph3dInstance) {
     try { memoryGraph3dInstance._destructor && memoryGraph3dInstance._destructor(); } catch(e) {}
   }
 
+  // Phase-71: 大数据集降低节点分辨率和几何复杂度
+  var nodeResolution = isHugeGraph ? 8 : (isLargeGraph ? 12 : 16);
+  // Phase-71: 大数据集缩小节点尺寸避免堆叠
+  var sizeFactor = isHugeGraph ? 0.5 : (isLargeGraph ? 0.7 : 1.0);
+
   var graph3d = ForceGraph3D({ controlType: 'orbit' })(container)
-    .width(rect.width)
-    .height(rect.height)
+    .width(graphWidth)
+    .height(graphHeight)
     .backgroundColor('#0f172a')
     .showNavInfo(false)
     .nodeLabel(function(n) {
@@ -1759,48 +1791,49 @@ function renderMemoryGraph3D(data) {
     .nodeColor(function(n) { return n._color; })
     .nodeVal(function(n) { return n._val; })
     .nodeOpacity(0.92)
-    .nodeResolution(16)
+    .nodeResolution(nodeResolution)
     .nodeThreeObject(function(n) {
       if (typeof THREE === 'undefined') return false;
       var color = n._color;
       var group = new THREE.Group();
       var coreMesh;
+      var sf = sizeFactor; // Phase-71: 大数据集缩小
 
       if (n._isMem) {
         // Memory nodes: dodecahedron (多面体)
-        var size = 2 + (n._val || 5) * 0.5;
+        var size = (1.5 + (n._val || 5) * 0.3) * sf;
         var geo = new THREE.DodecahedronGeometry(size);
         var mat = new THREE.MeshLambertMaterial({ color: color, transparent: true, opacity: 0.92, emissive: color, emissiveIntensity: 0.35 });
         coreMesh = new THREE.Mesh(geo, mat);
       } else if (n._type === 'project') {
-        var geo = new THREE.OctahedronGeometry(10);
+        var geo = new THREE.OctahedronGeometry(8 * sf);
         var mat = new THREE.MeshLambertMaterial({ color: color, transparent: true, opacity: 0.92, emissive: color, emissiveIntensity: 0.4 });
         coreMesh = new THREE.Mesh(geo, mat);
       } else if (n._type === 'module') {
-        var size = 6;
-        var geo = new THREE.BoxGeometry(size, size, size);
+        var msize = 5 * sf;
+        var geo = new THREE.BoxGeometry(msize, msize, msize);
         var mat = new THREE.MeshLambertMaterial({ color: color, transparent: true, opacity: 0.92, emissive: color, emissiveIntensity: 0.3 });
         coreMesh = new THREE.Mesh(geo, mat);
       } else {
         // Tasks, docs: sphere
-        var radius = 3 + (n._val || 5) * 0.2;
-        var geo = new THREE.SphereGeometry(radius, 12, 12);
+        var radius = (2.5 + (n._val || 5) * 0.15) * sf;
+        var geo = new THREE.SphereGeometry(radius, nodeResolution, nodeResolution);
         var mat = new THREE.MeshLambertMaterial({ color: color, transparent: true, opacity: 0.85, emissive: color, emissiveIntensity: 0.2 });
         coreMesh = new THREE.Mesh(geo, mat);
       }
       group.add(coreMesh);
 
-      // Glow sprite for memory nodes
-      if (n._isMem) {
+      // Glow sprite for memory nodes (大数据集关闭辉光减少 overdraw)
+      if (n._isMem && !isHugeGraph) {
         var spriteMat = new THREE.SpriteMaterial({
           map: createGlowTexture_mg(color),
           transparent: true,
-          opacity: 0.4,
+          opacity: isLargeGraph ? 0.2 : 0.4,
           depthWrite: false,
           blending: THREE.AdditiveBlending
         });
         var sprite = new THREE.Sprite(spriteMat);
-        var spriteSize = (n._val || 5) * 2.5;
+        var spriteSize = (n._val || 5) * 1.5 * sf;
         sprite.scale.set(spriteSize, spriteSize, 1);
         group.add(sprite);
       }
@@ -1816,7 +1849,7 @@ function renderMemoryGraph3D(data) {
     .linkWidth(function(l) {
       return _mgHighlightLinks.has(l) ? l._width * 2 : l._width;
     })
-    .linkOpacity(0.7)
+    .linkOpacity(isHugeGraph ? 0.4 : 0.7)
     .linkDirectionalParticles(function(l) {
       return _mgHighlightLinks.has(l) ? 3 : 0;
     })
@@ -1847,21 +1880,60 @@ function renderMemoryGraph3D(data) {
       updateMGHighlight(null);
       graph3d.nodeColor(graph3d.nodeColor());
       if (typeof closePanel === 'function') closePanel();
-    })
-    .graphData({ nodes: nodes3d, links: links3d });
+    });
 
-  // Force simulation tuning for memory network
-  graph3d.d3Force('charge').strength(-120).distanceMax(300);
+  // Phase-71 fix: 先配置力参数，再加载数据（关键！graphData() 会立刻启动力模拟，
+  // 如果在 graphData 之后才设 charge.strength，warmupTicks 全在默认弱力下跑完，节点会堆叠在原点）
+  var chargeStrength = isHugeGraph ? -250 : (isLargeGraph ? -180 : -120);
+  var chargeDistMax = isHugeGraph ? 600 : (isLargeGraph ? 450 : 300);
+  graph3d.d3Force('charge').strength(chargeStrength).distanceMax(chargeDistMax);
   graph3d.d3Force('link').distance(function(l) {
-    return l._label === 'memory_relates' ? 40 : 80;
+    var baseDist = l._label === 'memory_relates' ? 40 : 80;
+    return isHugeGraph ? baseDist * 1.5 : (isLargeGraph ? baseDist * 1.2 : baseDist);
   });
+  // 添加适当的中心力避免节点飘散
+  if (typeof d3 !== 'undefined' && d3.forceCenter) {
+    graph3d.d3Force('center', d3.forceCenter(0, 0, 0).strength(0.05));
+  }
+
+  // Phase-71 fix: 预设节点随机初始位置，避免所有节点从 (0,0,0) 出发
+  var spread = Math.sqrt(nodeCount) * 15;
+  for (var k = 0; k < nodes3d.length; k++) {
+    nodes3d[k].x = (Math.random() - 0.5) * spread;
+    nodes3d[k].y = (Math.random() - 0.5) * spread;
+    nodes3d[k].z = (Math.random() - 0.5) * spread;
+  }
+
+  // 设置预热帧和冷却时间
+  graph3d
+    .warmupTicks(isHugeGraph ? 100 : (isLargeGraph ? 60 : 30))
+    .cooldownTime(isHugeGraph ? 8000 : 15000);
+
+  // 最后加载数据 — 此时力参数已就绪，warmupTicks 将使用正确的强力运行
+  graph3d.graphData({ nodes: nodes3d, links: links3d });
 
   memoryGraph3dInstance = graph3d;
 
-  // Auto-zoom to fit
+  // Phase-71: 根据数据量调整 zoom-to-fit 延时
+  var zoomDelay = isHugeGraph ? 3000 : (isLargeGraph ? 2000 : 1500);
   setTimeout(function() {
     try { graph3d.zoomToFit(800, 40); } catch(e) {}
-  }, 1500);
+  }, zoomDelay);
+
+  // Phase-71: 监听窗口 resize 自动调整图谱尺寸
+  var _mgResizeHandler = function() {
+    if (!memoryGraph3dInstance) return;
+    var newRect = container.getBoundingClientRect();
+    if (newRect.width > 0 && newRect.height > 0) {
+      memoryGraph3dInstance.width(newRect.width).height(newRect.height);
+    }
+  };
+  // 移除旧的 handler（如果有），再注册新的
+  if (window._mgResizeHandler) {
+    window.removeEventListener('resize', window._mgResizeHandler);
+  }
+  window._mgResizeHandler = _mgResizeHandler;
+  window.addEventListener('resize', _mgResizeHandler);
 }
 
 // Glow texture generator for memory nodes
@@ -1884,317 +1956,8 @@ function createGlowTexture_mg(colorHex) {
   return tex;
 }
 
-// ========== Memory Generate ==========
-var memGenCandidates = [];
-var memGenSelected = {};
-var memGenLastSource = 'both';
-var memGenLastTaskId = null;
-var memGenTotalSaved = 0;
+// ========== Memory Generate (Phase-70: 仅保留 AI 批量生成入口) ==========
 
-function toggleMemGenDropdown(e) {
-  if (e) e.stopPropagation();
-  var dd = document.getElementById('memGenDropdown');
-  if (dd) dd.classList.toggle('show');
-}
-
-// close dropdown on body click
-document.addEventListener('click', function(e) {
-  var dd = document.getElementById('memGenDropdown');
-  if (dd && dd.classList.contains('show')) {
-    var group = dd.closest('.memory-generate-group');
-    if (group && !group.contains(e.target)) dd.classList.remove('show');
-  }
-});
-
-function getMemGenLimit() {
-  var sel = document.getElementById('memGenLimitSelect');
-  var v = sel ? parseInt(sel.value, 10) : 50;
-  return v === 0 ? 99999 : v;
-}
-
-function isAutoNextEnabled() {
-  var cb = document.getElementById('memGenAutoNext');
-  return cb ? cb.checked : false;
-}
-
-function onMemGenLimitChange() {
-  // When user changes limit, toggle auto-next visibility hint
-}
-
-function generateMemories(source, taskId) {
-  // close dropdown
-  var dd = document.getElementById('memGenDropdown');
-  if (dd) dd.classList.remove('show');
-
-  // track source for auto-continue
-  memGenLastSource = source || 'both';
-  memGenLastTaskId = taskId || null;
-  memGenTotalSaved = 0;
-
-  // show overlay
-  var overlay = document.getElementById('memGenOverlay');
-  if (overlay) overlay.style.display = 'flex';
-
-  loadMemGenBatch();
-}
-
-function loadMemGenBatch() {
-  var listEl = document.getElementById('memGenCandidateList');
-  var limit = getMemGenLimit();
-  var sourceLabel = memGenLastSource === 'both' ? '文档+任务' : memGenLastSource === 'tasks' ? '任务' : '文档';
-  var batchInfo = memGenTotalSaved > 0 ? '（已累计保存 ' + memGenTotalSaved + ' 条，加载下一批...）' : '';
-  if (listEl) listEl.innerHTML = '<div style="text-align:center;padding:40px;color:#6b7280;font-size:12px;"><div class="spinner" style="margin:0 auto 12px;width:24px;height:24px;border-width:3px;"></div>正在从 ' + sourceLabel + ' 中提取候选项...' + batchInfo + '</div>';
-
-  var url = '/api/memories/generate?source=' + encodeURIComponent(memGenLastSource) + '&limit=' + limit;
-  if (memGenLastTaskId) url += '&taskId=' + encodeURIComponent(memGenLastTaskId);
-
-  // reset save button
-  var btn = document.getElementById('memGenSaveBtn');
-  if (btn) { btn.disabled = false; btn.innerHTML = '💾 保存选中 (<span id="memGenSelectedCount">0</span>)'; }
-
-  fetch(url).then(function(r) { return r.json(); }).then(function(data) {
-    memGenCandidates = data.candidates || [];
-    memGenSelected = {};
-    // auto-select all candidates (已有记忆的候选项已被服务端过滤)
-    for (var i = 0; i < memGenCandidates.length; i++) {
-      memGenSelected[i] = true;
-    }
-    renderCandidateList();
-    updateGenStats(data);
-  }).catch(function(err) {
-    if (listEl) listEl.innerHTML = '<div style="text-align:center;padding:40px;color:#f87171;font-size:12px;">生成失败: ' + (err.message || err) + '</div>';
-  });
-}
-
-function closeMemGenOverlay() {
-  var overlay = document.getElementById('memGenOverlay');
-  if (overlay) overlay.style.display = 'none';
-  memGenCandidates = [];
-  memGenSelected = {};
-  memGenTotalSaved = 0;
-}
-
-function updateGenStats(data) {
-  var statsEl = document.getElementById('memGenStats');
-  if (statsEl) {
-    var total = (data.candidates || []).length;
-    var fromTasks = 0, fromDocs = 0;
-    for (var i = 0; i < total; i++) {
-      if (data.candidates[i].sourceType === 'task') fromTasks++;
-      else fromDocs++;
-    }
-    var skipped = (data.stats && data.stats.skippedWithMemory) || 0;
-    var txt = '共 ' + total + ' 条 (任务: ' + fromTasks + ', 文档: ' + fromDocs + ')';
-    if (skipped > 0) txt += ' · 已跳过 ' + skipped + ' 条已有记忆';
-    if (memGenTotalSaved > 0) txt += ' · 已累计保存 ' + memGenTotalSaved + ' 条';
-    var limit = getMemGenLimit();
-    if (total === 0 && memGenTotalSaved > 0) {
-      txt = '🎉 全部处理完毕！累计保存 ' + memGenTotalSaved + ' 条记忆';
-    } else if (limit < 99999) {
-      txt += ' (每批 ' + limit + ')';
-    }
-    statsEl.textContent = txt;
-  }
-  updateSelectedCount();
-  // If no candidates returned and auto-next was running, auto-close
-  if ((data.candidates || []).length === 0 && memGenTotalSaved > 0) {
-    var btn = document.getElementById('memGenSaveBtn');
-    if (btn) { btn.disabled = true; btn.textContent = '🎉 全部完成！共保存 ' + memGenTotalSaved + ' 条'; }
-    memoryLoaded = false;
-    setTimeout(function() { closeMemGenOverlay(); loadMemoryPage(); }, 2000);
-  }
-}
-
-function updateSelectedCount() {
-  var cnt = 0;
-  for (var k in memGenSelected) { if (memGenSelected[k]) cnt++; }
-  var el = document.getElementById('memGenSelectedCount');
-  if (el) el.textContent = cnt;
-  var btn = document.getElementById('memGenSaveBtn');
-  if (btn) btn.disabled = cnt === 0;
-}
-
-function toggleCandidate(idx) {
-  memGenSelected[idx] = !memGenSelected[idx];
-  // update card UI
-  var card = document.querySelector('.mem-gen-candidate[data-idx="' + idx + '"]');
-  if (card) {
-    card.classList.toggle('selected', !!memGenSelected[idx]);
-    var check = card.querySelector('.mem-gen-candidate-check');
-    if (check) check.textContent = memGenSelected[idx] ? '✓' : '';
-  }
-  updateSelectedCount();
-}
-
-function toggleAllCandidates(state) {
-  // state: true=all, false=none (已有记忆的候选项已被服务端过滤，无需客户端二次判断)
-  for (var i = 0; i < memGenCandidates.length; i++) {
-    memGenSelected[i] = !!state;
-  }
-  renderCandidateList();
-}
-
-function renderCandidateList() {
-  var listEl = document.getElementById('memGenCandidateList');
-  if (!listEl) return;
-
-  if (memGenCandidates.length === 0) {
-    listEl.innerHTML = '<div style="text-align:center;padding:40px;color:#6b7280;font-size:13px;">没有找到可以提取的候选项</div>';
-    updateSelectedCount();
-    return;
-  }
-
-  var h = '';
-  for (var i = 0; i < memGenCandidates.length; i++) {
-    var c = memGenCandidates[i];
-    var sel = !!memGenSelected[i];
-    var cls = 'mem-gen-candidate' + (sel ? ' selected' : '');
-    var typeIcon = MEMORY_TYPE_ICONS[c.suggestedMemoryType] || '💭';
-    var typeLabel = MEMORY_TYPE_LABELS[c.suggestedMemoryType] || c.suggestedMemoryType;
-
-    h += '<div class="' + cls + '" data-idx="' + i + '" onclick="toggleCandidate(' + i + ')">';
-    h += '<div class="mem-gen-candidate-check">' + (sel ? '✓' : '') + '</div>';
-    h += '<div class="mem-gen-candidate-body">';
-
-    // title row
-    h += '<div class="mem-gen-candidate-title">';
-    h += '<span class="mem-gen-candidate-source ' + c.sourceType + '">' + (c.sourceType === 'task' ? '✅ 任务' : '📄 文档') + '</span>';
-    h += escHtml(c.sourceTitle);
-    h += '</div>';
-
-    // content preview (truncate)
-    var preview = (c.content || '').substring(0, 200);
-    if ((c.content || '').length > 200) preview += '...';
-    h += '<div class="mem-gen-candidate-preview">' + escHtml(preview) + '</div>';
-
-    // meta
-    h += '<div class="mem-gen-candidate-meta">';
-    h += '<span class="mem-gen-candidate-type ' + c.suggestedMemoryType + '">' + typeIcon + ' ' + typeLabel + '</span>';
-    h += '<span class="mem-gen-candidate-importance">重要性: ' + Math.round((c.suggestedImportance || 0.5) * 100) + '%</span>';
-    h += '</div>';
-
-    h += '</div>';
-    h += '</div>';
-  }
-  listEl.innerHTML = h;
-  updateSelectedCount();
-}
-
-function saveSelectedCandidates() {
-  var toSave = [];
-  for (var i = 0; i < memGenCandidates.length; i++) {
-    if (memGenSelected[i]) toSave.push(memGenCandidates[i]);
-  }
-  if (toSave.length === 0) return;
-
-  var btn = document.getElementById('memGenSaveBtn');
-  if (btn) { btn.disabled = true; btn.textContent = '💾 保存中...'; }
-
-  var saved = 0, failed = 0;
-  var total = toSave.length;
-  var batchLimit = getMemGenLimit();
-  var batchSize = memGenCandidates.length;
-
-  function saveNext(idx) {
-    if (idx >= total) {
-      // batch done
-      memGenTotalSaved += saved;
-      var doneMsg = '✅ 本批保存 ' + saved + ' 条' + (failed > 0 ? ' (失败 ' + failed + ')' : '');
-      if (memGenTotalSaved > saved) doneMsg += ' · 累计 ' + memGenTotalSaved + ' 条';
-
-      // Check if we should auto-load next batch:
-      // - auto-next is enabled
-      // - batch was full (batchSize >= limit), meaning there might be more
-      // - limit is not "unlimited" (99999)
-      var shouldContinue = isAutoNextEnabled() && batchLimit < 99999 && batchSize >= batchLimit;
-
-      if (shouldContinue) {
-        if (btn) btn.textContent = doneMsg + ' — 加载下一批...';
-        setTimeout(function() { loadMemGenBatch(); }, 800);
-      } else {
-        if (btn) btn.textContent = doneMsg;
-        if (batchSize < batchLimit || batchLimit >= 99999) {
-          if (btn) btn.textContent = '✅ 全部完成！共保存 ' + memGenTotalSaved + ' 条';
-        }
-        // refresh memories list
-        memoryLoaded = false;
-        setTimeout(function() {
-          closeMemGenOverlay();
-          loadMemoryPage();
-        }, 1500);
-      }
-      return;
-    }
-
-    var c = toSave[idx];
-    // Build content: use sourceTitle + content snippet
-    var memContent = c.content || c.sourceTitle || '';
-    if (memContent.length > 500) memContent = memContent.substring(0, 500) + '...';
-
-    fetch('/api/memories/save', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({
-        memoryType: c.suggestedMemoryType || 'summary',
-        content: memContent,
-        tags: c.suggestedTags || [],
-        relatedTaskId: c.sourceType === 'task' ? c.sourceId : undefined,
-        sourceId: c.sourceId,
-        importance: c.suggestedImportance || 0.5,
-      })
-    }).then(function(r) { return r.json(); }).then(function() {
-      saved++;
-      if (btn) btn.textContent = '💾 保存中... (' + saved + '/' + total + ')';
-      saveNext(idx + 1);
-    }).catch(function() {
-      failed++;
-      saveNext(idx + 1);
-    });
-  }
-
-  saveNext(0);
-}
-
-function showPhasePickerForGenerate() {
-  // close dropdown first
-  var dd = document.getElementById('memGenDropdown');
-  if (dd) dd.classList.remove('show');
-
-  // fetch progress to get completed phases
-  fetch('/api/progress').then(function(r) { return r.json(); }).then(function(data) {
-    var phases = (data.completedPhases || []);
-    if (phases.length === 0) {
-      alert('没有已完成的阶段');
-      return;
-    }
-    var overlay = document.getElementById('memGenOverlay');
-    if (overlay) overlay.style.display = 'flex';
-    var listEl = document.getElementById('memGenCandidateList');
-    var statsEl = document.getElementById('memGenStats');
-    if (statsEl) statsEl.textContent = '请选择一个阶段';
-
-    var h = '<div style="padding:8px;">';
-    h += '<div style="font-size:13px;color:#9ca3af;margin-bottom:12px;">选择要提取记忆的阶段：</div>';
-    for (var i = 0; i < phases.length; i++) {
-      var p = phases[i];
-      h += '<div class="mem-gen-candidate" onclick="generateMemories(\\'tasks\\',\\'' + escHtml(p.taskId) + '\\')" style="cursor:pointer;">';
-      h += '<div class="mem-gen-candidate-body">';
-      h += '<div class="mem-gen-candidate-title">';
-      h += '<span class="mem-gen-candidate-source task">' + escHtml(p.taskId) + '</span>';
-      h += escHtml(p.title);
-      h += '</div>';
-      var desc = '';
-      if (p.completedSubTasks !== undefined) desc = '子任务: ' + p.completedSubTasks + '/' + p.totalSubTasks;
-      h += '<div class="mem-gen-candidate-preview">' + escHtml(desc) + '</div>';
-      h += '</div>';
-      h += '</div>';
-    }
-    h += '</div>';
-    if (listEl) listEl.innerHTML = h;
-  }).catch(function() {
-    alert('获取阶段列表失败');
-  });
-}
 
 // ========== Phase-60: AI 批量生成（浏览器直连 Ollama） ==========
 var _aiBatchCancelled = false;
@@ -2263,6 +2026,9 @@ function startAiBatchGenerate() {
   if (progressEl) progressEl.style.width = '0%';
   if (streamArea) { streamArea.style.display = 'none'; streamArea.textContent = ''; }
   if (summaryEl) summaryEl.style.display = 'none';
+  // Phase-69: 重置完整性检测区域
+  var verifyArea = document.getElementById('aiBatchVerifyArea');
+  if (verifyArea) { verifyArea.style.display = 'none'; verifyArea.innerHTML = ''; }
   if (configArea) configArea.style.display = 'flex';
   if (startBtn) { startBtn.disabled = false; startBtn.textContent = '开始'; }
   if (cancelBtn) { cancelBtn.disabled = false; cancelBtn.textContent = '取消'; cancelBtn.onclick = function() { cancelAiBatch(); }; }
@@ -2726,6 +2492,11 @@ function startAiBatchProcess(resumeMode) {
     }
     // 如果有失败的，也保留缓存（用户可能想重试）
 
+    // Phase-69: 自动触发完整性检测（仅在有成功保存时）
+    if (totalSaved > 0 && !_aiBatchCancelled) {
+      runBatchIntegrityCheck(preparedResults, summaryEl);
+    }
+
     if (cancelBtn) {
       cancelBtn.textContent = '关闭';
       cancelBtn.disabled = false;
@@ -2735,6 +2506,151 @@ function startAiBatchProcess(resumeMode) {
         loadMemoryPage();
       };
     }
+  }
+}
+
+// ========== Phase-69: 批量导入完整性检测 ==========
+
+/**
+ * Phase-69: 批量导入完成后自动执行完整性检测
+ * 调用 /api/batch/verify 验证每条记忆的保存状态
+ */
+function runBatchIntegrityCheck(preparedResults, summaryEl) {
+  // 收集所有 sourceIds
+  var sourceIds = [];
+  for (var i = 0; i < preparedResults.length; i++) {
+    if (preparedResults[i].sourceId) {
+      sourceIds.push(preparedResults[i].sourceId);
+    }
+  }
+
+  if (sourceIds.length === 0) return;
+
+  // 在 summaryEl 下方添加检测状态
+  var verifyEl = document.getElementById('aiBatchVerifyArea');
+  if (!verifyEl) return;
+  verifyEl.style.display = 'block';
+  verifyEl.innerHTML = '<div style="text-align:center;padding:12px;"><div class="spinner" style="display:inline-block;width:18px;height:18px;border-width:2px;vertical-align:middle;margin-right:8px;"></div><span style="color:#6b7280;font-size:12px;">正在检测导入完整性...</span></div>';
+
+  var statusEl = document.getElementById('aiBatchStatus');
+  if (statusEl) statusEl.textContent = '🔍 正在执行完整性检测 (' + sourceIds.length + ' 条记忆)...';
+
+  fetch('/api/batch/verify', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ sourceIds: sourceIds })
+  }).then(function(r) { return r.json(); }).then(function(data) {
+    if (!data || !data.summary) {
+      verifyEl.innerHTML = '<div style="color:#f87171;font-size:12px;text-align:center;padding:8px;">❌ 完整性检测失败：无效响应</div>';
+      return;
+    }
+
+    var s = data.summary;
+    var results = data.results || [];
+
+    // 更新状态
+    if (statusEl) {
+      if (s.errors > 0) {
+        statusEl.textContent = '⚠️ 完整性检测发现 ' + s.errors + ' 个错误';
+      } else if (s.warnings > 0) {
+        statusEl.textContent = '✅ 导入完成，检测发现 ' + s.warnings + ' 个警告';
+      } else {
+        statusEl.textContent = '✅ 导入完成，完整性检测全部通过！';
+      }
+    }
+
+    // 构建检测报告
+    var html = '<div class="batch-verify-report">';
+
+    // 摘要栏
+    var passColor = s.passed === s.total ? '#22c55e' : '#6b7280';
+    html += '<div class="batch-verify-summary">';
+    html += '<span style="color:' + passColor + ';">✅ 通过: ' + s.passed + '</span>';
+    if (s.warnings > 0) html += '<span style="color:#f59e0b;">⚠️ 警告: ' + s.warnings + '</span>';
+    if (s.errors > 0) html += '<span style="color:#ef4444;">❌ 错误: ' + s.errors + '</span>';
+    html += '<span style="color:#6b7280;">📊 总计: ' + s.total + '</span>';
+    html += '</div>';
+
+    // 如果有问题，展示详细列表（仅展示非 pass 的项）
+    var problemResults = [];
+    for (var pi = 0; pi < results.length; pi++) {
+      if (results[pi].status !== 'pass') {
+        problemResults.push(results[pi]);
+      }
+    }
+
+    if (problemResults.length > 0) {
+      html += '<div class="batch-verify-details">';
+      html += '<div class="batch-verify-toggle" onclick="toggleBatchVerifyDetails()">';
+      html += '📋 查看详情 (' + problemResults.length + ' 条有问题) <span id="batchVerifyArrow">▶</span>';
+      html += '</div>';
+      html += '<div id="batchVerifyDetailList" style="display:none;">';
+
+      for (var qi = 0; qi < problemResults.length; qi++) {
+        var r = problemResults[qi];
+        var statusIcon = r.status === 'error' ? '❌' : '⚠️';
+        var statusClass = r.status === 'error' ? 'verify-error' : 'verify-warning';
+
+        html += '<div class="batch-verify-item ' + statusClass + '">';
+        html += '<div class="batch-verify-item-header">';
+        html += '<span class="batch-verify-icon">' + statusIcon + '</span>';
+        html += '<span class="batch-verify-source">' + (r.sourceId || r.memoryId || 'unknown') + '</span>';
+        if (r.memoryType) {
+          html += '<span class="batch-verify-type">' + r.memoryType + '</span>';
+        }
+        html += '</div>';
+
+        // Issues (errors)
+        if (r.issues && r.issues.length > 0) {
+          for (var ii = 0; ii < r.issues.length; ii++) {
+            html += '<div class="batch-verify-issue error">❌ ' + r.issues[ii] + '</div>';
+          }
+        }
+        // Warnings
+        if (r.warnings && r.warnings.length > 0) {
+          for (var wi = 0; wi < r.warnings.length; wi++) {
+            html += '<div class="batch-verify-issue warning">⚠️ ' + r.warnings[wi] + '</div>';
+          }
+        }
+
+        // 检测指标摘要行
+        if (r.contentLength !== undefined) {
+          html += '<div class="batch-verify-metrics">';
+          html += '<span title="内容长度">📝 ' + r.contentLength + ' 字符</span>';
+          html += '<span title="Embedding">' + (r.hasEmbedding ? '🧬 有向量' : '⬜ 无向量') + '</span>';
+          html += '<span title="Anchor 关联">' + (r.hasAnchor ? '⚓ 有触点' : '⬜ 无触点') + '</span>';
+          html += '<span title="重要性">⭐ ' + ((r.importance || 0) * 100).toFixed(0) + '%</span>';
+          html += '</div>';
+        }
+
+        html += '</div>';
+      }
+
+      html += '</div>';
+      html += '</div>';
+    } else if (s.total > 0) {
+      html += '<div style="text-align:center;padding:8px;color:#22c55e;font-size:12px;">🎉 所有 ' + s.total + ' 条记忆完整性检测全部通过！</div>';
+    }
+
+    html += '</div>';
+    verifyEl.innerHTML = html;
+
+  }).catch(function(err) {
+    verifyEl.innerHTML = '<div style="color:#f87171;font-size:12px;text-align:center;padding:8px;">❌ 完整性检测请求失败: ' + (err.message || err) + '</div>';
+  });
+}
+
+/** Phase-69: 切换检测详情的折叠/展开 */
+function toggleBatchVerifyDetails() {
+  var list = document.getElementById('batchVerifyDetailList');
+  var arrow = document.getElementById('batchVerifyArrow');
+  if (!list) return;
+  if (list.style.display === 'none') {
+    list.style.display = 'block';
+    if (arrow) arrow.textContent = '▼';
+  } else {
+    list.style.display = 'none';
+    if (arrow) arrow.textContent = '▶';
   }
 }
 
@@ -2836,208 +2752,6 @@ function parseJsonFromLlmOutput(raw) {
   }
 }
 
-// ========== 一键全量导入 ==========
-var _autoImportCancelled = false;
-
-function autoImportAllMemories() {
-  // close dropdown
-  var dd = document.getElementById('memGenDropdown');
-  if (dd) dd.classList.remove('show');
-
-  _autoImportCancelled = false;
-
-  // show progress overlay
-  var overlay = document.getElementById('memAutoImportOverlay');
-  if (overlay) overlay.style.display = 'flex';
-
-  var titleEl = document.getElementById('memAutoImportTitle');
-  var statusEl = document.getElementById('memAutoImportStatus');
-  var detailEl = document.getElementById('memAutoImportDetail');
-  var progressEl = document.getElementById('memAutoImportProgress');
-  var cancelBtn = document.getElementById('memAutoImportCancelBtn');
-  if (titleEl) titleEl.textContent = '⚡ 一键全量导入';
-  if (statusEl) statusEl.textContent = '正在获取候选项...';
-  if (detailEl) detailEl.textContent = '';
-  if (progressEl) progressEl.style.width = '0%';
-  if (cancelBtn) { cancelBtn.disabled = false; cancelBtn.textContent = '取消'; }
-
-  var totalSaved = 0;
-  var totalFailed = 0;
-  var totalSkipped = 0;
-  var batchNum = 0;
-  // Phase-44: Memory Tree — 记录 sourceId → entityId 映射，用于建立 suggestedRelations
-  var sourceIdToEntityId = {};
-  var pendingRelations = [];
-  var totalRelationsCreated = 0;
-
-  function loadAndSaveBatch() {
-    if (_autoImportCancelled) { finishImport('已取消'); return; }
-
-    batchNum++;
-    if (statusEl) statusEl.textContent = '第 ' + batchNum + ' 批 — 获取候选项...';
-    if (detailEl) detailEl.textContent = '已累计保存: ' + totalSaved + ' 条' + (totalSkipped > 0 ? ' · 跳过: ' + totalSkipped : '');
-
-    fetch('/api/memories/generate?source=both&limit=50').then(function(r) { return r.json(); }).then(function(data) {
-      var candidates = data.candidates || [];
-      var skipped = (data.stats && data.stats.skippedWithMemory) || 0;
-      totalSkipped = skipped;
-
-      if (candidates.length === 0) {
-        finishImport('完成');
-        return;
-      }
-
-      if (statusEl) statusEl.textContent = '第 ' + batchNum + ' 批 — 保存 ' + candidates.length + ' 条...';
-
-      var batchSaved = 0;
-      var batchFailed = 0;
-
-      function saveOne(idx) {
-        if (_autoImportCancelled) { totalSaved += batchSaved; totalFailed += batchFailed; finishImport('已取消'); return; }
-        if (idx >= candidates.length) {
-          totalSaved += batchSaved;
-          totalFailed += batchFailed;
-          // continue to next batch
-          setTimeout(loadAndSaveBatch, 300);
-          return;
-        }
-
-        var c = candidates[idx];
-        var memContent = c.content || c.sourceTitle || '';
-        if (memContent.length > 500) memContent = memContent.substring(0, 500) + '...';
-
-        // progress within batch
-        var pctBatch = Math.round(((idx + 1) / candidates.length) * 100);
-        if (progressEl) progressEl.style.width = pctBatch + '%';
-        var relCount = (c.suggestedRelations || []).length;
-        if (detailEl) detailEl.textContent = '批次 ' + batchNum + ': ' + (idx + 1) + '/' + candidates.length + ' · 累计保存: ' + (totalSaved + batchSaved) + ' 条' + (relCount > 0 ? ' · 关系: ' + relCount : '');
-
-        fetch('/api/memories/save', {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({
-            memoryType: c.suggestedMemoryType || 'summary',
-            content: memContent,
-            tags: c.suggestedTags || [],
-            relatedTaskId: c.sourceType === 'task' ? c.sourceId : undefined,
-            sourceId: c.sourceId,
-            importance: c.suggestedImportance || 0.5,
-          })
-        }).then(function(r) { return r.json(); }).then(function(result) {
-          batchSaved++;
-          // Phase-44: 记录 sourceId → entityId 映射，用于后续建立 suggestedRelations
-          if (result && result.memory && result.memory.id && c.sourceId) {
-            sourceIdToEntityId[c.sourceId] = result.memory.id;
-          }
-          // 收集 suggestedRelations 待后续处理
-          if (c.suggestedRelations && c.suggestedRelations.length > 0) {
-            pendingRelations.push({ sourceId: c.sourceId, relations: c.suggestedRelations });
-          }
-          saveOne(idx + 1);
-        }).catch(function() {
-          batchFailed++;
-          saveOne(idx + 1);
-        });
-      }
-
-      saveOne(0);
-    }).catch(function(err) {
-      if (statusEl) statusEl.textContent = '获取候选项失败';
-      if (detailEl) detailEl.textContent = err.message || String(err);
-      if (cancelBtn) { cancelBtn.textContent = '关闭'; cancelBtn.disabled = false; }
-    });
-  }
-
-  function finishImport(reason) {
-    if (progressEl) progressEl.style.width = '100%';
-    if (reason === '已取消') {
-      if (statusEl) statusEl.textContent = '已取消 — 保存了 ' + totalSaved + ' 条';
-      if (titleEl) titleEl.textContent = '⚡ 导入已取消';
-      showFinalStats();
-      return;
-    }
-
-    // Phase-44: 第二阶段 — 用 suggestedRelations 建立记忆间关系
-    if (pendingRelations.length > 0) {
-      if (statusEl) statusEl.textContent = '🔗 正在建立记忆关系...';
-      if (detailEl) detailEl.textContent = '已保存 ' + totalSaved + ' 条记忆，正在处理 ' + pendingRelations.length + ' 组关系建议';
-
-      var relIdx = 0;
-      function processNextRelation() {
-        if (relIdx >= pendingRelations.length) {
-          if (titleEl) titleEl.textContent = '✅ 导入完成（含记忆树）';
-          if (statusEl) statusEl.textContent = '🎉 记忆 + 关系全部导入完成！';
-          showFinalStats();
-          return;
-        }
-        var item = pendingRelations[relIdx];
-        var fromEntityId = sourceIdToEntityId[item.sourceId];
-        if (!fromEntityId) { relIdx++; processNextRelation(); return; }
-
-        var rels = item.relations || [];
-        var rIdx = 0;
-        function createNextRel() {
-          if (rIdx >= rels.length) { relIdx++; processNextRelation(); return; }
-          var rel = rels[rIdx];
-          var toEntityId = sourceIdToEntityId[rel.targetSourceId];
-          if (!toEntityId) { rIdx++; createNextRel(); return; }
-
-          fetch('/api/memories/relate', {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({
-              fromId: fromEntityId,
-              toId: toEntityId,
-              relationType: rel.relationType || 'MEMORY_RELATES',
-              weight: rel.weight || 0.5,
-            })
-          }).then(function() {
-            totalRelationsCreated++;
-            if (detailEl) detailEl.textContent = '关系: ' + totalRelationsCreated + ' 条已建立';
-            rIdx++;
-            createNextRel();
-          }).catch(function() {
-            rIdx++;
-            createNextRel();
-          });
-        }
-        createNextRel();
-      }
-      processNextRelation();
-    } else {
-      if (titleEl) titleEl.textContent = '✅ 导入完成';
-      if (statusEl) statusEl.textContent = '🎉 全部导入完成！';
-      showFinalStats();
-    }
-  }
-
-  function showFinalStats() {
-    var failTxt = totalFailed > 0 ? ' · 失败: ' + totalFailed : '';
-    var relTxt = totalRelationsCreated > 0 ? ' · 关系: ' + totalRelationsCreated + ' 条' : '';
-    if (detailEl) detailEl.textContent = '共保存 ' + totalSaved + ' 条记忆' + failTxt + relTxt + ' · 跳过已有: ' + totalSkipped;
-    if (cancelBtn) { cancelBtn.textContent = '关闭'; cancelBtn.onclick = function() { closeAutoImport(); }; }
-
-    // refresh memory list
-    memoryLoaded = false;
-    setTimeout(function() {
-      closeAutoImport();
-      loadMemoryPage();
-    }, 2000);
-  }
-
-  loadAndSaveBatch();
-}
-
-function cancelAutoImport() {
-  _autoImportCancelled = true;
-  var cancelBtn = document.getElementById('memAutoImportCancelBtn');
-  if (cancelBtn) { cancelBtn.disabled = true; cancelBtn.textContent = '取消中...'; }
-}
-
-function closeAutoImport() {
-  var overlay = document.getElementById('memAutoImportOverlay');
-  if (overlay) overlay.style.display = 'none';
-}
 
 `;
 }

@@ -336,6 +336,7 @@ var S3D_DEFAULTS = {
   orbitStrength: 0.8,     // 轨道吸引力强度
   orbitFlatten: 0.6,      // Z 轴压平力度 (0=不压平/球壳, 1=完全压平/圆盘)
   showOrbits: true,       // 显示轨道环线
+  showLabels: true,       // 显示节点文字标签
   sizeProject: 50,
   sizeModule: 25,
   sizeMainTask: 15,
@@ -395,11 +396,18 @@ function update3DColor(nodeType, colorValue) {
 
 function updateLayoutMode(mode) {
   var settings = get3DSettings();
+  var oldMode = settings.layoutMode;
   settings.layoutMode = mode;
   save3DSettings(settings);
   var orbitalSettings = document.getElementById('s3dOrbitalSettings');
   if (orbitalSettings) orbitalSettings.style.display = mode === 'orbital' ? 'block' : 'none';
-  showSettingsToast('✅ 布局模式已切换为 ' + (mode === 'orbital' ? '🪐 行星轨道' : '⚡ 力导向') + '，刷新图谱页面生效');
+  // 布局模式切换: 自动重新加载图谱 (无需手动刷新)
+  if (oldMode !== mode && typeof loadData === 'function') {
+    showSettingsToast('✅ 切换至 ' + (mode === 'orbital' ? '🪐 行星轨道' : '⚡ 力导向') + '，正在重新加载...');
+    setTimeout(function() { loadData(); }, 300);
+  } else {
+    showSettingsToast('✅ 布局模式: ' + (mode === 'orbital' ? '🪐 行星轨道' : '⚡ 力导向'));
+  }
 }
 
 function reset3DSettings() {
@@ -460,7 +468,7 @@ function init3DSettingsUI() {
   if (bgHexEl) bgHexEl.textContent = s.bgColor || '#0a0e1a';
 
   // Toggles
-  var toggleMap = { 's3dParticles': 'particles', 's3dArrows': 'arrows', 's3dShowOrbits': 'showOrbits', 's3dTypeSeparation': 'typeSeparation' };
+  var toggleMap = { 's3dParticles': 'particles', 's3dArrows': 'arrows', 's3dShowOrbits': 'showOrbits', 's3dTypeSeparation': 'typeSeparation', 's3dShowLabels': 'showLabels' };
   for (var id in toggleMap) {
     var el = document.getElementById(id);
     if (el) el.checked = !!s[toggleMap[id]];

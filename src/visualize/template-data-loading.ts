@@ -14,9 +14,78 @@ var CHUNK_THRESHOLD = 3000;  // use chunked loading if total > this
 function loadData() {
   document.getElementById('loading').style.display = 'flex';
   log('正在获取图谱数据...', true);
-
-  // 统一使用全量加载（vis-network 和 3D Force Graph 均适用）
   loadDataFull();
+}
+
+// Phase-75: 分阶段渲染已移除 (全量一次渲染更稳定可靠)
+// 增量注入函数保留 (供按需加载子任务、记忆节点等场景使用)
+
+/**
+ * Phase-75 T75.3: 3D Force Graph 增量注入。
+ * 将 API 原始格式 (type/properties) 转换为 3D 格式 (_type/_props/_val/_color)，
+ * 然后通过 network._addData 合并到 graph3d.graphData()。
+ */
+function incremental3DAddNodes(rawNodes, rawEdges) {
+  if (!network || !network._graph3d || !network._addData) return;
+
+  // 转换节点为 3D 格式
+  var newNodes3d = [];
+  for (var i = 0; i < rawNodes.length; i++) {
+    var n = rawNodes[i];
+    if (hiddenTypes[n.type]) continue;
+    var n3d = {
+      id: n.id,
+      label: n.label,
+      _type: n.type,
+      _props: n.properties || {},
+      _val: NODE_3D_SIZES[n.type] || 5,
+      _color: get3DNodeColor({ _type: n.type, _props: n.properties || {} })
+    };
+    newNodes3d.push(n3d);
+  }
+
+  // 转换边为 3D 格式
+  var curData = network._graph3d.graphData();
+  var knownIds = {};
+  for (var i = 0; i < curData.nodes.length; i++) knownIds[curData.nodes[i].id] = true;
+  for (var i = 0; i < newNodes3d.length; i++) knownIds[newNodes3d[i].id] = true;
+
+  var _graphSettings = getGraphSettings();
+  var _hideProjectEdges = !_graphSettings.showProjectEdges;
+  var _projIds = {};
+  for (var i = 0; i < curData.nodes.length; i++) {
+    if (curData.nodes[i]._type === 'project') _projIds[curData.nodes[i].id] = true;
+  }
+
+  var newLinks3d = [];
+  for (var i = 0; i < rawEdges.length; i++) {
+    var e = rawEdges[i];
+    if (!knownIds[e.from] || !knownIds[e.to]) continue;
+    var isProjectEdge = _hideProjectEdges && (_projIds[e.from] || _projIds[e.to]);
+    newLinks3d.push({
+      source: e.from,
+      target: e.to,
+      _label: e.label,
+      _width: e.width || 1,
+      _color: get3DLinkColor(e),
+      _highlightColor: LINK_3D_HIGHLIGHT_COLORS[e.label] || '#a5b4fc',
+      _projectEdgeHidden: !!isProjectEdge
+    });
+  }
+
+  if (newNodes3d.length > 0 || newLinks3d.length > 0) {
+    network._addData(newNodes3d, newLinks3d);
+  }
+  log('3D 增量注入: +' + newNodes3d.length + ' 节点, +' + newLinks3d.length + ' 边', true);
+}
+
+/**
+ * Phase-75 T75.3: 3D Force Graph 增量移除。
+ */
+function incremental3DRemoveNodes(removeNodeIds) {
+  if (!network || !network._graph3d || !network._removeData) return;
+  network._removeData(removeNodeIds);
+  log('3D 增量移除: -' + removeNodeIds.length + ' 节点', true);
 }
 
 /**
@@ -162,7 +231,10 @@ function loadSubTasksForPhase(phaseTaskId) {
     log('已展开 ' + phaseTaskId + ': +' + addedNodes.length + ' 节点, +' + addedEdges.length + ' 边', true);
 
     // Phase-10 T10.3: Incremental update instead of full rebuild
-    if (networkReusable && nodesDataSet && edgesDataSet && network) {
+    // Phase-74: 3D 引擎使用专用增量注入
+    if (USE_3D && network && network._graph3d) {
+      incremental3DAddNodes(addedNodes, addedEdges);
+    } else if (networkReusable && nodesDataSet && edgesDataSet && network) {
       incrementalAddNodes(addedNodes, addedEdges);
     } else {
       renderGraph();
@@ -205,7 +277,10 @@ function collapsePhaseSubTasks(phaseTaskId) {
   log('已收起 ' + phaseTaskId + ': 移除 ' + Object.keys(removeIds).length + ' 节点', true);
 
   // Phase-10 T10.3: Incremental remove
-  if (networkReusable && nodesDataSet && edgesDataSet && network) {
+  // Phase-74: 3D 引擎使用专用增量移除
+  if (USE_3D && network && network._graph3d) {
+    incremental3DRemoveNodes(Object.keys(removeIds));
+  } else if (networkReusable && nodesDataSet && edgesDataSet && network) {
     incrementalRemoveNodes(Object.keys(removeIds));
   } else {
     renderGraph();
@@ -307,7 +382,7 @@ function updateTieredIndicator() {
   var loadAllBtn = document.getElementById('loadAllBtn');
   if (!indicator || !loadAllBtn) return;
 
-  if (!USE_3D && tieredLoadState.l0l1Loaded && !tieredLoadState.l2Loaded) {
+  if (tieredLoadState.l0l1Loaded && !tieredLoadState.l2Loaded) {
     // Tiered mode active
     var expandedCount = Object.keys(tieredLoadState.expandedPhases).length;
     indicator.style.display = 'inline';

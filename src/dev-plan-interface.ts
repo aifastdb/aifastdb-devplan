@@ -38,6 +38,7 @@ import type {
   MemoryGenerateResult,
   RecallDepth,
   RecallScope,
+  DocStrategy,
 } from './types';
 
 // ============================================================================
@@ -292,7 +293,7 @@ export interface IDevPlanStore {
     limit?: number;
     /** 最低分数阈值 (0~1) */
     minScore?: number;
-    /** 是否包含文档搜索（统一召回，默认 true） */
+    /** 是否包含文档搜索（统一召回，默认 true）。当 docStrategy 有值时此参数被忽略。 */
     includeDocs?: boolean;
     /** Phase-38: 是否启用图谱关联扩展（默认 true） */
     graphExpand?: boolean;
@@ -300,6 +301,8 @@ export interface IDevPlanStore {
     depth?: RecallDepth;
     /** Phase-124: 范围限定检索 */
     scope?: RecallScope;
+    /** Phase-125: 文档检索策略 — 'vector'(默认) | 'guided'(记忆驱动) | 'none'(不检索) */
+    docStrategy?: DocStrategy;
   }): ScoredMemory[];
 
   /**

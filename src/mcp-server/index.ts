@@ -1036,7 +1036,12 @@ const TOOLS = [
         },
         includeDocs: {
           type: 'boolean',
-          description: 'Whether to include document sections in recall results via unified search (default: true). Set to false to search memories only.\n是否通过统一召回包含文档搜索结果（默认 true）。设为 false 仅搜索记忆。',
+          description: 'Whether to include document sections in recall results via unified search (default: true). Set to false to search memories only. DEPRECATED: prefer docStrategy instead.\n是否通过统一召回包含文档搜索结果（默认 true）。设为 false 仅搜索记忆。已废弃：推荐使用 docStrategy。',
+        },
+        docStrategy: {
+          type: 'string',
+          enum: ['vector', 'guided', 'none'],
+          description: 'Document retrieval strategy (Phase-125, default: "vector"). Controls how documents are discovered.\n文档检索策略（Phase-125，默认 "vector"）。控制文档发现方式。\n\n- "vector" (default): Traditional mode — independent vector search on documents, RRF-fused with memories. Broad coverage but higher token cost.\n  传统模式 — 独立向量搜索文档，与记忆 RRF 融合。覆盖广但 token 多。\n- "guided": Memory-guided mode — discovers documents via graph traversal from recalled memories (MEMORY_FROM_DOC, TASK_HAS_DOC, MODULE_HAS_DOC). Precise, low token. Each doc includes guidedReasons. Falls back to vector if no graph connections found.\n  记忆驱动模式 — 基于图谱关系反向查找文档。精准且省 token，每篇附 guidedReasons。无关联时降级 vector。\n- "none": No document retrieval (same as includeDocs=false).\n  不检索文档。',
         },
         graphExpand: {
           type: 'boolean',
@@ -1652,10 +1657,12 @@ interface ToolArgs {
   source?: string;
   /** devplan_memory_save: 记忆来源 ID（用于批量生成去重追踪） */
   sourceId?: string;
-  /** devplan_memory_recall: 是否包含文档统一召回 */
+  /** devplan_memory_recall: 是否包含文档统一召回（已废弃，推荐 docStrategy） */
   includeDocs?: boolean;
   /** devplan_memory_recall: 是否启用图谱关联扩展 (Phase-38) */
   graphExpand?: boolean;
+  /** Phase-125: devplan_memory_recall: 文档检索策略 (vector/guided/none) */
+  docStrategy?: string;
   /** Phase-124: devplan_memory_recall: 分层召回深度 (L1/L2/L3) */
   depth?: string;
   /** devplan_memory_clear: 确认删除（安全保护） */
@@ -3045,6 +3052,7 @@ async function handleToolCall(name: string, args: ToolArgs): Promise<string> {
       const graphExpand = args.graphExpand !== undefined ? args.graphExpand : true;
       const depth = args.depth || 'L1'; // Phase-124: 分层召回深度
       const scope = args.scope as { moduleId?: string; taskId?: string; anchorType?: string; anchorName?: string } | undefined;
+      const docStrategy = args.docStrategy as 'vector' | 'guided' | 'none' | undefined; // Phase-125
 
       const memories = (plan as any).recallMemory(query, {
         memoryType: args.memoryType as any,
@@ -3054,11 +3062,17 @@ async function handleToolCall(name: string, args: ToolArgs): Promise<string> {
         graphExpand,
         depth,   // Phase-124: 传递分层召回深度
         scope,   // Phase-124: 传递范围限定条件
+        docStrategy, // Phase-125: 文档检索策略
       });
 
       // 统计来源分布
       const memoryCount = memories.filter((m: any) => m.sourceKind === 'memory' || !m.sourceKind).length;
       const docCount = memories.filter((m: any) => m.sourceKind === 'doc').length;
+      // Phase-125: 统计 guided 文档数量
+      const guidedDocCount = memories.filter((m: any) => m.sourceKind === 'doc' && m.guidedReasons?.length > 0).length;
+
+      // Phase-125: 解析实际使用的 docStrategy
+      const effectiveDocStrategy = docStrategy || (includeDocs ? 'vector' : 'none');
 
       return JSON.stringify({
         projectName,
@@ -3066,7 +3080,9 @@ async function handleToolCall(name: string, args: ToolArgs): Promise<string> {
         count: memories.length,
         memoryCount,
         docCount,
-        unifiedRecall: includeDocs,
+        guidedDocCount,  // Phase-125: guided 文档数
+        unifiedRecall: effectiveDocStrategy !== 'none',
+        docStrategy: effectiveDocStrategy, // Phase-125: 实际使用的策略
         depth,   // Phase-124: 返回当前使用的层级
         scope: scope || null,  // Phase-124: 返回当前使用的范围
         memories,

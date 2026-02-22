@@ -549,6 +549,15 @@ function renderGraph() {
 
     var visibleNodes = [];
     var DOC_BTN_PAD = '      ';  // 父文档标签左侧留白，为 +/- 按钮腾出空间
+
+    // 预计算大图标志: 文档/子任务节点初始不显示文字 (缩放放大后才显示)
+    // 这样 document 的 box 形状在初始视图中显示为蓝色正方体，而不是超长长方体
+    var _totalVisible = 0;
+    for (var ci = 0; ci < allNodes.length; ci++) {
+      if (!hiddenTypes[allNodes[ci].type] && !isNodeCollapsedByParent(allNodes[ci].id)) _totalVisible++;
+    }
+    var _initLabelCompact = _totalVisible > 100; // 100+ 节点时文档/子任务初始隐藏文字
+
     for (var i = 0; i < allNodes.length; i++) {
       var n = allNodes[i];
       if (hiddenTypes[n.type]) continue;
@@ -567,13 +576,22 @@ function renderGraph() {
           label = DOC_BTN_PAD + label;
         }
       }
+
+      // 文档/子任务: 初始隐藏文字 → box 显示为正方体, dot 更小更清爽
+      // 保存原始字号到 _origFontSize 供缩放时恢复
+      var nodeFont = s.font;
+      var origFontSize = (s.font && s.font.size) || 10;
+      if (_initLabelCompact && (n.type === 'document' || n.type === 'sub-task' || n.type === 'memory')) {
+        nodeFont = { size: 0, color: (s.font && s.font.color) || '#9ca3af' };
+      }
+
       // Phase-10 T10.5: Add double-click hint for main-task nodes in tiered mode
       var tooltip = n.label + ' (连接: ' + deg + ')';
       if (n.type === 'main-task' && !USE_3D && tieredLoadState.l0l1Loaded && !tieredLoadState.l2Loaded) {
         var phaseId = (n.properties || {}).taskId || n.id;
         tooltip += tieredLoadState.expandedPhases[phaseId] ? '\\n双击收起子任务' : '\\n双击展开子任务';
       }
-      visibleNodes.push({ id: n.id, label: label, _origLabel: n.label, title: tooltip, shape: s.shape, size: s.size, color: s.color, font: s.font, borderWidth: s.borderWidth, _type: n.type, _props: n.properties || {}, _isParentDoc: isParentDoc });
+      visibleNodes.push({ id: n.id, label: label, _origLabel: n.label, _origFontSize: origFontSize, title: tooltip, shape: s.shape, size: s.size, color: s.color, font: nodeFont, borderWidth: s.borderWidth, _type: n.type, _props: n.properties || {}, _isParentDoc: isParentDoc });
     }
 
     var visibleIds = {};
@@ -733,13 +751,14 @@ function renderGraph() {
     });
 
     // ── 性能优化: 缩放时根据 zoom level 自适应标签可见性 ──
-    // 缩小到一定程度时隐藏子任务/文档标签（反正看不清），减少 canvas 文本绘制开销
+    // 文档/子任务初始隐藏文字 (正方体显示)，放大到一定程度后显示文字 (长方体带标题)
+    // _initLabelCompact: 在节点准备阶段已将 document/sub-task font.size 设为 0
     if (isLargeGraph) {
-      var labelHidden = false;
+      var labelHidden = _initLabelCompact; // 与初始渲染状态同步
       network.on('zoom', function() {
         var scale = network.getScale();
-        if (scale < 0.4 && !labelHidden) {
-          // 缩小时: 隐藏子任务和文档的标签
+        if (scale < 0.5 && !labelHidden) {
+          // 缩小时: 隐藏子任务和文档的标签 → 文档显示为正方体
           labelHidden = true;
           var updates = [];
           nodesDataSet.forEach(function(n) {
@@ -748,15 +767,15 @@ function renderGraph() {
             }
           });
           if (updates.length > 0) nodesDataSet.update(updates);
-        } else if (scale >= 0.4 && labelHidden) {
-          // 放大时: 恢复标签
+        } else if (scale >= 0.5 && labelHidden) {
+          // 放大时: 恢复标签 → 文档显示为带标题的长方体
           labelHidden = false;
           var updates = [];
           nodesDataSet.forEach(function(n) {
-            if (n._type === 'sub-task') {
-              updates.push({ id: n.id, font: { size: 9, color: n.font ? n.font.color : '#9ca3af' } });
-            } else if (n._type === 'document') {
-              updates.push({ id: n.id, font: { size: 10, color: n.font ? n.font.color : '#dbeafe' } });
+            if (n._type === 'sub-task' || n._type === 'document' || n._type === 'memory') {
+              var restoreSize = n._origFontSize || 10;
+              var restoreColor = (n.font && n.font.color) || '#9ca3af';
+              updates.push({ id: n.id, font: { size: restoreSize, color: restoreColor } });
             }
           });
           if (updates.length > 0) nodesDataSet.update(updates);

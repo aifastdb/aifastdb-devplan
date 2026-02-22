@@ -1521,6 +1521,181 @@ function startServer(projectName: string, basePath: string, port: number): void 
           break;
         }
 
+        case '/api/batch/verify': {
+          // Phase-69: 批量导入完整性检测端点
+          if (req.method !== 'POST') {
+            res.writeHead(405, { 'Content-Type': 'application/json; charset=utf-8' });
+            res.end(JSON.stringify({ error: 'Method Not Allowed. Use POST.' }));
+            break;
+          }
+          const verifyBody = await readRequestBody(req);
+          const verifySourceIds: string[] = verifyBody.sourceIds || [];
+          const verifyMemoryIds: string[] = verifyBody.memoryIds || [];
+
+          if (verifySourceIds.length === 0 && verifyMemoryIds.length === 0) {
+            res.writeHead(400, { 'Content-Type': 'application/json; charset=utf-8' });
+            res.end(JSON.stringify({ error: 'Missing required: sourceIds or memoryIds' }));
+            break;
+          }
+
+          const verifyStore = createFreshStore(projectName, basePath);
+          if (typeof (verifyStore as any).listMemories !== 'function') {
+            res.writeHead(400, { 'Content-Type': 'application/json; charset=utf-8' });
+            res.end(JSON.stringify({ error: 'listMemories not supported (requires graph engine)' }));
+            break;
+          }
+
+          try {
+            // 获取所有记忆
+            const allMemories: any[] = (verifyStore as any).listMemories({});
+            const g = (verifyStore as any).graph;
+
+            // 按 sourceId 和 id 建立索引
+            const bySourceId = new Map<string, any>();
+            const byId = new Map<string, any>();
+            for (const mem of allMemories) {
+              if (mem.sourceId) bySourceId.set(mem.sourceId, mem);
+              byId.set(mem.id, mem);
+            }
+
+            // 检测结果
+            const results: any[] = [];
+            let totalChecked = 0;
+            let totalPassed = 0;
+            let totalWarnings = 0;
+            let totalErrors = 0;
+
+            // 检查 sourceIds
+            for (const sourceId of verifySourceIds) {
+              totalChecked++;
+              const mem = bySourceId.get(sourceId);
+              const issues: string[] = [];
+              const warnings: string[] = [];
+
+              if (!mem) {
+                issues.push('记忆不存在（未找到 sourceId 对应的记忆实体）');
+                results.push({ sourceId, status: 'error', issues, warnings });
+                totalErrors++;
+                continue;
+              }
+
+              // 检测 1: 内容非空
+              if (!mem.content || mem.content.trim().length === 0) {
+                issues.push('content 字段为空');
+              }
+
+              // 检测 2: Embedding 向量（通过 searchEntitiesByVector 自检）
+              let hasEmbedding = false;
+              if (g && typeof g.searchEntitiesByVector === 'function') {
+                try {
+                  // 使用 synapse embed 生成查询向量，搜索自身
+                  const synapse = (verifyStore as any).synapse;
+                  if (synapse && typeof synapse.embed === 'function') {
+                    const queryVec = synapse.embed(mem.content.slice(0, 200));
+                    const hits = g.searchEntitiesByVector(queryVec, 5, 'MEMORY');
+                    hasEmbedding = hits.some((h: any) => h.entityId === mem.id);
+                  }
+                } catch {
+                  // embed 或搜索失败
+                }
+              }
+              if (!hasEmbedding) {
+                warnings.push('未检测到 Embedding 向量（语义搜索可能无法找到此记忆）');
+              }
+
+              // 检测 3: Anchor 关联
+              let hasAnchor = false;
+              if (g && typeof g.outgoingByType === 'function') {
+                try {
+                  const anchorRels = g.outgoingByType(mem.id, 'anchored_by');
+                  hasAnchor = anchorRels && anchorRels.length > 0;
+                } catch {
+                  // 关系查询失败
+                }
+              }
+              if (!hasAnchor) {
+                warnings.push('无 Anchor 触点关联');
+              }
+
+              // 检测 4: memoryType 合法性
+              const validTypes = ['decision', 'pattern', 'bugfix', 'insight', 'preference', 'summary'];
+              if (!validTypes.includes(mem.memoryType)) {
+                issues.push('memoryType 非法: ' + mem.memoryType);
+              }
+
+              // 检测 5: importance 范围
+              if (typeof mem.importance !== 'number' || mem.importance < 0 || mem.importance > 1) {
+                warnings.push('importance 值异常: ' + mem.importance);
+              }
+
+              // 检测 6: 内容长度警告（过短可能质量不高）
+              if (mem.content && mem.content.length < 20) {
+                warnings.push('内容过短（' + mem.content.length + ' 字符），可能质量不足');
+              }
+
+              const status = issues.length > 0 ? 'error' : (warnings.length > 0 ? 'warning' : 'pass');
+              if (status === 'pass') totalPassed++;
+              else if (status === 'warning') totalWarnings++;
+              else totalErrors++;
+
+              results.push({
+                sourceId,
+                memoryId: mem.id,
+                memoryType: mem.memoryType,
+                contentLength: mem.content?.length || 0,
+                hasEmbedding,
+                hasAnchor,
+                importance: mem.importance,
+                status,
+                issues,
+                warnings,
+              });
+            }
+
+            // 检查 memoryIds（直接按 ID 查）
+            for (const memId of verifyMemoryIds) {
+              if (verifySourceIds.length > 0) break; // 如果已按 sourceId 查过，跳过
+              totalChecked++;
+              const mem = byId.get(memId);
+              const issues: string[] = [];
+              const warnings: string[] = [];
+
+              if (!mem) {
+                issues.push('记忆不存在（ID 未找到）');
+                results.push({ memoryId: memId, status: 'error', issues, warnings });
+                totalErrors++;
+                continue;
+              }
+
+              if (!mem.content || mem.content.trim().length === 0) {
+                issues.push('content 字段为空');
+              }
+
+              const status = issues.length > 0 ? 'error' : 'pass';
+              if (status === 'pass') totalPassed++;
+              else totalErrors++;
+
+              results.push({ memoryId: memId, status, issues, warnings });
+            }
+
+            res.writeHead(200, { 'Content-Type': 'application/json; charset=utf-8' });
+            res.end(JSON.stringify({
+              status: 'verified',
+              summary: {
+                total: totalChecked,
+                passed: totalPassed,
+                warnings: totalWarnings,
+                errors: totalErrors,
+              },
+              results,
+            }));
+          } catch (e: any) {
+            res.writeHead(500, { 'Content-Type': 'application/json; charset=utf-8' });
+            res.end(JSON.stringify({ error: e.message || String(e) }));
+          }
+          break;
+        }
+
         case '/favicon.ico':
           res.writeHead(204);
           res.end();

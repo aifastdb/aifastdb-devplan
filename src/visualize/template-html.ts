@@ -277,37 +277,10 @@ export function getHTML(projectName: string): string {
                 <span>🌐</span> 图谱
               </button>
             </div>
-            <div class="memory-generate-group">
-              <button class="memory-generate-btn" onclick="generateMemories('both')" title="从文档和任务中提取记忆候选项">
-                ✨ 生成记忆
-              </button>
-              <button class="memory-generate-dropdown-btn" id="memGenDropdownBtn" onclick="toggleMemGenDropdown(event)">▾</button>
-              <div class="memory-generate-dropdown" id="memGenDropdown">
-                <div class="memory-generate-dropdown-item" onclick="generateMemories('both')">
-                  <span class="mg-icon">📦</span> 全部（文档 + 任务）
-                </div>
-                <div class="memory-generate-dropdown-item" onclick="generateMemories('tasks')">
-                  <span class="mg-icon">✅</span> 仅从任务历史
-                </div>
-                <div class="memory-generate-dropdown-item" onclick="generateMemories('docs')">
-                  <span class="mg-icon">📄</span> 仅从文档库
-                </div>
-                <div class="memory-generate-dropdown-sep"></div>
-                <div class="memory-generate-dropdown-item" onclick="showPhasePickerForGenerate()">
-                  <span class="mg-icon">🎯</span> 从指定阶段...
-                </div>
-                <div class="memory-generate-dropdown-sep"></div>
-                <div class="memory-generate-dropdown-item auto-import" onclick="autoImportAllMemories()">
-                  <span class="mg-icon">⚡</span> 一键全量导入
-                  <span style="font-size:10px;color:#6b7280;margin-left:4px;">（自动保存全部）</span>
-                </div>
-                <div class="memory-generate-dropdown-sep"></div>
-                <div class="memory-generate-dropdown-item ai-batch" onclick="startAiBatchGenerate()">
-                  <span class="mg-icon">🚀</span> AI 批量生成（新）
-                  <span style="font-size:10px;color:#22c55e;margin-left:4px;">浏览器直连 Ollama</span>
-                </div>
-              </div>
-            </div>
+            <!-- Phase-70: 精简为单按钮，直接触发 AI 批量生成 -->
+            <button class="memory-generate-btn ai-batch-btn" onclick="startAiBatchGenerate()" title="AI 批量生成记忆（浏览器直连 Ollama）">
+              ✨ 生成记忆
+            </button>
             <span class="memory-count" id="memoryCount">0 条记忆</span>
           </div>
         </div>
@@ -338,53 +311,6 @@ export function getHTML(projectName: string): string {
             <div class="mg-legend-item"><span class="mg-legend-dot" style="background:#6366f1;"></span> 项目</div>
           </div>
           <div class="memory-graph-stats" id="memoryGraphStats"></div>
-        </div>
-      </div>
-
-      <!-- 记忆候选项预览弹层 -->
-      <div class="mem-gen-overlay" id="memGenOverlay" style="display:none;">
-        <div class="mem-gen-modal">
-          <div class="mem-gen-modal-header">
-            <h3>✨ 记忆候选项预览</h3>
-            <div class="mem-gen-modal-stats" id="memGenStats"></div>
-            <button class="mem-gen-close-btn" onclick="closeMemGenOverlay()">✕</button>
-          </div>
-          <div class="mem-gen-modal-actions">
-            <button class="mem-gen-action-btn primary" onclick="saveSelectedCandidates()" id="memGenSaveBtn">
-              💾 保存选中 (<span id="memGenSelectedCount">0</span>)
-            </button>
-            <button class="mem-gen-action-btn" onclick="toggleAllCandidates(true)">☑ 全选</button>
-            <button class="mem-gen-action-btn" onclick="toggleAllCandidates(false)">☐ 全不选</button>
-            <span class="mem-gen-sep"></span>
-            <label class="mem-gen-limit-label">每批:
-              <select id="memGenLimitSelect" class="mem-gen-limit-select" onchange="onMemGenLimitChange()">
-                <option value="50" selected>50 条</option>
-                <option value="100">100 条</option>
-                <option value="200">200 条</option>
-                <option value="0">不限制</option>
-              </select>
-            </label>
-            <label class="mem-gen-limit-label" style="cursor:pointer;" title="保存完当前批次后自动加载下一批，直到全部处理完">
-              <input type="checkbox" id="memGenAutoNext" checked /> 自动续载
-            </label>
-          </div>
-          <div class="mem-gen-candidate-list" id="memGenCandidateList">
-            <div style="text-align:center;padding:40px;color:#6b7280;">加载中...</div>
-          </div>
-        </div>
-      </div>
-
-      <!-- 一键全量导入进度覆盖层 -->
-      <div class="mem-auto-import-overlay" id="memAutoImportOverlay" style="display:none;">
-        <div class="mem-auto-import-card">
-          <div class="mem-auto-import-icon">⚡</div>
-          <div class="mem-auto-import-title" id="memAutoImportTitle">一键全量导入</div>
-          <div class="mem-auto-import-progress-bar">
-            <div class="mem-auto-import-progress-fill" id="memAutoImportProgress" style="width:0%"></div>
-          </div>
-          <div class="mem-auto-import-status" id="memAutoImportStatus">准备中...</div>
-          <div class="mem-auto-import-detail" id="memAutoImportDetail"></div>
-          <button class="mem-auto-import-cancel" id="memAutoImportCancelBtn" onclick="cancelAutoImport()">取消</button>
         </div>
       </div>
 
@@ -419,6 +345,8 @@ export function getHTML(projectName: string): string {
           <div id="aiBatchStreamArea" style="display:none;margin-top:8px;background:#0d1117;border:1px solid #21262d;border-radius:6px;padding:8px 10px;max-height:160px;overflow-y:auto;font-family:'Cascadia Code','Fira Code',monospace;font-size:11px;color:#8b949e;line-height:1.5;white-space:pre-wrap;word-break:break-all;"></div>
           <!-- 统计摘要 -->
           <div id="aiBatchSummary" style="display:none;margin-top:10px;padding:10px;background:#111827;border-radius:6px;font-size:12px;color:#9ca3af;"></div>
+          <!-- Phase-69: 完整性检测结果区域 -->
+          <div id="aiBatchVerifyArea" style="display:none;margin-top:10px;"></div>
           <button class="mem-auto-import-cancel" id="aiBatchCancelBtn" onclick="cancelAiBatch()">取消</button>
         </div>
       </div>
@@ -675,6 +603,10 @@ export function getHTML(projectName: string): string {
                 </div>
                 <div class="s3d-body">
                   <div class="s3d-group">
+                    <div class="s3d-toggle-row">
+                      <span class="s3d-toggle-label">节点文字标签 <span style="font-size:10px;color:#6b7280;margin-left:4px;">(在节点下方显示名称)</span></span>
+                      <label class="s3d-toggle"><input type="checkbox" id="s3dShowLabels" checked onchange="update3DSetting('showLabels',this.checked)"><span class="s3d-toggle-slider"></span></label>
+                    </div>
                     <div class="s3d-toggle-row">
                       <span class="s3d-toggle-label">流动粒子特效</span>
                       <label class="s3d-toggle"><input type="checkbox" id="s3dParticles" checked onchange="update3DSetting('particles',this.checked)"><span class="s3d-toggle-slider"></span></label>
