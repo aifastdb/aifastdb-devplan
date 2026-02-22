@@ -135,6 +135,107 @@ const RT = {
 } as const;
 
 // ============================================================================
+// Phase-57: Memory Anchor / Flow / Structure Chain Types
+//
+// 本地定义接口，对应 ai_db Phase-122 NAPI 新增方法的返回类型。
+// 当 aifastdb npm 包更新到含 Phase-122 的版本后，可替换为直接 import。
+// ============================================================================
+
+/** 触点类型常量 */
+const ANCHOR_TYPES = {
+  MODULE: 'module',
+  CONCEPT: 'concept',
+  API: 'api',
+  ARCHITECTURE: 'architecture',
+  FEATURE: 'feature',
+  LIBRARY: 'library',
+  PROTOCOL: 'protocol',
+} as const;
+
+/** 变更类型常量 */
+const CHANGE_TYPES = {
+  CREATED: 'created',
+  UPGRADED: 'upgraded',
+  MODIFIED: 'modified',
+  REMOVED: 'removed',
+  DEPRECATED: 'deprecated',
+} as const;
+
+/** 触点信息（对应 Rust AnchorInfo） */
+interface NativeAnchorInfo {
+  id: string;
+  name: string;
+  anchor_type: string;
+  description: string;
+  /** L2 目录索引概览（Phase-63，inspired by OpenViking .overview.md） */
+  overview?: string;
+  version: number;
+  status: string;
+  flow_count: number;
+  created_at: number;
+  updated_at: number;
+}
+
+/** 记忆流条目（对应 Rust FlowEntry） */
+interface NativeFlowEntry {
+  id: string;
+  anchor_id: string;
+  version: number;
+  change_type: string;
+  summary: string;
+  detail: string;
+  source_task?: string;
+  prev_entry_id?: string;
+  created_at: number;
+}
+
+/** 记忆流查询过滤器 */
+interface NativeFlowFilter {
+  changeType?: string;
+  minVersion?: number;
+  maxVersion?: number;
+  limit?: number;
+  newestFirst?: boolean;
+}
+
+/** 组件引用 */
+interface NativeComponentRef {
+  anchorId: string;
+  role: string;
+  versionHint?: string;
+}
+
+/** 结构快照 */
+interface NativeStructureSnapshot {
+  id: string;
+  anchor_id: string;
+  flow_entry_id: string;
+  version: number;
+  components: NativeComponentRef[];
+  created_at: number;
+}
+
+/** 结构差异 */
+interface NativeStructureDiff {
+  anchor_id: string;
+  from_version: number;
+  to_version: number;
+  added: NativeComponentRef[];
+  removed: NativeComponentRef[];
+  changed: [NativeComponentRef, NativeComponentRef][];
+  unchanged: NativeComponentRef[];
+}
+
+/** 提取的触点候选 */
+interface NativeExtractedAnchor {
+  name: string;
+  suggested_type: string;
+  confidence: number;
+  offset: number;
+  matched_anchor?: NativeAnchorInfo;
+}
+
+// ============================================================================
 // Helper
 // ============================================================================
 
@@ -176,6 +277,12 @@ export class DevPlanGraphStore implements IDevPlanStore {
   private semanticSearchReady: boolean = false;
   /** Phase-52: Tantivy BM25 全文搜索是否可用 */
   private textSearchReady: boolean = false;
+  /** Phase-54: LlmGateway 实例（用于 LLM Reranking），仅启用重排时可用 */
+  private llmGateway: any | null = null;
+  /** Phase-54: LLM Reranking 是否就绪 */
+  private rerankReady: boolean = false;
+  /** Phase-54: 重排使用的模型名称 */
+  private rerankModel: string = 'gemma3:4b';
 
   constructor(projectName: string, config: DevPlanGraphStoreConfig) {
     this.projectName = projectName;
@@ -270,6 +377,11 @@ export class DevPlanGraphStore implements IDevPlanStore {
 
     // 确保项目根实体存在
     this.ensureProjectEntity();
+
+    // Phase-54: 初始化 LLM Reranking（优雅降级：失败时静默跳过）
+    if (config.enableReranking) {
+      this.initLlmReranking(config);
+    }
   }
 
   /**
@@ -361,6 +473,149 @@ export class DevPlanGraphStore implements IDevPlanStore {
       this.synapse = null;
       this.semanticSearchReady = false;
     }
+  }
+
+  /**
+   * Phase-54: 初始化 LLM Reranking
+   *
+   * 优雅降级策略（三层保护）：
+   * 1. LlmGateway 导入失败（aifastdb 版本过低）→ 跳过
+   * 2. LlmGateway 构造 / Provider 注册失败 → 跳过
+   * 3. rerankWithLlm 调用失败（Ollama 未运行）→ 返回原始结果
+   */
+  private initLlmReranking(config: DevPlanGraphStoreConfig): void {
+    const model = config.rerankModel || 'gemma3:4b';
+    const baseUrl = config.rerankBaseUrl || 'http://localhost:11434/v1';
+    this.rerankModel = model;
+
+    try {
+      // 动态导入 LlmGateway — 如果 aifastdb 版本不含 LlmGateway 则优雅降级
+      const { LlmGateway } = require('aifastdb');
+      if (!LlmGateway) {
+        console.warn('[DevPlan] LlmGateway not available in current aifastdb version. LLM reranking disabled.');
+        return;
+      }
+
+      // 创建 LlmGateway 实例（使用 graph-data 同级的 llm-gateway-data 目录）
+      const gwPath = path.resolve(config.graphPath, '..', 'llm-gateway-data');
+      this.llmGateway = new LlmGateway(gwPath);
+
+      // 注册 Ollama Provider（幂等 — 已存在则从 store hydrate）
+      try {
+        this.llmGateway.registerProvider(
+          'ollama-rerank',     // id
+          'Ollama (Rerank)',   // name
+          'ollama',            // brand
+          baseUrl,             // baseUrl
+          undefined,           // apiKey
+          'openai_compat',     // protocol
+        );
+      } catch {
+        // 可能已存在，忽略
+      }
+
+      // 注册模型（幂等）
+      try {
+        this.llmGateway.registerModel(
+          model,               // id
+          'ollama-rerank',     // providerId
+          model,               // name
+          undefined,           // displayName
+        );
+      } catch {
+        // 可能已存在，忽略
+      }
+
+      this.rerankReady = true;
+      console.error(`[DevPlan] LLM reranking initialized (model: ${model}, endpoint: ${baseUrl})`);
+    } catch (e) {
+      console.warn(
+        `[DevPlan] Failed to initialize LLM reranking: ${
+          e instanceof Error ? e.message : String(e)
+        }. Reranking disabled — search results will use RRF ordering.`
+      );
+      this.llmGateway = null;
+      this.rerankReady = false;
+    }
+  }
+
+  /**
+   * Phase-54: 使用 LLM 对搜索结果进行语义重排
+   *
+   * @param query - 用户查询
+   * @param results - 搜索结果（需要有 id 和 content/title 字段）
+   * @param topK - 返回 top-K 结果（0 = 全部）
+   * @returns 重排后的结果（失败时返回原始顺序）
+   */
+  private rerankSearchResults<T extends { id: string; content?: string; title?: string }>(
+    query: string,
+    results: T[],
+    topK: number = 0,
+  ): T[] {
+    if (!this.rerankReady || !this.llmGateway || results.length <= 1) {
+      return results;
+    }
+
+    try {
+      // 构建候选列表：id + content（截取前 300 字符）
+      const candidates = results.map(r => ({
+        id: r.id,
+        content: ((r.title ? r.title + '\n' : '') + (r.content || '')).substring(0, 300),
+      }));
+
+      const output = this.llmGateway.rerankWithLlm(
+        query,
+        candidates,
+        this.rerankModel,
+        undefined,       // systemPrompt (use built-in)
+        0.1,             // temperature
+        512,             // maxTokens
+        topK > 0 ? topK : undefined,  // topK
+        300,             // maxContentLen
+      );
+
+      // LLM 失败时 Rust 层已返回 isFallback 排序 — 仍然是有效排序
+      if (output && output.items && output.items.length > 0) {
+        // 按 LLM 重排顺序重新排列结果
+        const idToResult = new Map<string, T>();
+        for (const r of results) {
+          idToResult.set(r.id, r);
+        }
+
+        const reranked: T[] = [];
+        for (const item of output.items) {
+          const original = idToResult.get(item.id);
+          if (original) {
+            reranked.push(original);
+          }
+        }
+
+        // 安全兜底：如果 reranked 比 results 少（id 丢失），追加遗漏项
+        if (reranked.length < results.length) {
+          const rerankedIds = new Set(reranked.map(r => r.id));
+          for (const r of results) {
+            if (!rerankedIds.has(r.id)) {
+              reranked.push(r);
+            }
+          }
+        }
+
+        const fallbackLabel = output.isFallback ? ' (fallback)' : '';
+        console.error(
+          `[DevPlan] LLM reranked ${reranked.length} results in ${output.durationMs}ms` +
+          `${fallbackLabel} (model: ${output.model})`
+        );
+        return reranked;
+      }
+    } catch (e) {
+      // 优雅降级：Ollama 不可用、超时等 → 返回原始排序
+      console.warn(
+        `[DevPlan] LLM reranking failed: ${e instanceof Error ? e.message : String(e)}. ` +
+        'Using original RRF ordering.'
+      );
+    }
+
+    return results;
   }
 
   // ==========================================================================
@@ -835,6 +1090,75 @@ export class DevPlanGraphStore implements IDevPlanStore {
     return entity.id;
   }
 
+  addSection(input: DevPlanDocInput): string {
+    // 纯新增语义：如果同 section+subSection 已存在，抛出错误而非覆盖
+    const existing = this.getSection(input.section, input.subSection);
+    if (existing) {
+      const key = sectionKey(input.section, input.subSection);
+      throw new Error(
+        `文档 "${key}" 已存在（标题: "${existing.title}"）。如需更新请使用 saveSection/updateSection。`
+      );
+    }
+
+    const now = Date.now();
+    const version = input.version || '1.0.0';
+    const finalModuleId = input.moduleId || null;
+    const finalParentDoc = input.parentDoc !== undefined ? input.parentDoc : null;
+    const sk = sectionKey(input.section, input.subSection);
+
+    // 使用 addEntity（纯新增，每次生成新 UUID），不使用 upsertEntityByProp
+    const entity = this.graph.addEntity(input.title, ET.DOC, {
+      projectName: this.projectName,
+      section: input.section,
+      sectionKey: sk,
+      title: input.title,
+      content: input.content,
+      version,
+      subSection: input.subSection || null,
+      relatedSections: input.relatedSections || [],
+      relatedTaskIds: input.relatedTaskIds || [],
+      moduleId: finalModuleId,
+      parentDoc: finalParentDoc,
+      createdAt: now,
+      updatedAt: now,
+    });
+
+    // 子文档不直接连接项目节点，仅通过 doc_has_child 连接父文档
+    if (finalParentDoc) {
+      const [parentSection, parentSubSection] = finalParentDoc.split('|');
+      const parentEntity = this.findDocEntityBySection(parentSection, parentSubSection || undefined);
+      if (parentEntity) {
+        this.graph.putRelation(parentEntity.id, entity.id, RT.DOC_HAS_CHILD);
+      }
+    } else {
+      this.graph.putRelation(this.getProjectId(), entity.id, RT.HAS_DOCUMENT);
+    }
+
+    // 模块关联
+    if (finalModuleId) {
+      const modEntity = this.findEntityByProp(ET.MODULE, 'moduleId', finalModuleId);
+      if (modEntity) {
+        this.graph.putRelation(modEntity.id, entity.id, RT.MODULE_HAS_DOC);
+      }
+    }
+
+    // task -> doc 关系
+    if (input.relatedTaskIds?.length) {
+      for (const taskId of input.relatedTaskIds) {
+        const taskEntity = this.findEntityByProp(ET.MAIN_TASK, 'taskId', taskId);
+        if (taskEntity) {
+          this.graph.putRelation(taskEntity.id, entity.id, RT.TASK_HAS_DOC);
+        }
+      }
+    }
+
+    // 语义搜索：自动为新文档生成 Embedding 并索引
+    this.autoIndexDocument(entity.id, input.title, input.content);
+
+    this.graph.flush();
+    return entity.id;
+  }
+
   getSection(section: DevPlanSection, subSection?: string): DevPlanDoc | null {
     const docs = this.findEntitiesByType(ET.DOC);
     const key = sectionKey(section, subSection);
@@ -895,10 +1219,17 @@ export class DevPlanGraphStore implements IDevPlanStore {
     mode?: SearchMode;
     limit?: number;
     minScore?: number;
+    /** @internal Phase-54: 跳过 LLM 重排（recallMemory 内部调用时设为 true，避免双重重排） */
+    _skipRerank?: boolean;
   }): ScoredDevPlanDoc[] {
     const mode = options?.mode || 'hybrid';
     const limit = options?.limit || 10;
     const minScore = options?.minScore || 0;
+    const skipRerank = options?._skipRerank === true;
+
+    // Phase-54: LLM Reranking 包装 — 仅在非跳过时执行
+    const maybeRerank = <T extends { id: string; content?: string; title?: string }>(results: T[]): T[] =>
+      skipRerank ? results : this.rerankSearchResults(query, results, limit);
 
     // ---- BM25 / Literal Search ----
     // Phase-52: 当 Tantivy 可用时，优先使用 BM25 搜索替代朴素字面匹配
@@ -925,10 +1256,12 @@ export class DevPlanGraphStore implements IDevPlanStore {
 
     // ---- If no semantic search or literal-only mode ----
     if (mode === 'literal' || !this.semanticSearchReady || !this.synapse) {
-      return textResults.slice(0, limit).map(r => ({
+      const results = textResults.slice(0, limit).map(r => ({
         ...(r.doc || this.entityToDevPlanDoc(this.graph.getEntity(r.id)!)),
         score: r.score,
       }));
+      // Phase-54: LLM Reranking（即使 literal 模式也可受益）
+      return maybeRerank(results);
     }
 
     // ---- Semantic Search ----
@@ -939,10 +1272,11 @@ export class DevPlanGraphStore implements IDevPlanStore {
     } catch (e) {
       console.warn(`[DevPlan] Semantic search failed: ${e instanceof Error ? e.message : String(e)}`);
       // 降级为 text-only 搜索
-      return textResults.slice(0, limit).map(r => ({
+      const results = textResults.slice(0, limit).map(r => ({
         ...(r.doc || this.entityToDevPlanDoc(this.graph.getEntity(r.id)!)),
         score: r.score,
       }));
+      return maybeRerank(results);
     }
 
     if (mode === 'semantic') {
@@ -956,11 +1290,14 @@ export class DevPlanGraphStore implements IDevPlanStore {
         }
         if (docs.length >= limit) break;
       }
-      return docs;
+      // Phase-54: LLM Reranking
+      return maybeRerank(docs);
     }
 
     // ---- Hybrid Mode: Three-way RRF Fusion (vector + BM25/literal) ----
-    return this.rrfFusionThreeWay(semanticHits, textResults, limit, minScore);
+    const rrfResults = this.rrfFusionThreeWay(semanticHits, textResults, limit, minScore);
+    // Phase-54: LLM Reranking 作为最终精排步骤
+    return maybeRerank(rrfResults);
   }
 
   /**
@@ -1988,10 +2325,13 @@ export class DevPlanGraphStore implements IDevPlanStore {
     if (existingDup) {
       // 已存在相同记忆 → 更新而非新建
       const oldProps = existingDup.properties as any;
+      // Phase-58: 更新时也使用 L2 作为可搜索内容, L3 存原文
+      const updatedContent = input.contentL2 || input.content;
       this.graph.updateEntity(existingDup.id, {
         properties: {
           ...oldProps,
-          content: input.content,
+          content: updatedContent,
+          contentL3: input.contentL3 || oldProps.contentL3 || null,
           memoryType: input.memoryType,
           tags: input.tags || oldProps.tags || [],
           importance: input.importance ?? oldProps.importance ?? 0.5,
@@ -2018,10 +2358,15 @@ export class DevPlanGraphStore implements IDevPlanStore {
     // ---- 新建记忆 ----
     const entityName = `Memory: ${input.memoryType} — ${input.content.slice(0, 40)}`;
 
+    // Phase-58: 三层内容差异化存储
+    // - content: 用于向量索引和语义搜索（优先使用 L2 详细内容）
+    // - contentL3: 原始文档全文（如提供）
+    const searchableContent = input.contentL2 || input.content;
     const entity = this.graph.addEntity(entityName, ET.MEMORY, {
       projectName: this.projectName,
       memoryType: input.memoryType,
-      content: input.content,
+      content: searchableContent,
+      contentL3: input.contentL3 || null,
       tags: input.tags || [],
       relatedTaskId: input.relatedTaskId || null,
       sourceId: input.sourceId || null,
@@ -2095,6 +2440,21 @@ export class DevPlanGraphStore implements IDevPlanStore {
       conflictsDetected = this.detectMemoryConflicts(entity, embedding);
     }
 
+    // ---- Phase-57: 三维记忆 — Anchor + Flow + Structure ----
+    let anchorResult: Memory['anchorInfo'] | undefined;
+    let flowResult: Memory['flowEntry'] | undefined;
+    let structureSnapshotId: string | undefined;
+    try {
+      const anchorData = this.integrateAnchorFlowStructure(input, entity.id);
+      if (anchorData) {
+        anchorResult = anchorData.anchorInfo;
+        flowResult = anchorData.flowEntry;
+        structureSnapshotId = anchorData.structureSnapshotId;
+      }
+    } catch (e) {
+      console.warn(`[DevPlan] Anchor/Flow/Structure integration failed (non-fatal): ${e instanceof Error ? e.message : String(e)}`);
+    }
+
     this.graph.flush();
     const result = this.entityToMemory(entity);
     if (decompositionSummary) {
@@ -2102,6 +2462,15 @@ export class DevPlanGraphStore implements IDevPlanStore {
     }
     if (conflictsDetected && conflictsDetected.length > 0) {
       result.conflicts = conflictsDetected;
+    }
+    if (anchorResult) {
+      result.anchorInfo = anchorResult;
+    }
+    if (flowResult) {
+      result.flowEntry = flowResult;
+    }
+    if (structureSnapshotId) {
+      result.structureSnapshotId = structureSnapshotId;
     }
     return result;
   }
@@ -2225,6 +2594,285 @@ export class DevPlanGraphStore implements IDevPlanStore {
       }
     } catch (e) {
       console.warn(`[DevPlan] autoLinkMemoryToModule failed: ${e instanceof Error ? e.message : String(e)}`);
+    }
+  }
+
+  // ==========================================================================
+  // Phase-57: 三维记忆集成 — Anchor / Flow / Structure
+  // ==========================================================================
+
+  /**
+   * Phase-57: 集成触点(Anchor) + 记忆流(Flow) + 结构链(Structure)
+   *
+   * 在 saveMemory 时自动执行：
+   * 1. 从 content 中提取或使用显式指定的触点名称
+   * 2. upsert Anchor（去重，不会创建重复触点）
+   * 3. 追加 FlowEntry 到 Anchor 的记忆流
+   * 4. 如有组件信息则创建 StructureSnapshot
+   * 5. 建立 memory → anchor 的 ANCHORED_BY 关系
+   *
+   * 所有操作都是优雅降级的 — 如果 NAPI 方法不可用，静默跳过。
+   */
+  private integrateAnchorFlowStructure(
+    input: MemoryInput,
+    memoryEntityId: string,
+  ): {
+    anchorInfo?: Memory['anchorInfo'];
+    flowEntry?: Memory['flowEntry'];
+    structureSnapshotId?: string;
+  } | null {
+    // 检查 NAPI 方法是否可用（需要 aifastdb 包含 Phase-122 构建）
+    const g = this.graph as any;
+    if (typeof g.anchorUpsert !== 'function') {
+      return null;
+    }
+
+    // ---- Step 1: 确定触点名称 ----
+    let anchorName = input.anchorName;
+    let anchorType = input.anchorType || ANCHOR_TYPES.CONCEPT;
+
+    if (!anchorName) {
+      // 自动从内容中提取触点
+      try {
+        const extracted: NativeExtractedAnchor[] = g.anchorExtractFromText(input.content);
+        if (extracted && extracted.length > 0) {
+          // 取置信度最高的
+          const best = extracted.reduce(
+            (a: NativeExtractedAnchor, b: NativeExtractedAnchor) => a.confidence > b.confidence ? a : b,
+          );
+          anchorName = best.name;
+          anchorType = best.suggested_type || anchorType;
+        }
+      } catch (e) {
+        console.warn(`[DevPlan] anchorExtractFromText failed: ${e instanceof Error ? e.message : String(e)}`);
+      }
+    }
+
+    if (!anchorName) {
+      // 无法提取触点 — 静默返回，不影响正常记忆保存
+      return null;
+    }
+
+    // ---- Step 2: Upsert Anchor（基于 name + type 去重）----
+    // Phase-58: L1 → anchor description, L2 → flow detail, L3 → memory entity content
+    // Phase-63: anchorOverview → L2 目录索引层（inspired by OpenViking .overview.md）
+    const description = (input.contentL1 || input.content.slice(0, 100)).replace(/\n/g, ' ');
+    const overview = input.anchorOverview || undefined;
+    let anchorInfo: NativeAnchorInfo;
+    let isNew = false;
+
+    try {
+      // 先检查是否已有同名触点
+      const existing: NativeAnchorInfo | null = g.anchorFind(anchorName, anchorType);
+      isNew = !existing;
+      anchorInfo = g.anchorUpsert(anchorName, anchorType, description, overview);
+    } catch (e) {
+      console.warn(`[DevPlan] anchorUpsert failed for "${anchorName}": ${e instanceof Error ? e.message : String(e)}`);
+      return null;
+    }
+
+    // Phase-63: 如果 anchorUpsert 的 NAPI 签名尚未包含 overview 参数，
+    // 使用独立的 anchorUpdateOverview 方法补充设置
+    if (overview && typeof g.anchorUpdateOverview === 'function') {
+      try {
+        g.anchorUpdateOverview(anchorInfo.id, overview);
+      } catch (e) {
+        console.warn(`[DevPlan] anchorUpdateOverview failed: ${e instanceof Error ? e.message : String(e)}`);
+      }
+    }
+
+    // ---- Step 3: 追加 FlowEntry ----
+    const changeType = input.changeType || (isNew ? CHANGE_TYPES.CREATED : CHANGE_TYPES.MODIFIED);
+    // Phase-58: L1 → flow summary (触点摘要), L2 → flow detail (结构化详情)
+    const summary = (input.contentL1 || input.content.slice(0, 80)).replace(/\n/g, ' ');
+    const detail = input.contentL2 || input.content;
+    const sourceTask = input.relatedTaskId || undefined;
+
+    let flowEntry: NativeFlowEntry | null = null;
+    try {
+      flowEntry = g.flowAppend(
+        anchorInfo.id,
+        changeType,
+        summary,
+        detail,
+        sourceTask ?? null,
+      );
+    } catch (e) {
+      console.warn(`[DevPlan] flowAppend failed: ${e instanceof Error ? e.message : String(e)}`);
+    }
+
+    // ---- Step 4: 建立 memory → anchor 关系 ----
+    try {
+      this.graph.putRelation(memoryEntityId, anchorInfo.id, 'anchored_by');
+    } catch (e) {
+      console.warn(`[DevPlan] putRelation anchored_by failed: ${e instanceof Error ? e.message : String(e)}`);
+    }
+
+    // ---- Step 5: 创建 StructureSnapshot（如提供了组件信息）----
+    let structureSnapshotId: string | undefined;
+    if (input.structureComponents && input.structureComponents.length > 0 && flowEntry) {
+      try {
+        const components: NativeComponentRef[] = input.structureComponents.map(c => ({
+          anchorId: c.anchorId,
+          role: c.role,
+          versionHint: c.versionHint,
+        }));
+        const snapshot: NativeStructureSnapshot | null = g.structureSnapshot(
+          flowEntry.id,
+          anchorInfo.id,
+          flowEntry.version,
+          components,
+        );
+        if (snapshot) {
+          structureSnapshotId = snapshot.id;
+        }
+      } catch (e) {
+        console.warn(`[DevPlan] structureSnapshot failed: ${e instanceof Error ? e.message : String(e)}`);
+      }
+    }
+
+    return {
+      anchorInfo: {
+        id: anchorInfo.id,
+        name: anchorInfo.name,
+        anchorType: anchorInfo.anchor_type,
+        description: anchorInfo.description,
+        version: anchorInfo.version,
+        isNew,
+      },
+      flowEntry: flowEntry ? {
+        id: flowEntry.id,
+        version: flowEntry.version,
+        changeType: flowEntry.change_type,
+        summary: flowEntry.summary,
+      } : undefined,
+      structureSnapshotId,
+    };
+  }
+
+  /**
+   * Phase-57: 查询指定触点的记忆流历史
+   */
+  queryAnchorFlow(anchorName: string, anchorType?: string, filter?: NativeFlowFilter): NativeFlowEntry[] {
+    const g = this.graph as any;
+    if (typeof g.anchorFind !== 'function') return [];
+
+    const type = anchorType || ANCHOR_TYPES.CONCEPT;
+    const anchor: NativeAnchorInfo | null = g.anchorFind(anchorName, type);
+    if (!anchor) {
+      // 尝试按名称模糊查找
+      const byName: NativeAnchorInfo | null = g.anchorFindByName(anchorName);
+      if (!byName) return [];
+      return g.flowQuery(byName.id, filter ?? null);
+    }
+    return g.flowQuery(anchor.id, filter ?? null);
+  }
+
+  /**
+   * Phase-57: 列出项目中的所有触点
+   */
+  listAnchors(anchorTypeFilter?: string): NativeAnchorInfo[] {
+    const g = this.graph as any;
+    if (typeof g.anchorList !== 'function') return [];
+    return g.anchorList(anchorTypeFilter ?? null);
+  }
+
+  /**
+   * Phase-57: 获取触点的当前结构
+   */
+  getAnchorStructure(anchorId: string): NativeStructureSnapshot | null {
+    const g = this.graph as any;
+    if (typeof g.structureCurrent !== 'function') return null;
+    return g.structureCurrent(anchorId);
+  }
+
+  /**
+   * Phase-57: 计算两个版本之间的结构差异
+   */
+  getStructureDiff(anchorId: string, fromVersion: number, toVersion: number): NativeStructureDiff | null {
+    const g = this.graph as any;
+    if (typeof g.structureDiff !== 'function') return null;
+    return g.structureDiff(anchorId, fromVersion, toVersion);
+  }
+
+  /**
+   * Phase-57: 为召回的记忆结果附加三维信息（Anchor / Flow / Structure）
+   *
+   * 层级下钻逻辑：
+   * - L1 (触点): 通过 anchored_by 关系找到关联的 Anchor，附加 anchorInfo
+   * - L2 (记忆流): 查询 Anchor 的最近 5 条 FlowEntry，附加 flowEntries
+   * - L3 (结构): 查询 Anchor 的当前 StructureSnapshot，附加 structureSnapshot
+   *
+   * 仅处理 sourceKind='memory' 的结果（文档类型不需要下钻）。
+   * 所有操作都是优雅降级的 — NAPI 不可用时静默跳过。
+   */
+  private enrichMemoriesWithAnchorInfo(results: ScoredMemory[]): void {
+    const g = this.graph as any;
+    if (typeof g.anchorGetById !== 'function') return;
+
+    for (const mem of results) {
+      if (mem.sourceKind !== 'memory') continue;
+
+      try {
+        // L1: 找到记忆关联的 Anchor（通过 anchored_by 关系）
+        const outgoing = this.graph.outgoingByType(mem.id, 'anchored_by') as Relation[];
+        if (!outgoing || outgoing.length === 0) continue;
+
+        const anchorId = outgoing[0].target;
+        const anchor: NativeAnchorInfo | null = g.anchorGetById(anchorId);
+        if (!anchor) continue;
+
+        // 附加 L1 触点信息
+        mem.anchorInfo = {
+          id: anchor.id,
+          name: anchor.name,
+          anchorType: anchor.anchor_type,
+          description: anchor.description,
+          version: anchor.version,
+          flowCount: anchor.flow_count,
+        };
+
+        // L2: 查询记忆流（最近 5 条）
+        try {
+          const entries: NativeFlowEntry[] = g.flowQuery(anchorId, {
+            limit: 5,
+            newestFirst: true,
+          });
+          if (entries && entries.length > 0) {
+            mem.flowEntries = entries.map(e => ({
+              id: e.id,
+              version: e.version,
+              changeType: e.change_type,
+              summary: e.summary,
+              detail: e.detail,
+              sourceTask: e.source_task,
+              createdAt: e.created_at,
+            }));
+          }
+        } catch {
+          // L2 失败不影响 L1
+        }
+
+        // L3: 查询当前结构快照
+        try {
+          const snapshot: NativeStructureSnapshot | null = g.structureCurrent(anchorId);
+          if (snapshot && snapshot.components.length > 0) {
+            mem.structureSnapshot = {
+              id: snapshot.id,
+              version: snapshot.version,
+              components: snapshot.components.map(c => ({
+                anchorId: c.anchorId,
+                role: c.role,
+                versionHint: c.versionHint,
+              })),
+            };
+          }
+        } catch {
+          // L3 失败不影响 L1/L2
+        }
+      } catch {
+        // 单条记忆的 anchor enrichment 失败不影响其他记忆
+      }
     }
   }
 
@@ -2712,7 +3360,10 @@ export class DevPlanGraphStore implements IDevPlanStore {
     // ---- 2. 文档召回（统一召回） ----
     if (!includeDocs || options?.memoryType) {
       // 如果不需要文档或指定了 memoryType 过滤，直接返回记忆结果
-      return memoryResults;
+      // Phase-57: 三维记忆层级下钻
+      this.enrichMemoriesWithAnchorInfo(memoryResults);
+      // Phase-54: LLM Reranking
+      return this.rerankSearchResults(query, memoryResults, limit);
     }
 
     let docResults: ScoredMemory[] = [];
@@ -2721,6 +3372,7 @@ export class DevPlanGraphStore implements IDevPlanStore {
         mode: this.semanticSearchReady ? 'hybrid' : 'literal',
         limit: Math.max(5, Math.floor(limit / 2)),
         minScore: minScore > 0 ? minScore : undefined,
+        _skipRerank: true,  // Phase-54: 避免双重重排 — recallMemory 会在最终结果上统一重排
       });
 
       for (const doc of docHits) {
@@ -2750,10 +3402,20 @@ export class DevPlanGraphStore implements IDevPlanStore {
     }
 
     // ---- 3. RRF 融合排序 ----
-    if (docResults.length === 0) return memoryResults;
-    if (memoryResults.length === 0) return docResults.slice(0, limit);
+    let finalResults: ScoredMemory[];
+    if (docResults.length === 0) {
+      finalResults = memoryResults;
+    } else if (memoryResults.length === 0) {
+      finalResults = docResults.slice(0, limit);
+    } else {
+      finalResults = this.rrfMergeResults(memoryResults, docResults, limit);
+    }
 
-    return this.rrfMergeResults(memoryResults, docResults, limit);
+    // Phase-57: 三维记忆层级下钻 — 为 memory 类型的结果附加 anchor/flow/structure 信息
+    this.enrichMemoriesWithAnchorInfo(finalResults);
+
+    // Phase-54: LLM Reranking 作为最终精排步骤
+    return this.rerankSearchResults(query, finalResults, limit);
   }
 
   /**
@@ -3522,6 +4184,85 @@ export class DevPlanGraphStore implements IDevPlanStore {
       // 非关键路径，忽略错误
     }
 
+    // 9. Phase-57: 触点索引 — 列出项目中所有已注册的记忆触点
+    let anchorIndex: MemoryContext['anchorIndex'];
+    try {
+      const g57 = this.graph as any;
+      if (typeof g57.anchorList === 'function') {
+        // 列出所有类型的触点
+        const anchorTypes = ['module', 'concept', 'api', 'architecture', 'feature', 'library', 'protocol'];
+        const allAnchors: Array<{ id: string; name: string; type: string; description: string; version: number; status: string; flowCount: number }> = [];
+
+        for (const aType of anchorTypes) {
+          try {
+            const anchors: NativeAnchorInfo[] = g57.anchorList(aType);
+            if (anchors && anchors.length > 0) {
+              for (const a of anchors) {
+                allAnchors.push({
+                  id: a.id,
+                  name: a.name,
+                  type: a.anchor_type,
+                  description: a.description,
+                  version: a.version,
+                  status: a.status,
+                  flowCount: a.flow_count,
+                });
+              }
+            }
+          } catch {
+            // 该类型无触点，静默跳过
+          }
+        }
+
+        if (allAnchors.length > 0) {
+          // 按 flowCount 降序排列（活跃的触点优先）
+          allAnchors.sort((a, b) => b.flowCount - a.flowCount);
+          anchorIndex = allAnchors;
+        }
+      }
+    } catch (_e) {
+      // NAPI 不可用，静默忽略
+    }
+
+    // 10. Phase-57: 结构概览 — 展示关键触点的当前结构组成
+    let structureOverview: MemoryContext['structureOverview'];
+    try {
+      const g57 = this.graph as any;
+      if (typeof g57.structureCurrent === 'function' && anchorIndex) {
+        const overviews: NonNullable<MemoryContext['structureOverview']> = [];
+        // 只展示 feature/module 类型且有组件结构的触点
+        const structuralAnchors = anchorIndex.filter(
+          a => (a.type === 'feature' || a.type === 'module') && a.status === 'active',
+        ).slice(0, 10); // 最多展示 10 个
+
+        for (const anchor of structuralAnchors) {
+          try {
+            const snapshot: NativeStructureSnapshot | null = g57.structureCurrent(anchor.id);
+            if (snapshot && snapshot.components && snapshot.components.length > 0) {
+              overviews.push({
+                anchorName: anchor.name,
+                anchorType: anchor.type,
+                version: snapshot.version,
+                components: snapshot.components.map(c => ({
+                  anchorId: c.anchorId,
+                  role: c.role,
+                  versionHint: c.versionHint,
+                })),
+              });
+            }
+          } catch {
+            // 该触点无结构快照，静默跳过
+          }
+        }
+
+        if (overviews.length > 0) {
+          structureOverview = overviews;
+        }
+      }
+    } catch (_e) {
+      // NAPI 不可用，静默忽略
+    }
+
     return {
       projectName: this.projectName,
       recentTasks,
@@ -3532,6 +4273,8 @@ export class DevPlanGraphStore implements IDevPlanStore {
       relatedDocs: relatedDocs.length > 0 ? relatedDocs : undefined,
       moduleMemories: moduleMemories.length > 0 ? moduleMemories : undefined,
       memoryClusters,
+      anchorIndex,
+      structureOverview,
     };
   }
 
@@ -3778,6 +4521,8 @@ export class DevPlanGraphStore implements IDevPlanStore {
       lastAccessedAt: p.lastAccessedAt || null,
       createdAt: p.createdAt || e.created_at,
       updatedAt: p.updatedAt || p.createdAt || e.created_at,
+      // Phase-58: L3 完整内容
+      contentL3: p.contentL3 || undefined,
     };
 
     // Phase-48: 恢复分解摘要 — 从实体 properties 读取
@@ -3956,15 +4701,22 @@ export class DevPlanGraphStore implements IDevPlanStore {
         // 推断重要性：P0 高优先级 → 0.8, P1 → 0.6, P2 → 0.5
         const importanceMap: Record<string, number> = { P0: 0.8, P1: 0.6, P2: 0.5 };
 
+        // Phase-58: 同时传递完整内容 + Claude Skills 指令
         allEligible.push({
           sourceType: 'task',
           sourceId: task.taskId,
           sourceTitle: task.title,
           content,
+          contentL3: content,
           suggestedMemoryType: 'summary',
           suggestedImportance: importanceMap[task.priority] || 0.6,
           suggestedTags: [task.taskId, task.priority],
           hasExistingMemory: false,
+          skillInstructions: {
+            l1Prompt: `请为以下开发任务生成一句话的触点摘要（L1）。要求：极度精简，不超过30字，标识这个任务实现了什么功能。\n\n任务ID：${task.taskId}\n任务标题：${task.title}`,
+            l2Prompt: `请为以下开发任务生成详细记忆内容（L2）。要求：3~5句话，包含关键实现细节、技术方案和完成的子任务摘要。\n\n任务ID：${task.taskId}\n任务标题：${task.title}`,
+            l3Prompt: `请为以下开发任务生成完整记忆（L3）。要求：保留所有子任务信息、完成状态、关键技术决策。\n\n任务ID：${task.taskId}\n任务标题：${task.title}`,
+          },
         });
       }
     }
@@ -4066,15 +4818,23 @@ export class DevPlanGraphStore implements IDevPlanStore {
         if (doc.subSection) tags.push(doc.subSection);
         if (doc.relatedTaskIds) tags.push(...doc.relatedTaskIds);
 
+        // Phase-58: 同时传递原始完整内容 + Claude Skills 指令
+        const fullDocContent = doc.content;
         allEligible.push({
           sourceType: 'document',
           sourceId: docKey,
           sourceTitle: doc.title,
           content,
+          contentL3: fullDocContent,
           suggestedMemoryType: refinedType,
           suggestedImportance: suggestedImportance,
           suggestedTags: tags,
           hasExistingMemory: false,
+          skillInstructions: {
+            l1Prompt: `请为以下文档生成一句话的触点摘要（L1）。要求：极度精简，不超过30字，作为记忆的"入口"标识。\n\n文档标题：${doc.title}\n文档类型：${doc.section}`,
+            l2Prompt: `请为以下文档生成详细记忆内容（L2）。要求：3~5句话，包含关键技术细节、设计决策和核心概念。不要复制原文，用自己的话概括要点。\n\n文档标题：${doc.title}\n文档类型：${doc.section}`,
+            l3Prompt: `请为以下文档生成结构化摘要（L3）。要求：保留所有关键信息、API名称、技术参数，可以使用 Markdown 列表。尽可能完整，但去除重复和冗余内容。\n\n文档标题：${doc.title}\n文档类型：${doc.section}`,
+          },
         });
       }
     }
@@ -4152,6 +4912,83 @@ export class DevPlanGraphStore implements IDevPlanStore {
 
       if (relations.length > 0) {
         candidate.suggestedRelations = relations;
+      }
+    }
+
+    // ========== Phase-57: 为候选项匹配触点 + 推断变更类型 ==========
+    const g57 = this.graph as any;
+    const hasAnchorApi = typeof g57.anchorExtractFromText === 'function'
+      && typeof g57.anchorFindByName === 'function';
+
+    if (hasAnchorApi) {
+      for (const candidate of allEligible) {
+        try {
+          // Step 1: 从内容中提取潜在触点名称
+          const extracted: NativeExtractedAnchor[] = g57.anchorExtractFromText(candidate.content);
+          if (!extracted || extracted.length === 0) continue;
+
+          // 取置信度最高的
+          const best = extracted.reduce(
+            (a: NativeExtractedAnchor, b: NativeExtractedAnchor) => a.confidence > b.confidence ? a : b,
+          );
+
+          // Step 2: 尝试匹配已有触点
+          let existingAnchor: NativeAnchorInfo | null = null;
+          try {
+            existingAnchor = g57.anchorFindByName(best.name);
+          } catch { /* 未找到 → null */ }
+
+          candidate.suggestedAnchor = best.name;
+          candidate.suggestedAnchorType = best.suggested_type || ANCHOR_TYPES.CONCEPT;
+          candidate.hasExistingAnchor = !!existingAnchor;
+
+          // Step 3: 推断变更类型
+          if (!existingAnchor) {
+            // 全新触点 → created
+            candidate.suggestedChangeType = CHANGE_TYPES.CREATED;
+          } else {
+            // 已有触点 → 判断是 upgraded 还是 modified
+            const contentLower = candidate.content.toLowerCase();
+            const upgradeKeywords = ['升级', 'upgrade', '增强', 'enhance', '重构', 'refactor', '新增', '扩展', 'extend', 'v2', 'v3'];
+            const isUpgrade = upgradeKeywords.some(kw => contentLower.includes(kw));
+            candidate.suggestedChangeType = isUpgrade ? CHANGE_TYPES.UPGRADED : CHANGE_TYPES.MODIFIED;
+          }
+        } catch (e) {
+          // 触点提取失败不影响候选项的其他信息
+          console.warn(`[DevPlan] anchor extraction failed for candidate ${candidate.sourceId}: ${e instanceof Error ? e.message : String(e)}`);
+        }
+      }
+    } else {
+      // NAPI 不可用时，使用简单的标题/内容启发式推断
+      for (const candidate of allEligible) {
+        try {
+          const title = candidate.sourceTitle;
+          // 从任务标题中提取触点名称（如 "Phase 14: 向量存储支持" → "向量存储支持"）
+          const phaseMatch = title.match(/^Phase\s*[-:]?\s*\d+[A-Za-z]?\s*[:：]\s*(.+)/i);
+          const sectionMatch = title.match(/^(.+?)(?:\s*[-—]\s*.+)?$/);
+
+          let anchorName: string | undefined;
+          if (candidate.sourceType === 'task' && phaseMatch) {
+            anchorName = phaseMatch[1].trim();
+          } else if (candidate.sourceType === 'document' && sectionMatch) {
+            anchorName = sectionMatch[1].trim();
+          }
+
+          if (anchorName && anchorName.length >= 2 && anchorName.length <= 50) {
+            candidate.suggestedAnchor = anchorName;
+            // 根据来源类型推断触点类型
+            if (candidate.sourceType === 'task') {
+              candidate.suggestedAnchorType = ANCHOR_TYPES.FEATURE;
+              candidate.suggestedChangeType = CHANGE_TYPES.CREATED;
+            } else {
+              candidate.suggestedAnchorType = ANCHOR_TYPES.CONCEPT;
+              candidate.suggestedChangeType = CHANGE_TYPES.CREATED;
+            }
+            candidate.hasExistingAnchor = false;
+          }
+        } catch {
+          // 静默忽略
+        }
       }
     }
 

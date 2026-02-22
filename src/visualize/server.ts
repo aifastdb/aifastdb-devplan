@@ -18,7 +18,7 @@
 import * as http from 'http';
 import * as path from 'path';
 import { DevPlanGraphStore } from '../dev-plan-graph-store';
-import { createDevPlan, getDefaultBasePath, resolveBasePathForProject } from '../dev-plan-factory';
+import { createDevPlan, getDefaultBasePath, resolveBasePathForProject, readDevPlanConfig } from '../dev-plan-factory';
 import type { IDevPlanStore } from '../dev-plan-interface';
 import { getVisualizationHTML } from './template';
 import { getGraphCanvasScript } from './graph-canvas/index';
@@ -745,6 +745,80 @@ function startServer(projectName: string, basePath: string, port: number): void 
           break;
         }
 
+        case '/api/doc/save': {
+          // POST /api/doc/save — 保存/更新文档片段（upsert 语义）
+          if (req.method !== 'POST') {
+            res.writeHead(405, { 'Content-Type': 'application/json; charset=utf-8' });
+            res.end(JSON.stringify({ error: 'Method Not Allowed. Use POST.' }));
+            break;
+          }
+
+          const docBody = await readRequestBody(req);
+          if (!docBody || !docBody.section || !docBody.title || !docBody.content) {
+            res.writeHead(400, { 'Content-Type': 'application/json; charset=utf-8' });
+            res.end(JSON.stringify({ error: '缺少必需参数: section, title, content' }));
+            break;
+          }
+
+          try {
+            const docStore = createFreshStore(projectName, basePath);
+            const docId = docStore.saveSection({
+              projectName,
+              section: docBody.section,
+              title: docBody.title,
+              content: docBody.content,
+              version: docBody.version || '1.0.0',
+              subSection: docBody.subSection || undefined,
+              moduleId: docBody.moduleId || undefined,
+              parentDoc: docBody.parentDoc || undefined,
+            });
+            res.writeHead(200, { 'Content-Type': 'application/json; charset=utf-8' });
+            res.end(JSON.stringify({ success: true, id: docId, message: '文档已保存' }));
+          } catch (saveErr: any) {
+            res.writeHead(500, { 'Content-Type': 'application/json; charset=utf-8' });
+            res.end(JSON.stringify({ error: '保存文档失败: ' + (saveErr.message || String(saveErr)) }));
+          }
+          break;
+        }
+
+        case '/api/doc/add': {
+          // POST /api/doc/add — 新增文档片段（insert 语义，已存在则报错 409）
+          if (req.method !== 'POST') {
+            res.writeHead(405, { 'Content-Type': 'application/json; charset=utf-8' });
+            res.end(JSON.stringify({ error: 'Method Not Allowed. Use POST.' }));
+            break;
+          }
+
+          const addDocBody = await readRequestBody(req);
+          if (!addDocBody || !addDocBody.section || !addDocBody.title || !addDocBody.content) {
+            res.writeHead(400, { 'Content-Type': 'application/json; charset=utf-8' });
+            res.end(JSON.stringify({ error: '缺少必需参数: section, title, content' }));
+            break;
+          }
+
+          try {
+            const addDocStore = createFreshStore(projectName, basePath);
+            const addDocId = addDocStore.addSection({
+              projectName,
+              section: addDocBody.section,
+              title: addDocBody.title,
+              content: addDocBody.content,
+              version: addDocBody.version || '1.0.0',
+              subSection: addDocBody.subSection || undefined,
+              moduleId: addDocBody.moduleId || undefined,
+              parentDoc: addDocBody.parentDoc || undefined,
+            });
+            res.writeHead(201, { 'Content-Type': 'application/json; charset=utf-8' });
+            res.end(JSON.stringify({ success: true, id: addDocId, message: '文档已新增' }));
+          } catch (addErr: any) {
+            // 区分"已存在"错误（409）和其他错误（500）
+            const isConflict = addErr.message && addErr.message.includes('已存在');
+            res.writeHead(isConflict ? 409 : 500, { 'Content-Type': 'application/json; charset=utf-8' });
+            res.end(JSON.stringify({ error: addErr.message || String(addErr), conflict: isConflict }));
+          }
+          break;
+        }
+
         case '/api/chat': {
           // POST /api/chat — 智能文档对话（元信息问答 + 语义搜索 + 分数过滤）
           if (req.method !== 'POST') {
@@ -1340,6 +1414,75 @@ function startServer(projectName: string, basePath: string, port: number): void 
             'Cache-Control': 'public, max-age=3600',
           });
           res.end(graphCanvasJs);
+          break;
+        }
+
+        case '/api/batch/config': {
+          // Phase-60: 获取 LLM 批量生成配置（供浏览器端直连 Ollama）
+          const wsConfig = readDevPlanConfig() || {} as any;
+          const llmCfg = (wsConfig as any)?.llmAnalyze || {};
+          const ollamaBaseUrl = (llmCfg.ollamaBaseUrl || 'http://localhost:11434/v1').replace(/\/v1\/?$/, '').replace(/\/+$/, '');
+          const ollamaModel = llmCfg.ollamaModel || 'gemma3:27b';
+          res.writeHead(200, { 'Content-Type': 'application/json; charset=utf-8' });
+          res.end(JSON.stringify({
+            ollamaBaseUrl,
+            ollamaModel,
+            systemPrompt: `你是一个记忆构建助手。请根据以下文档/任务内容生成多级记忆。
+生成三个层级（必须以 JSON 返回）：
+- L1（触点摘要）：一句话概括（15~30字），作为记忆的"入口"或"触点"
+- L2（详细记忆）：3~8句话，包含关键技术细节、设计决策、实现方案。要保留重要的技术名词和架构关系
+- L3_summary（结构总结）：列出主要组件、依赖关系及其作用（如果内容是技术文档）。如果是非技术内容，则提供内容的结构化摘要
+- memoryType：从 decision/pattern/bugfix/insight/preference/summary 中选择最合适的类型
+- importance：重要性评分 0~1
+- suggestedTags：建议标签数组
+- anchorName：触点名称（该记忆关联的核心概念/模块/功能）
+- anchorType：触点类型（module/concept/api/architecture/feature/library/protocol）
+- anchorOverview：触点概览（3~5句话的目录索引式摘要，列出该触点包含的关键子项、核心 Flow 条目、主要结构组件等。类似文件夹的 README，帮助 Agent 快速判断是否需要深入查看详情）
+
+请严格以 JSON 格式返回：
+{"L1": "...", "L2": "...", "L3_summary": "...", "memoryType": "...", "importance": 0.7, "suggestedTags": [...], "anchorName": "...", "anchorType": "...", "anchorOverview": "..."}`,
+          }));
+          break;
+        }
+
+        case '/api/batch/save': {
+          // Phase-60: 批量保存一条带 L1/L2/L3 的记忆（浏览器端 LLM 生成后调用）
+          if (req.method !== 'POST') {
+            res.writeHead(405, { 'Content-Type': 'application/json; charset=utf-8' });
+            res.end(JSON.stringify({ error: 'Method Not Allowed. Use POST.' }));
+            break;
+          }
+          const batchSaveBody = await readRequestBody(req);
+          const batchSaveStore = createFreshStore(projectName, basePath);
+          if (typeof (batchSaveStore as any).saveMemory !== 'function') {
+            res.writeHead(400, { 'Content-Type': 'application/json; charset=utf-8' });
+            res.end(JSON.stringify({ error: 'saveMemory not supported (requires graph engine)' }));
+            break;
+          }
+          try {
+            const saved = (batchSaveStore as any).saveMemory({
+              projectName,
+              memoryType: batchSaveBody.memoryType || 'insight',
+              content: batchSaveBody.content || '',
+              tags: batchSaveBody.tags || [],
+              relatedTaskId: batchSaveBody.relatedTaskId || undefined,
+              sourceId: batchSaveBody.sourceId || undefined,
+              importance: batchSaveBody.importance ?? 0.5,
+              source: 'batch_import_ui',
+              contentL1: batchSaveBody.contentL1 || undefined,
+              contentL2: batchSaveBody.contentL2 || undefined,
+              contentL3: batchSaveBody.contentL3 || undefined,
+              anchorName: batchSaveBody.anchorName || undefined,
+              anchorType: batchSaveBody.anchorType || undefined,
+              anchorOverview: batchSaveBody.anchorOverview || undefined,
+              changeType: batchSaveBody.changeType || undefined,
+            });
+            res.writeHead(200, { 'Content-Type': 'application/json; charset=utf-8' });
+            res.end(JSON.stringify({ status: 'saved', memory: saved }));
+          } catch (e: any) {
+            res.writeHead(500, { 'Content-Type': 'application/json; charset=utf-8' });
+            res.end(JSON.stringify({ error: e.message || String(e) }));
+          }
           break;
         }
 

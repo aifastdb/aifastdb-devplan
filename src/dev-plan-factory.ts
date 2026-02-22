@@ -139,6 +139,43 @@ export interface DevPlanConfig {
   enableTextSearch?: boolean;
 
   /**
+   * Phase-54: 是否启用 LLM Reranking（搜索结果精排）
+   *
+   * 启用后，搜索结果会经过 LLM 语义重排。
+   * Ollama 不可用时自动跳过，不影响正常使用。
+   */
+  enableReranking?: boolean;
+
+  /**
+   * Phase-54: LLM Reranking 使用的模型名称（默认 "gemma3:4b"）
+   */
+  rerankModel?: string;
+
+  /**
+   * Phase-54: LLM 服务 Base URL（默认 "http://localhost:11434/v1"）
+   */
+  rerankBaseUrl?: string;
+
+  /**
+   * Phase-57B: LLM 分析配置（devplan_llm_analyze 工具的默认后端）
+   *
+   * engine 一键切换：
+   * - "cursor": Cursor 自己分析
+   * - "ollama": LlmGateway → 本机 Ollama（默认模型 gemma3:27b）
+   * - "models_online": LlmGateway → 在线模型（默认 DeepSeek）
+   */
+  llmAnalyze?: {
+    engine?: 'cursor' | 'ollama' | 'models_online';
+    ollamaModel?: string;
+    ollamaBaseUrl?: string;
+    onlineProvider?: string;
+    onlineModel?: string;
+    onlineBaseUrl?: string;
+    onlineApiKey?: string;
+    onlineProtocol?: string;
+  };
+
+  /**
    * 多项目工作区注册表：projectName → 项目根目录路径。
    *
    * 当 projectName 在此表中找到时，数据存储到对应项目的 .devplan/ 目录，
@@ -441,6 +478,19 @@ export function createDevPlan(
     ?? workspaceConfig?.enableTextSearch
     ?? false;
 
+  // Phase-54: 读取 LLM Reranking 配置
+  const enableReranking = projectConfig?.enableReranking
+    ?? workspaceConfig?.enableReranking
+    ?? false;
+  const rerankModel = projectConfig?.rerankModel
+    ?? workspaceConfig?.rerankModel;
+  const rerankBaseUrl = projectConfig?.rerankBaseUrl
+    ?? workspaceConfig?.rerankBaseUrl;
+
+  // Phase-57B: 读取 LLM Analyze 配置
+  const llmAnalyze = projectConfig?.llmAnalyze
+    ?? workspaceConfig?.llmAnalyze;
+
   // 推导项目根目录（用于 git 操作的 cwd）
   // base 是 .devplan 目录路径（如 D:\xxx\project\.devplan），dirname 即项目根
   const gitCwd = base !== defaultBase ? path.dirname(base) : undefined;
@@ -456,6 +506,10 @@ export function createDevPlan(
       perceptionPreset,
       perceptionConfig,
       enableTextSearch,
+      enableReranking,
+      rerankModel,
+      rerankBaseUrl,
+      llmAnalyze,
       gitCwd,
     });
   } else {

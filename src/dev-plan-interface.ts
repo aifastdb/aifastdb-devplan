@@ -48,9 +48,18 @@ export interface IDevPlanStore {
   // ==========================================================================
 
   /**
-   * 保存文档片段（如果同 section+subSection 已存在则覆盖）
+   * 保存文档片段（如果同 section+subSection 已存在则覆盖 — upsert 语义）
    */
   saveSection(input: DevPlanDocInput): string;
+
+  /**
+   * 新增文档片段（纯新增，如果同 section+subSection 已存在则抛错）
+   *
+   * 与 saveSection 的区别：
+   * - saveSection: upsert 语义，已存在则覆盖
+   * - addSection:  insert 语义，已存在则报错，防止意外覆盖
+   */
+  addSection(input: DevPlanDocInput): string;
 
   /**
    * 获取文档片段

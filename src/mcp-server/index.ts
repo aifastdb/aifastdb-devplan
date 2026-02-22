@@ -71,6 +71,17 @@ import {
   updateAutopilotConfig,
   getLastHeartbeat,
 } from '../autopilot';
+import {
+  type BatchCacheFile,
+  type BatchCacheEntry,
+  readBatchCache,
+  writeBatchCache,
+  createBatchCache,
+  appendEntry,
+  getCacheStats,
+  deleteBatchCache,
+  getCachePath,
+} from '../batch-cache';
 
 // ============================================================================
 // Async Mutex — 串行化重型操作（embedding + decompose），防止并发过载崩溃
@@ -949,6 +960,49 @@ const TOOLS = [
           type: 'string',
           description: 'Optional: Additional context for the decomposer (e.g., current task description).\n可选：为分解器提供的额外上下文信息（如当前任务描述）。',
         },
+        // ---- Phase-58: 三层差异化内容 ----
+        contentL1: {
+          type: 'string',
+          description: 'Optional (Phase-58): L1 触点摘要（可选）\n\n极度精简的记忆摘要，作为记忆的"入口"或"触点"。\n如果提供，将用于 Anchor 的 description 和 FlowEntry 的 summary。',
+        },
+        contentL2: {
+          type: 'string',
+          description: 'Optional (Phase-58): L2 详细记忆（可选）\n\n包含关键技术细节和设计决策的详细记忆内容。\n如果提供，将用于 FlowEntry 的 detail。',
+        },
+        contentL3: {
+          type: 'string',
+          description: 'Optional (Phase-58): L3 完整内容（可选）\n\n原始文档的完整内容或其核心部分。\n如果提供，将用于 Memory 实体本身的 content 字段。',
+        },
+        // ---- Phase-57: 三维记忆参数 ----
+        anchorName: {
+          type: 'string',
+          description: 'Optional (Phase-57): Explicitly specify the memory anchor (touch point) name. If omitted, auto-extracted from content.\n可选（Phase-57）：显式指定触点名称。不提供则自动从内容中提取。',
+        },
+        anchorType: {
+          type: 'string',
+          description: 'Optional (Phase-57): Anchor type — module | concept | api | architecture | feature | library | protocol. Default: concept.\n可选（Phase-57）：触点类型。默认 concept。',
+        },
+        anchorOverview: {
+          type: 'string',
+          description: 'Optional (Phase-63): Anchor overview — a 3~5 sentence directory-index summary listing key sub-items, core flow entries, and structural components. Similar to OpenViking .overview.md. Helps Agent quickly decide whether to dive deeper.\n可选（Phase-63）：触点概览 — 3~5句话的目录索引式摘要。',
+        },
+        changeType: {
+          type: 'string',
+          description: 'Optional (Phase-57): Change type — created | upgraded | modified | removed | deprecated. Auto-inferred if omitted.\n可选（Phase-57）：变更类型。不提供则自动推断（新触点=created，已有=modified）。',
+        },
+        structureComponents: {
+          type: 'array',
+          items: {
+            type: 'object',
+            properties: {
+              anchorId: { type: 'string', description: 'Component anchor ID' },
+              role: { type: 'string', description: 'Component role (core | dependency | plugin etc.)' },
+              versionHint: { type: 'string', description: 'Optional version hint' },
+            },
+            required: ['anchorId', 'role'],
+          },
+          description: 'Optional (Phase-57): Structure components for L3 structural snapshot. Each component references an existing Anchor ID + role.\n可选（Phase-57）：结构组件列表，用于创建 L3 结构快照。每个组件引用一个已有触点 ID + 角色。',
+        },
       },
       required: ['projectName', 'memoryType', 'content'],
     },
@@ -1153,6 +1207,338 @@ const TOOLS = [
       required: ['projectName'],
     },
   },
+  // ========== Phase-57: 三维记忆 MCP 工具 ==========
+  {
+    name: 'devplan_anchor_list',
+    description: 'List all registered memory anchors (touch points) in the project. Anchors represent unique entities tracked by the memory system — modules, concepts, APIs, features, etc. Each anchor has a memory flow recording its evolution.\n列出项目中所有已注册的记忆触点。触点代表记忆系统跟踪的唯一实体（模块、概念、API、功能等），每个触点关联一个记忆流记录其演变历程。',
+    inputSchema: {
+      type: 'object' as const,
+      properties: {
+        projectName: {
+          type: 'string',
+          description: `Project name (default: "${DEFAULT_PROJECT_NAME}")\n项目名称（默认："${DEFAULT_PROJECT_NAME}"）`,
+        },
+        anchorType: {
+          type: 'string',
+          description: 'Optional: Filter by anchor type (module | concept | api | architecture | feature | library | protocol). Omit to list all.\n可选：按触点类型过滤。省略则列出全部。',
+        },
+      },
+      required: ['projectName'],
+    },
+  },
+  {
+    name: 'devplan_flow_query',
+    description: 'Query the memory flow (evolution history) of a specific anchor. Returns chronological entries showing how the entity was created, modified, upgraded, or deprecated over time.\n查询指定触点的记忆流（演变历史）。返回按时间排列的条目，展示实体的创建、修改、升级或废弃过程。',
+    inputSchema: {
+      type: 'object' as const,
+      properties: {
+        projectName: {
+          type: 'string',
+          description: `Project name (default: "${DEFAULT_PROJECT_NAME}")\n项目名称（默认："${DEFAULT_PROJECT_NAME}"）`,
+        },
+        anchorName: {
+          type: 'string',
+          description: 'Anchor name to query flow for\n要查询记忆流的触点名称',
+        },
+        anchorType: {
+          type: 'string',
+          description: 'Optional: Anchor type for disambiguation\n可选：触点类型（用于消歧义）',
+        },
+        changeType: {
+          type: 'string',
+          description: 'Optional: Filter by change type (created | upgraded | modified | removed | deprecated)\n可选：按变更类型过滤',
+        },
+        limit: {
+          type: 'number',
+          description: 'Optional: Maximum entries to return (default: 20)\n可选：最大返回条目数（默认 20）',
+        },
+        newestFirst: {
+          type: 'boolean',
+          description: 'Optional: Sort newest first (default: true)\n可选：最新的排在前面（默认 true）',
+        },
+      },
+      required: ['projectName', 'anchorName'],
+    },
+  },
+  {
+    name: 'devplan_structure_diff',
+    description: 'Compare the structural composition of an anchor between two versions. Shows which components were added, removed, or changed. Useful for understanding how a feature or module evolved structurally.\n比较触点在两个版本之间的结构组成差异。显示哪些组件被添加、移除或修改。用于理解功能或模块的结构性演变。',
+    inputSchema: {
+      type: 'object' as const,
+      properties: {
+        projectName: {
+          type: 'string',
+          description: `Project name (default: "${DEFAULT_PROJECT_NAME}")\n项目名称（默认："${DEFAULT_PROJECT_NAME}"）`,
+        },
+        anchorName: {
+          type: 'string',
+          description: 'Anchor name to diff structure for\n要比较结构差异的触点名称',
+        },
+        anchorType: {
+          type: 'string',
+          description: 'Optional: Anchor type for disambiguation\n可选：触点类型（用于消歧义）',
+        },
+        fromVersion: {
+          type: 'number',
+          description: 'Optional: Start version (default: current - 1)\n可选：起始版本（默认：当前版本-1）',
+        },
+        toVersion: {
+          type: 'number',
+          description: 'Optional: End version (default: current)\n可选：结束版本（默认：当前版本）',
+        },
+      },
+      required: ['projectName', 'anchorName'],
+    },
+  },
+  {
+    name: 'devplan_structure_create',
+    description: 'Create a standalone L3 structure snapshot for an anchor, without creating a new memory. Describes the structural composition (dependencies/components) of a feature, module, or concept at its current version. If no FlowEntry exists yet, automatically creates one with changeType "modified".\n为触点创建独立的 L3 结构快照，无需创建新记忆。描述功能/模块/概念在当前版本的结构组成（依赖/组件）。如果尚无记忆流条目，会自动创建一条 changeType=modified 的条目。',
+    inputSchema: {
+      type: 'object' as const,
+      properties: {
+        projectName: {
+          type: 'string',
+          description: `Project name (default: "${DEFAULT_PROJECT_NAME}")\n项目名称（默认："${DEFAULT_PROJECT_NAME}"）`,
+        },
+        anchorName: {
+          type: 'string',
+          description: 'Anchor name to create structure for. Must already exist (use devplan_memory_save with anchorName to create one first).\n要创建结构的触点名称。必须已存在（先用 devplan_memory_save + anchorName 创建）。',
+        },
+        anchorType: {
+          type: 'string',
+          description: 'Optional: Anchor type for disambiguation\n可选：触点类型（用于消歧义）',
+        },
+        components: {
+          type: 'array',
+          items: {
+            type: 'object',
+            properties: {
+              anchorId: { type: 'string', description: 'Component anchor ID (use devplan_anchor_list to find IDs)\n组件触点 ID（可用 devplan_anchor_list 查找）' },
+              role: { type: 'string', description: 'Component role: core | dependency | plugin | adapter | util etc.\n组件角色' },
+              versionHint: { type: 'string', description: 'Optional: Version hint for this component\n可选：组件版本提示' },
+            },
+            required: ['anchorId', 'role'],
+          },
+          description: 'Structure components — each references an existing anchor ID + role. Use devplan_anchor_list to find anchor IDs.\n结构组件列表 — 每个引用一个已有触点 ID + 角色。用 devplan_anchor_list 查找触点 ID。',
+        },
+        description: {
+          type: 'string',
+          description: 'Optional: Description of this structure snapshot (e.g., "v2 added vector store support")\n可选：此结构快照的描述',
+        },
+      },
+      required: ['projectName', 'anchorName', 'components'],
+    },
+  },
+  // ========== Phase-57B: 触点驱动记忆构建工具集 ==========
+  {
+    name: 'devplan_anchor_create',
+    description: 'Create an anchor (touch point) independently, without creating a memory. Use this in the "Anchor-Driven" memory construction workflow to plan the anchor index FIRST, then build memories around each anchor.\n独立创建触点（不绑定记忆）。用于"触点驱动"记忆构建流程：先规划触点索引，再围绕每个触点构建多级记忆。\n\nTypical workflow:\n1. devplan_anchor_create(name, type) — register the anchor\n2. devplan_memory_save(anchorName=...) — attach memories to it\n3. devplan_structure_create(anchorName=...) — define its components\n4. devplan_anchor_query(anchorName=...) — verify the full picture',
+    inputSchema: {
+      type: 'object' as const,
+      properties: {
+        projectName: {
+          type: 'string',
+          description: `Project name (default: "${DEFAULT_PROJECT_NAME}")\n项目名称（默认："${DEFAULT_PROJECT_NAME}"）`,
+        },
+        anchorName: {
+          type: 'string',
+          description: 'Anchor name (must be unique within the same type)\n触点名称（同类型内唯一）',
+        },
+        anchorType: {
+          type: 'string',
+          description: 'Anchor type: module | concept | api | architecture | feature | library | protocol. Default: concept.\n触点类型。默认 concept。',
+        },
+        description: {
+          type: 'string',
+          description: 'Short description of this anchor\n触点的简短描述',
+        },
+        anchorOverview: {
+          type: 'string',
+          description: 'Optional (Phase-63): Anchor overview — a 3~5 sentence directory-index summary. Similar to OpenViking .overview.md.\n可选（Phase-63）：触点概览 — 3~5句话的目录索引式摘要。',
+        },
+        changeType: {
+          type: 'string',
+          description: 'Optional: Initial change type for the first FlowEntry. Default: "created".\n可选：首条记忆流的变更类型。默认 "created"。',
+        },
+        flowSummary: {
+          type: 'string',
+          description: 'Optional: Summary for the initial FlowEntry. Default: uses description.\n可选：首条记忆流的摘要。默认使用 description。',
+        },
+        flowDetail: {
+          type: 'string',
+          description: 'Optional: Detail text for the initial FlowEntry.\n可选：首条记忆流的详细内容。',
+        },
+      },
+      required: ['projectName', 'anchorName'],
+    },
+  },
+  {
+    name: 'devplan_anchor_query',
+    description: 'Query complete information for an anchor: basic info + memory flow history + current structure snapshot + parent structures that contain this anchor as a component. This is the "360° view" of a touch point.\n查询触点的完整信息：基本信息 + 记忆流历史 + 当前结构快照 + 包含此触点的父级结构链。这是触点的"360°视图"。',
+    inputSchema: {
+      type: 'object' as const,
+      properties: {
+        projectName: {
+          type: 'string',
+          description: `Project name (default: "${DEFAULT_PROJECT_NAME}")\n项目名称（默认："${DEFAULT_PROJECT_NAME}"）`,
+        },
+        anchorName: {
+          type: 'string',
+          description: 'Anchor name to query\n要查询的触点名称',
+        },
+        anchorType: {
+          type: 'string',
+          description: 'Optional: Anchor type for disambiguation\n可选：触点类型（用于消歧义）',
+        },
+        includeFlow: {
+          type: 'boolean',
+          description: 'Optional: Include memory flow entries (default: true)\n可选：是否包含记忆流（默认 true）',
+        },
+        includeStructure: {
+          type: 'boolean',
+          description: 'Optional: Include current structure snapshot (default: true)\n可选：是否包含当前结构快照（默认 true）',
+        },
+        includeParents: {
+          type: 'boolean',
+          description: 'Optional: Include parent structures that contain this anchor (default: true)\n可选：是否包含包含此触点的父级结构（默认 true）',
+        },
+        flowLimit: {
+          type: 'number',
+          description: 'Optional: Maximum flow entries to return (default: 20)\n可选：最大记忆流条目数（默认 20）',
+        },
+      },
+      required: ['projectName', 'anchorName'],
+    },
+  },
+  {
+    name: 'devplan_structure_affected_by',
+    description: 'Reverse structure query: find all parent anchors that include the specified anchor as a component in their structure. Answers "which features/modules depend on this component?".\n结构反向查询：查找所有在其结构中包含指定触点作为组件的父级触点。回答"哪些功能/模块依赖此组件？"',
+    inputSchema: {
+      type: 'object' as const,
+      properties: {
+        projectName: {
+          type: 'string',
+          description: `Project name (default: "${DEFAULT_PROJECT_NAME}")\n项目名称（默认："${DEFAULT_PROJECT_NAME}"）`,
+        },
+        anchorName: {
+          type: 'string',
+          description: 'Component anchor name to check\n要检查的组件触点名称',
+        },
+        anchorType: {
+          type: 'string',
+          description: 'Optional: Anchor type for disambiguation\n可选：触点类型（用于消歧义）',
+        },
+      },
+      required: ['projectName', 'anchorName'],
+    },
+  },
+  {
+    name: 'devplan_llm_analyze',
+    description: 'Use local Ollama LLM to analyze text and return structured JSON. Supports multiple analysis modes for anchor-driven memory construction.\n使用本地 Ollama LLM 分析文本并返回结构化 JSON。支持多种分析模式用于触点驱动记忆构建。\n\nAnalysis modes:\n- "extract_anchors": Extract anchor candidates from a document/task description\n- "determine_change": Determine change type (created/upgraded/modified) for an anchor based on content\n- "build_structure": Analyze structural composition of a feature/module\n- "generate_memory": Generate multi-level memory content (L1 summary + L2 detail) for an anchor\n- "custom": Free-form analysis with custom prompt\n\nRequires Ollama running locally (default: http://localhost:11434/v1).',
+    inputSchema: {
+      type: 'object' as const,
+      properties: {
+        projectName: {
+          type: 'string',
+          description: `Project name (default: "${DEFAULT_PROJECT_NAME}")\n项目名称（默认："${DEFAULT_PROJECT_NAME}"）`,
+        },
+        mode: {
+          type: 'string',
+          enum: ['extract_anchors', 'determine_change', 'build_structure', 'generate_memory', 'custom'],
+          description: 'Analysis mode\n分析模式',
+        },
+        content: {
+          type: 'string',
+          description: 'Text content to analyze\n要分析的文本内容',
+        },
+        anchorName: {
+          type: 'string',
+          description: 'Optional: Anchor name context (for determine_change, build_structure, generate_memory modes)\n可选：触点名称上下文',
+        },
+        model: {
+          type: 'string',
+          description: 'Optional: Ollama model to use (default: "qwen3:8b")\n可选：使用的 Ollama 模型（默认 "qwen3:8b"）',
+        },
+        customPrompt: {
+          type: 'string',
+          description: 'Optional: Custom system prompt (for "custom" mode)\n可选：自定义系统提示（仅 "custom" 模式）',
+        },
+        baseUrl: {
+          type: 'string',
+          description: 'Optional: Ollama API base URL (default: "http://localhost:11434/v1")\n可选：Ollama API 地址',
+        },
+      },
+      required: ['projectName', 'mode', 'content'],
+    },
+  },
+  // ========== Phase-59: 分相批量记忆导入 ==========
+  {
+    name: 'devplan_memory_batch_prepare',
+    description: 'Phase A of batch memory import pipeline. Fetches all memory candidates, calls LLM (Ollama/online) to generate L1/L2/L3 content for each, and caches results to a local JSON file. The LLM model stays loaded throughout — no model swapping. After Phase A completes, call devplan_memory_batch_commit for Phase B.\n分相批量记忆导入的 Phase A。获取所有记忆候选项，调用 LLM（Ollama/在线模型）为每个候选项生成 L1/L2/L3 内容，结果缓存到本地 JSON 文件。LLM 模型全程保持加载，避免模型交换。Phase A 完成后调用 devplan_memory_batch_commit 执行 Phase B。\n\n**Pipeline (流水线)**:\n```\nPhase A (this tool): gemma3 一次加载 → 处理全部候选 → 缓存到文件\n                    ═══ 唯一一次模型交换 ═══\nPhase B (batch_commit): qwen3-embedding 一次加载 → 批量保存+embedding\n```\nSpeed: ~5x faster than sequential processing (290 swaps → 1 swap).',
+    inputSchema: {
+      type: 'object' as const,
+      properties: {
+        projectName: {
+          type: 'string',
+          description: `Project name (default: "${DEFAULT_PROJECT_NAME}")\n项目名称（默认："${DEFAULT_PROJECT_NAME}"）`,
+        },
+        source: {
+          type: 'string',
+          enum: ['tasks', 'docs', 'both'],
+          description: 'Data source: "tasks" for completed phases, "docs" for documents, "both" for all (default: "both")\n数据源（默认 "both"）',
+        },
+        limit: {
+          type: 'number',
+          description: 'Maximum candidates to process in this batch. **limit=0: 后台自动工作流** — 启动后台循环自动处理所有候选，立即返回，用 batch_status 查看实时进度。limit>0: 同步处理指定数量。(default: 1)\n本批处理的最大候选数。**0=后台自动全部处理**。默认每次 1 个。',
+        },
+        resume: {
+          type: 'boolean',
+          description: 'If true, resume from existing cache (skip already prepared entries). If false, start fresh. (default: true)\n是否从已有缓存续接。false 则重新开始。',
+        },
+      },
+      required: ['projectName'],
+    },
+  },
+  {
+    name: 'devplan_memory_batch_commit',
+    description: 'Phase B of batch memory import pipeline. Reads the cache file generated by devplan_memory_batch_prepare, then saves each entry as a memory (triggering embedding generation). The embedding model stays loaded throughout.\n分相批量记忆导入的 Phase B。读取 Phase A 生成的缓存文件，逐条保存为记忆（触发 embedding 生成）。Embedding 模型全程保持加载。\n\nCall devplan_memory_batch_prepare first to populate the cache.',
+    inputSchema: {
+      type: 'object' as const,
+      properties: {
+        projectName: {
+          type: 'string',
+          description: `Project name (default: "${DEFAULT_PROJECT_NAME}")\n项目名称（默认："${DEFAULT_PROJECT_NAME}"）`,
+        },
+        limit: {
+          type: 'number',
+          description: 'Maximum entries to commit in this call. **limit=0: 后台自动工作流** — 启动后台循环自动提交所有条目，立即返回，用 batch_status 查看进度。limit>0: 同步处理指定数量。(default: 10)\n本次提交的最大条目数。**0=后台自动全部处理**。默认每次 10 条。',
+        },
+        dryRun: {
+          type: 'boolean',
+          description: 'If true, only report what would be committed without actually saving. (default: false)\n仅预览不保存。',
+        },
+      },
+      required: ['projectName'],
+    },
+  },
+  {
+    name: 'devplan_memory_batch_status',
+    description: 'Query the status of the batch memory import cache. Shows Phase A (prepare) and Phase B (commit) progress, entry counts, and engine/model info.\n查询批量记忆导入缓存的状态。显示 Phase A 和 Phase B 的进度、条目数、引擎/模型信息。',
+    inputSchema: {
+      type: 'object' as const,
+      properties: {
+        projectName: {
+          type: 'string',
+          description: `Project name (default: "${DEFAULT_PROJECT_NAME}")\n项目名称（默认："${DEFAULT_PROJECT_NAME}"）`,
+        },
+        clear: {
+          type: 'boolean',
+          description: 'If true, delete the cache file after reporting status. (default: false)\n如果为 true，报告状态后删除缓存文件。',
+        },
+      },
+      required: ['projectName'],
+    },
+  },
 ];
 
 // ============================================================================
@@ -1251,6 +1637,57 @@ interface ToolArgs {
   llmDecompositionJson?: string;
   /** Phase-47: devplan_memory_save: 分解器上下文 */
   decomposeContext?: string;
+  /** Phase-57: devplan_anchor_list / devplan_flow_query / devplan_memory_save: 触点类型 */
+  anchorType?: string;
+  /** Phase-57: devplan_flow_query / devplan_memory_save: 触点名称 */
+  anchorName?: string;
+  /** Phase-57: devplan_flow_query / devplan_memory_save: 变更类型 */
+  changeType?: string;
+  /** Phase-57: devplan_flow_query: 最新排前 */
+  newestFirst?: boolean;
+  /** Phase-57: devplan_structure_diff: 起始版本 */
+  fromVersion?: number;
+  /** Phase-57: devplan_structure_diff: 结束版本 */
+  toVersion?: number;
+  /** Phase-57: devplan_memory_save: 结构组件列表 (L3 结构快照) */
+  structureComponents?: Array<{ anchorId: string; role: string; versionHint?: string }>;
+  /** Phase-57: devplan_structure_create: 组件列表 */
+  components?: Array<{ anchorId: string; role: string; versionHint?: string }>;
+  /** Phase-63: devplan_memory_save / devplan_anchor_create: 触点概览（L2 目录索引） */
+  anchorOverview?: string;
+  /** Phase-63: devplan_anchor_create: overview 别名 */
+  overview?: string;
+  // ---- Phase-57B: 触点驱动工具集 ----
+  /** devplan_anchor_create: 初始记忆流摘要 */
+  flowSummary?: string;
+  /** devplan_anchor_create: 初始记忆流详情 */
+  flowDetail?: string;
+  /** devplan_anchor_query: 是否包含记忆流 */
+  includeFlow?: boolean;
+  /** devplan_anchor_query: 是否包含结构快照 */
+  includeStructure?: boolean;
+  /** devplan_anchor_query: 是否包含父级结构 */
+  includeParents?: boolean;
+  /** devplan_anchor_query: 记忆流最大条目 */
+  flowLimit?: number;
+  /** devplan_llm_analyze: Ollama 模型名 */
+  model?: string;
+  /** devplan_llm_analyze: 自定义系统 prompt */
+  customPrompt?: string;
+  /** devplan_llm_analyze: Ollama API 地址 */
+  baseUrl?: string;
+  // ---- Phase-58: 三层差异化内容 ----
+  /** Phase-58: L1 触点摘要 */
+  contentL1?: string;
+  /** Phase-58: L2 详细记忆 */
+  contentL2?: string;
+  /** Phase-58: L3 完整内容 */
+  contentL3?: string;
+  // ---- Phase-59: 分相批量记忆导入 ----
+  /** Phase-59: batch_prepare 是否续接已有缓存 */
+  resume?: boolean;
+  /** Phase-59: batch_status 是否清理缓存文件 */
+  clear?: boolean;
 }
 
 /**
@@ -1269,6 +1706,22 @@ function resolveProjectName(args: ToolArgs, toolName: string): string | undefine
   if (toolName === 'devplan_init') return undefined;
   return factoryResolveProjectName(undefined);
 }
+
+// ========== Phase-59B: 后台自动工作流状态 ==========
+interface BackgroundTaskState {
+  running: boolean;
+  phase: 'A' | 'B';
+  projectName: string;
+  prepared: number;
+  committed: number;
+  total: number;
+  errors: number;
+  startedAt: number;
+  lastProcessedAt: number;
+  currentTitle: string;
+  speed: string; // tok/s or items/s
+}
+let bgTask: BackgroundTaskState | null = null;
 
 async function handleToolCall(name: string, args: ToolArgs): Promise<string> {
   // 统一解析 projectName 默认值（devplan_init 例外）
@@ -2514,6 +2967,16 @@ async function handleToolCall(name: string, args: ToolArgs): Promise<string> {
           decompose,
           llmDecompositionJson: args.llmDecompositionJson,
           decomposeContext: args.decomposeContext,
+          // Phase-58: 三层差异化内容
+          contentL1: args.contentL1,
+          contentL2: args.contentL2,
+          contentL3: args.contentL3,
+          // Phase-57: 三维记忆参数
+          anchorName: args.anchorName,
+          anchorType: args.anchorType,
+          anchorOverview: args.anchorOverview,
+          changeType: args.changeType,
+          structureComponents: args.structureComponents,
         });
 
         // Phase-51: 冲突信息摘要
@@ -2752,6 +3215,1687 @@ async function handleToolCall(name: string, args: ToolArgs): Promise<string> {
         report,
         message: `Scanned ${report.scanned} memories: ${report.promoted} promoted, ${report.demoted} demoted${extrasStr} (${report.durationMs}ms)`,
       });
+    }
+
+    // ========== Phase-57: 三维记忆 MCP 工具处理器 ==========
+
+    case 'devplan_anchor_list': {
+      const projectName = args.projectName!;
+      const plan = getDevPlan(projectName);
+      const g = (plan as any).graph as any;
+
+      if (!g || typeof g.anchorList !== 'function') {
+        return JSON.stringify({
+          status: 'unsupported',
+          message: 'Anchor API requires aifastdb with Phase-122 NAPI bindings. Please update aifastdb and rebuild.',
+          anchors: [],
+        });
+      }
+
+      const anchorTypes = args.anchorType
+        ? [args.anchorType]
+        : ['module', 'concept', 'api', 'architecture', 'feature', 'library', 'protocol'];
+
+      const allAnchors: any[] = [];
+      for (const aType of anchorTypes) {
+        try {
+          const anchors = g.anchorList(aType);
+          if (anchors && anchors.length > 0) {
+            allAnchors.push(...anchors);
+          }
+        } catch {
+          // 该类型无触点，静默跳过
+        }
+      }
+
+      // 按 flow_count 降序排列
+      allAnchors.sort((a: any, b: any) => (b.flow_count || 0) - (a.flow_count || 0));
+
+      return JSON.stringify({
+        status: 'ok',
+        projectName,
+        totalAnchors: allAnchors.length,
+        anchors: allAnchors.map((a: any) => ({
+          id: a.id,
+          name: a.name,
+          type: a.anchor_type,
+          description: a.description,
+          overview: a.overview || null,
+          version: a.version,
+          status: a.status,
+          flowCount: a.flow_count,
+          createdAt: a.created_at,
+          updatedAt: a.updated_at,
+        })),
+      });
+    }
+
+    case 'devplan_flow_query': {
+      const projectName = args.projectName!;
+      const anchorName = args.anchorName;
+      if (!anchorName) {
+        throw new McpError(ErrorCode.InvalidParams, 'anchorName is required');
+      }
+
+      const plan = getDevPlan(projectName);
+      const g = (plan as any).graph as any;
+
+      if (!g || typeof g.anchorFindByName !== 'function' || typeof g.flowQuery !== 'function') {
+        return JSON.stringify({
+          status: 'unsupported',
+          message: 'Flow query requires aifastdb with Phase-122 NAPI bindings.',
+          entries: [],
+        });
+      }
+
+      // 查找触点
+      let anchor: any = null;
+      try {
+        if (args.anchorType) {
+          anchor = g.anchorFind(anchorName, args.anchorType);
+        } else {
+          anchor = g.anchorFindByName(anchorName);
+        }
+      } catch {
+        // 未找到
+      }
+
+      if (!anchor) {
+        return JSON.stringify({
+          status: 'not_found',
+          message: `Anchor "${anchorName}" not found.`,
+          entries: [],
+        });
+      }
+
+      // 查询记忆流
+      let entries: any[] = [];
+      try {
+        const filter: any = {};
+        if (args.changeType) filter.changeType = args.changeType;
+        if (args.limit) filter.limit = args.limit;
+        filter.newestFirst = args.newestFirst !== false; // 默认 true
+        entries = g.flowQuery(anchor.id, filter) || [];
+      } catch (e) {
+        return JSON.stringify({
+          status: 'error',
+          message: `Flow query failed: ${e instanceof Error ? e.message : String(e)}`,
+          entries: [],
+        });
+      }
+
+      return JSON.stringify({
+        status: 'ok',
+        projectName,
+        anchor: {
+          id: anchor.id,
+          name: anchor.name,
+          type: anchor.anchor_type,
+          version: anchor.version,
+          status: anchor.status,
+          flowCount: anchor.flow_count,
+        },
+        totalEntries: entries.length,
+        entries: entries.map((e: any) => ({
+          id: e.id,
+          version: e.version,
+          changeType: e.change_type,
+          summary: e.summary,
+          detail: e.detail,
+          sourceTask: e.source_task,
+          prevEntryId: e.prev_entry_id,
+          createdAt: e.created_at,
+        })),
+      });
+    }
+
+    case 'devplan_structure_diff': {
+      const projectName = args.projectName!;
+      const anchorName = args.anchorName;
+      if (!anchorName) {
+        throw new McpError(ErrorCode.InvalidParams, 'anchorName is required');
+      }
+
+      const plan = getDevPlan(projectName);
+      const g = (plan as any).graph as any;
+
+      if (!g || typeof g.anchorFindByName !== 'function' || typeof g.structureDiff !== 'function') {
+        return JSON.stringify({
+          status: 'unsupported',
+          message: 'Structure diff requires aifastdb with Phase-122 NAPI bindings.',
+        });
+      }
+
+      // 查找触点
+      let anchor: any = null;
+      try {
+        if (args.anchorType) {
+          anchor = g.anchorFind(anchorName, args.anchorType);
+        } else {
+          anchor = g.anchorFindByName(anchorName);
+        }
+      } catch {
+        // 未找到
+      }
+
+      if (!anchor) {
+        return JSON.stringify({
+          status: 'not_found',
+          message: `Anchor "${anchorName}" not found.`,
+        });
+      }
+
+      // 结构差异比较
+      const fromVersion = args.fromVersion ?? Math.max(1, (anchor.version || 1) - 1);
+      const toVersion = args.toVersion ?? (anchor.version || 1);
+
+      let diff: any = null;
+      try {
+        diff = g.structureDiff(anchor.id, fromVersion, toVersion);
+      } catch (e) {
+        return JSON.stringify({
+          status: 'error',
+          message: `Structure diff failed: ${e instanceof Error ? e.message : String(e)}`,
+        });
+      }
+
+      if (!diff) {
+        return JSON.stringify({
+          status: 'no_data',
+          message: `No structure snapshots found for "${anchorName}" between versions ${fromVersion} and ${toVersion}.`,
+          anchor: { id: anchor.id, name: anchor.name, version: anchor.version },
+        });
+      }
+
+      return JSON.stringify({
+        status: 'ok',
+        projectName,
+        anchor: {
+          id: anchor.id,
+          name: anchor.name,
+          type: anchor.anchor_type,
+          version: anchor.version,
+        },
+        diff: {
+          fromVersion: diff.from_version,
+          toVersion: diff.to_version,
+          added: diff.added || [],
+          removed: diff.removed || [],
+          changed: diff.changed || [],
+          unchanged: diff.unchanged || [],
+        },
+        summary: `${(diff.added || []).length} added, ${(diff.removed || []).length} removed, ${(diff.changed || []).length} changed, ${(diff.unchanged || []).length} unchanged`,
+      });
+    }
+
+    case 'devplan_structure_create': {
+      const projectName = args.projectName!;
+      const anchorName = args.anchorName;
+      const components = args.components;
+
+      if (!anchorName) {
+        throw new McpError(ErrorCode.InvalidParams, 'anchorName is required');
+      }
+      if (!components || components.length === 0) {
+        throw new McpError(ErrorCode.InvalidParams, 'components is required and must be non-empty');
+      }
+
+      const plan = getDevPlan(projectName);
+      const g = (plan as any).graph as any;
+
+      if (!g || typeof g.anchorFindByName !== 'function' || typeof g.structureSnapshot !== 'function') {
+        return JSON.stringify({
+          status: 'unsupported',
+          message: 'Structure create requires aifastdb with Phase-122 NAPI bindings.',
+        });
+      }
+
+      // Step 1: 查找触点
+      let anchor: any = null;
+      try {
+        if (args.anchorType) {
+          anchor = g.anchorFind(anchorName, args.anchorType);
+        } else {
+          anchor = g.anchorFindByName(anchorName);
+        }
+      } catch { /* 未找到 */ }
+
+      if (!anchor) {
+        return JSON.stringify({
+          status: 'not_found',
+          message: `Anchor "${anchorName}" not found. Create it first with devplan_memory_save(anchorName: "${anchorName}").`,
+        });
+      }
+
+      // Step 2: 获取或创建 FlowEntry（L3 结构快照必须关联一个 L2 流条目）
+      let flowEntry: any = null;
+      try {
+        // 尝试获取最新的流条目
+        flowEntry = g.flowLatest(anchor.id);
+      } catch { /* 无流条目 */ }
+
+      if (!flowEntry) {
+        // 自动创建一条流条目，用于挂载结构快照
+        try {
+          const desc = args.description || `Structure snapshot for ${anchorName}`;
+          flowEntry = g.flowAppend(
+            anchor.id,
+            'modified',
+            desc.slice(0, 80),
+            desc,
+            null, // sourceTask
+          );
+        } catch (e) {
+          return JSON.stringify({
+            status: 'error',
+            message: `Failed to create FlowEntry for structure: ${e instanceof Error ? e.message : String(e)}`,
+          });
+        }
+      }
+
+      if (!flowEntry) {
+        return JSON.stringify({
+          status: 'error',
+          message: 'Could not find or create a FlowEntry to attach the structure snapshot.',
+        });
+      }
+
+      // Step 3: 创建结构快照
+      let snapshot: any = null;
+      try {
+        snapshot = g.structureSnapshot(
+          flowEntry.id,
+          anchor.id,
+          flowEntry.version || anchor.version || 1,
+          components.map((c: any) => ({
+            anchorId: c.anchorId,
+            role: c.role,
+            versionHint: c.versionHint,
+          })),
+        );
+      } catch (e) {
+        return JSON.stringify({
+          status: 'error',
+          message: `structureSnapshot failed: ${e instanceof Error ? e.message : String(e)}`,
+        });
+      }
+
+      if (!snapshot) {
+        return JSON.stringify({
+          status: 'error',
+          message: 'structureSnapshot returned null — possible NAPI compatibility issue.',
+        });
+      }
+
+      return JSON.stringify({
+        status: 'ok',
+        projectName,
+        anchor: {
+          id: anchor.id,
+          name: anchor.name,
+          type: anchor.anchor_type,
+          version: anchor.version,
+        },
+        flowEntry: {
+          id: flowEntry.id,
+          version: flowEntry.version,
+          changeType: flowEntry.change_type,
+        },
+        snapshot: {
+          id: snapshot.id,
+          version: snapshot.version,
+          componentsCount: snapshot.components?.length || components.length,
+          components: snapshot.components || components,
+        },
+        message: `Structure snapshot created for "${anchorName}" with ${components.length} components at version ${flowEntry.version || anchor.version || 1}.`,
+      });
+    }
+
+    // ==================================================================
+    // Phase-57B: 触点驱动记忆构建工具集
+    // ==================================================================
+
+    case 'devplan_anchor_create': {
+      const projectName = args.projectName!;
+      const anchorName = args.anchorName;
+      const anchorType = args.anchorType || 'concept';
+      const description = args.description || '';
+
+      if (!anchorName) {
+        throw new McpError(ErrorCode.InvalidParams, 'anchorName is required');
+      }
+
+      const plan = getDevPlan(projectName);
+      const g = (plan as any).graph as any;
+
+      if (!g || typeof g.anchorUpsert !== 'function') {
+        return JSON.stringify({
+          status: 'unsupported',
+          message: 'Anchor create requires aifastdb with Phase-122 NAPI bindings.',
+        });
+      }
+
+      // Step 1: 检查触点是否已存在
+      let existing: any = null;
+      try {
+        existing = g.anchorFind(anchorName, anchorType);
+      } catch { /* not found */ }
+
+      if (existing) {
+        return JSON.stringify({
+          status: 'already_exists',
+          projectName,
+          anchor: {
+            id: existing.id,
+            name: existing.name,
+            type: existing.anchor_type || anchorType,
+            version: existing.version,
+            description: existing.description,
+          },
+          message: `Anchor "${anchorName}" (type: ${anchorType}) already exists. Use devplan_memory_save(anchorName=...) to attach memories, or devplan_anchor_query to view full info.`,
+        });
+      }
+
+      // Step 2: 创建触点
+      let anchor: any = null;
+      try {
+        anchor = g.anchorUpsert(anchorName, anchorType, description || anchorName);
+      } catch (e) {
+        return JSON.stringify({
+          status: 'error',
+          message: `anchorUpsert failed: ${e instanceof Error ? e.message : String(e)}`,
+        });
+      }
+
+      if (!anchor) {
+        return JSON.stringify({
+          status: 'error',
+          message: 'anchorUpsert returned null — possible NAPI compatibility issue.',
+        });
+      }
+
+      // Step 2.5 (Phase-63): 设置 Anchor Overview（如果提供）
+      const anchorOverview = args.anchorOverview || args.overview;
+      if (anchorOverview && typeof g.anchorUpdateOverview === 'function') {
+        try {
+          g.anchorUpdateOverview(anchor.id, anchorOverview);
+        } catch (e) {
+          console.warn(`[devplan_anchor_create] anchorUpdateOverview failed (non-fatal): ${e instanceof Error ? e.message : String(e)}`);
+        }
+      }
+
+      // Step 3: 可选 — 创建初始 FlowEntry
+      let flowEntry: any = null;
+      const changeType = args.changeType || 'created';
+      const flowSummary = args.flowSummary || description || `${anchorName} ${changeType}`;
+      const flowDetail = args.flowDetail || '';
+
+      try {
+        flowEntry = g.flowAppend(
+          anchor.id,
+          changeType,
+          flowSummary.slice(0, 80),
+          flowDetail || flowSummary,
+          null, // sourceTask
+        );
+      } catch (e) {
+        // FlowEntry 创建失败不是致命错误
+        console.warn(`[devplan_anchor_create] FlowEntry creation failed (non-fatal): ${e instanceof Error ? e.message : String(e)}`);
+      }
+
+      return JSON.stringify({
+        status: 'ok',
+        projectName,
+        anchor: {
+          id: anchor.id,
+          name: anchor.name || anchorName,
+          type: anchor.anchor_type || anchorType,
+          version: anchor.version || 1,
+          description: anchor.description || description,
+          overview: anchorOverview || anchor.overview || null,
+        },
+        flowEntry: flowEntry ? {
+          id: flowEntry.id,
+          version: flowEntry.version,
+          changeType: flowEntry.change_type || changeType,
+          summary: flowEntry.summary,
+        } : null,
+        message: `Anchor "${anchorName}" created (type: ${anchorType}).${flowEntry ? ` Initial FlowEntry (${changeType}) attached.` : ''}${anchorOverview ? ' Overview set.' : ''} Next: use devplan_memory_save(anchorName="${anchorName}") to build memories.`,
+      });
+    }
+
+    case 'devplan_anchor_query': {
+      const projectName = args.projectName!;
+      const anchorName = args.anchorName;
+      const includeFlow = args.includeFlow !== false; // default true
+      const includeStructure = args.includeStructure !== false; // default true
+      const includeParents = args.includeParents !== false; // default true
+      const flowLimit = args.flowLimit || 20;
+
+      if (!anchorName) {
+        throw new McpError(ErrorCode.InvalidParams, 'anchorName is required');
+      }
+
+      const plan = getDevPlan(projectName);
+      const g = (plan as any).graph as any;
+
+      if (!g || typeof g.anchorFindByName !== 'function') {
+        return JSON.stringify({
+          status: 'unsupported',
+          message: 'Anchor query requires aifastdb with Phase-122 NAPI bindings.',
+        });
+      }
+
+      // Step 1: 查找触点
+      let anchor: any = null;
+      try {
+        if (args.anchorType) {
+          anchor = g.anchorFind(anchorName, args.anchorType);
+        } else {
+          anchor = g.anchorFindByName(anchorName);
+        }
+      } catch { /* not found */ }
+
+      if (!anchor) {
+        return JSON.stringify({
+          status: 'not_found',
+          message: `Anchor "${anchorName}" not found.${args.anchorType ? ` (type: ${args.anchorType})` : ''} Use devplan_anchor_create to create it first.`,
+        });
+      }
+
+      const result: any = {
+        status: 'ok',
+        projectName,
+        anchor: {
+          id: anchor.id,
+          name: anchor.name,
+          type: anchor.anchor_type,
+          version: anchor.version,
+          description: anchor.description,
+          overview: anchor.overview || null,
+          status: anchor.status,
+          createdAt: anchor.created_at,
+          updatedAt: anchor.updated_at,
+        },
+      };
+
+      // Step 2: 记忆流
+      if (includeFlow) {
+        try {
+          const flowEntries = g.flowQuery(anchor.id, null, flowLimit, false);
+          result.flow = {
+            count: flowEntries?.length || 0,
+            entries: (flowEntries || []).map((e: any) => ({
+              id: e.id,
+              version: e.version,
+              changeType: e.change_type,
+              summary: e.summary,
+              detail: e.detail,
+              createdAt: e.created_at,
+            })),
+          };
+        } catch (e) {
+          result.flow = { count: 0, entries: [], error: String(e) };
+        }
+      }
+
+      // Step 3: 当前结构快照
+      if (includeStructure) {
+        try {
+          const structure = g.structureCurrent(anchor.id);
+          if (structure) {
+            result.structure = {
+              id: structure.id,
+              version: structure.version,
+              components: structure.components || [],
+              createdAt: structure.created_at,
+            };
+          } else {
+            result.structure = null;
+          }
+        } catch {
+          result.structure = null;
+        }
+      }
+
+      // Step 4: 父级结构链（反向查询）
+      if (includeParents) {
+        try {
+          const parents = g.structureAffectedBy(anchor.id);
+          result.parentStructures = (parents || []).map((p: any) => ({
+            anchorId: p.anchor_id || p.anchorId || p.id,
+            anchorName: p.anchor_name || p.anchorName || p.name,
+            role: p.role,
+          }));
+        } catch {
+          result.parentStructures = [];
+        }
+      }
+
+      // 构建摘要
+      const flowCount = result.flow?.count || 0;
+      const structCount = result.structure?.components?.length || 0;
+      const parentCount = result.parentStructures?.length || 0;
+      result.summary = `Anchor "${anchorName}" (${anchor.anchor_type}): v${anchor.version || 1} | ${flowCount} flow entries | ${structCount} components | referenced by ${parentCount} parent structures`;
+
+      return JSON.stringify(result);
+    }
+
+    case 'devplan_structure_affected_by': {
+      const projectName = args.projectName!;
+      const anchorName = args.anchorName;
+
+      if (!anchorName) {
+        throw new McpError(ErrorCode.InvalidParams, 'anchorName is required');
+      }
+
+      const plan = getDevPlan(projectName);
+      const g = (plan as any).graph as any;
+
+      if (!g || typeof g.structureAffectedBy !== 'function') {
+        return JSON.stringify({
+          status: 'unsupported',
+          message: 'Structure affected-by query requires aifastdb with Phase-122 NAPI bindings.',
+        });
+      }
+
+      // 先查找触点
+      let anchor: any = null;
+      try {
+        if (args.anchorType) {
+          anchor = g.anchorFind(anchorName, args.anchorType);
+        } else {
+          anchor = g.anchorFindByName(anchorName);
+        }
+      } catch { /* not found */ }
+
+      if (!anchor) {
+        return JSON.stringify({
+          status: 'not_found',
+          message: `Anchor "${anchorName}" not found.`,
+        });
+      }
+
+      // 反向查询
+      let parents: any[] = [];
+      try {
+        parents = g.structureAffectedBy(anchor.id) || [];
+      } catch (e) {
+        return JSON.stringify({
+          status: 'error',
+          message: `structureAffectedBy failed: ${e instanceof Error ? e.message : String(e)}`,
+        });
+      }
+
+      // 对每个父级，获取基本触点信息
+      const enrichedParents = [];
+      for (const p of parents) {
+        const parentId = p.anchor_id || p.anchorId || p.id;
+        let parentAnchor: any = null;
+        try {
+          parentAnchor = g.anchorGetById(parentId);
+        } catch { /* skip */ }
+
+        enrichedParents.push({
+          anchorId: parentId,
+          anchorName: parentAnchor?.name || p.anchor_name || p.name || 'unknown',
+          anchorType: parentAnchor?.anchor_type || p.anchor_type || 'unknown',
+          role: p.role || 'component',
+          version: parentAnchor?.version || 1,
+        });
+      }
+
+      return JSON.stringify({
+        status: 'ok',
+        projectName,
+        anchor: {
+          id: anchor.id,
+          name: anchor.name,
+          type: anchor.anchor_type,
+        },
+        referencedBy: enrichedParents,
+        count: enrichedParents.length,
+        message: `Anchor "${anchorName}" is referenced as a component by ${enrichedParents.length} parent structure(s).`,
+      });
+    }
+
+    case 'devplan_llm_analyze': {
+      const projectName = args.projectName!;
+      const mode = args.mode;
+      const content = args.content;
+      const anchorName = args.anchorName || '';
+      const customPrompt = args.customPrompt || '';
+
+      // ---- 从 config.json 读取 LLM 分析配置 ----
+      // engine 参数一键切换：cursor / ollama / models_online
+      const wsConfig = readDevPlanConfig();
+      const llmCfg = (wsConfig as any)?.llmAnalyze || {};
+      const engine: string = llmCfg.engine || 'cursor'; // 默认 cursor
+
+      if (!mode) {
+        throw new McpError(ErrorCode.InvalidParams, 'mode is required');
+      }
+      if (!content) {
+        throw new McpError(ErrorCode.InvalidParams, 'content is required');
+      }
+
+      // ---- engine = "cursor" → 不调用 LLM，返回提示让 Cursor 自己分析 ----
+      if (engine === 'cursor') {
+        return JSON.stringify({
+          status: 'cursor_mode',
+          projectName,
+          engine: 'cursor',
+          mode,
+          anchorName: anchorName || undefined,
+          content: content.slice(0, 500) + (content.length > 500 ? '...' : ''),
+          message: 'engine=cursor: This tool is skipped. Cursor should analyze the content directly and call devplan_anchor_create / devplan_memory_save / devplan_structure_create based on its own analysis.',
+          hint: {
+            extract_anchors: 'Cursor should extract anchor names, types, and descriptions from the content, then call devplan_anchor_create for each.',
+            determine_change: 'Cursor should determine the change type (created/upgraded/modified/deprecated/removed) and call devplan_memory_save with changeType.',
+            build_structure: 'Cursor should identify components and call devplan_structure_create with the components array.',
+            generate_memory: 'Cursor should generate L1 summary + L2 detail and call devplan_memory_save for each level.',
+          }[mode] || 'Cursor should analyze the content and take appropriate action.',
+          switchTo: 'To use LLM instead, set "engine": "ollama" or "engine": "models_online" in .devplan/config.json llmAnalyze section.',
+        });
+      }
+
+      // ---- 根据 engine 解析 provider / model / baseUrl / apiKey ----
+      let provider: string;
+      let model: string;
+      let baseUrl: string;
+      let apiKey: string | undefined;
+      let protocol: string;
+
+      if (engine === 'ollama') {
+        provider = 'ollama';
+        model = args.model || llmCfg.ollamaModel || 'gemma3:27b';
+        baseUrl = args.baseUrl || llmCfg.ollamaBaseUrl || 'http://localhost:11434/v1';
+        apiKey = undefined;
+        protocol = 'openai_compat';
+      } else {
+        // engine === 'models_online'
+        provider = llmCfg.onlineProvider || 'deepseek';
+        model = args.model || llmCfg.onlineModel || (provider === 'deepseek' ? 'deepseek-chat' : 'gpt-4');
+        baseUrl = args.baseUrl || llmCfg.onlineBaseUrl || (provider === 'deepseek' ? 'https://api.deepseek.com/v1' : 'https://api.openai.com/v1');
+        apiKey = llmCfg.onlineApiKey || undefined;
+        protocol = llmCfg.onlineProtocol || 'openai_compat';
+      }
+
+      // ---- System prompts for each mode ----
+      const systemPrompts: Record<string, string> = {
+        extract_anchors: `你是一个知识图谱构建助手。请从以下文本中提取所有核心"触点"（功能模块、概念、API、架构组件等）。
+每个触点需包含：name（名称）、type（module/feature/concept/api/architecture/library/protocol）、description（一句话描述）。
+请以 JSON 数组格式返回，不要包含其他内容。
+示例：[{"name": "SocialGraphV2", "type": "module", "description": "图结构存储引擎"}, ...]`,
+
+        determine_change: `你是一个版本变更分析助手。请分析以下文本内容，判断触点"${anchorName}"的变更类型。
+可选变更类型：created（新创建）、upgraded（功能升级）、modified（修改调整）、deprecated（弃用）、removed（移除）。
+请以 JSON 格式返回：{"changeType": "...", "summary": "一句话描述变更", "detail": "详细说明", "confidence": 0.8}`,
+
+        build_structure: `你是一个系统架构分析助手。请分析触点"${anchorName}"的结构组成，列出它依赖的所有子组件。
+每个组件需包含：name（组件名）、role（角色：core/dependency/optional/adapter/config）、description（说明）。
+请以 JSON 格式返回：{"components": [{"name": "...", "role": "core", "description": "..."}], "summary": "结构概述"}`,
+
+        generate_memory: `你是一个记忆构建助手。请为触点"${anchorName}"生成多级记忆内容。
+生成三个层级：
+- L1（触点摘要）：一句话概括，作为记忆的"入口"
+- L2（详细记忆）：3~5句话，包含关键技术细节和设计决策
+- L3_summary（结构总结）：列出主要组件及其关系
+请以 JSON 格式返回：{"L1": "...", "L2": "...", "L3_summary": "...", "suggestedTags": ["tag1", "tag2"]}`,
+
+        custom: customPrompt || '请分析以下内容并返回 JSON 格式的结果。',
+      };
+
+      const systemPrompt = systemPrompts[mode] || systemPrompts['custom'];
+
+      // ---- 直接 HTTP 调用 OpenAI-Compatible API (Ollama / DeepSeek / OpenAI) ----
+      // 绕过 LlmGateway NAPI 层，直接通过 HTTP 调用 LLM 推理接口
+      // 这样无需 NAPI 重编译，且支持所有 OpenAI-compatible 端点
+
+      // 验证在线模型的 API Key
+      if (engine === 'models_online' && !apiKey) {
+        return JSON.stringify({
+          status: 'error',
+          engine,
+          provider,
+          message: `Online provider "${provider}" requires an API key. Set onlineApiKey in .devplan/config.json:\n`
+            + `{ "llmAnalyze": { "engine": "models_online", "onlineProvider": "${provider}", "onlineApiKey": "sk-..." } }`,
+        });
+      }
+
+      try {
+        let replyContent = '';
+        let usage: any = {};
+
+        if (engine === 'ollama') {
+          // ---- Ollama 原生 /api/chat + 流式传输 (和 chat_api 方式一致，速度快 10 倍) ----
+          const nativeBase = baseUrl.replace(/\/v1\/?$/, '').replace(/\/+$/, '');
+          const controller = new AbortController();
+          const timer = setTimeout(() => controller.abort(), 300000); // 5 min
+
+          const response = await fetch(nativeBase + '/api/chat', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+              model,
+              messages: [
+                { role: 'system', content: systemPrompt },
+                { role: 'user', content },
+              ],
+              stream: true,
+              keep_alive: '30m',
+              options: { temperature: 0.3, num_predict: 4096 },
+            }),
+            signal: controller.signal,
+          });
+          clearTimeout(timer);
+
+          if (!response.ok) {
+            const errText = await response.text().catch(() => 'unknown');
+            return JSON.stringify({
+              status: 'error',
+              engine,
+              provider,
+              model,
+              httpStatus: response.status,
+              message: `Ollama API returned ${response.status}: ${errText.slice(0, 500)}. Is Ollama running at ${nativeBase}? Is model "${model}" pulled?`,
+              switchTo: 'Set "engine": "cursor" to fallback to Cursor analysis.',
+            });
+          }
+
+          if (!response.body) {
+            return JSON.stringify({ status: 'error', engine, provider, model, message: 'No response body from Ollama.' });
+          }
+
+          // 流式读取（和 chat_api 的 iter_lines 方式一致）
+          const reader = (response.body as any).getReader();
+          const decoder = new TextDecoder();
+          let buffer = '';
+          let evalCount = 0;
+          try {
+            while (true) {
+              const { done, value } = await reader.read();
+              if (done) break;
+              buffer += decoder.decode(value, { stream: true });
+              const lines = buffer.split('\n');
+              buffer = lines.pop() || '';
+              for (const line of lines) {
+                if (!line.trim()) continue;
+                try {
+                  const chunk = JSON.parse(line);
+                  if (chunk.message?.content) replyContent += chunk.message.content;
+                  if (chunk.done) {
+                    evalCount = chunk.eval_count || 0;
+                    usage = {
+                      prompt_tokens: chunk.prompt_eval_count || 0,
+                      completion_tokens: evalCount,
+                      total_tokens: (chunk.prompt_eval_count || 0) + evalCount,
+                    };
+                  }
+                } catch { /* skip unparseable lines */ }
+              }
+            }
+          } finally {
+            reader.releaseLock();
+          }
+          // 处理剩余 buffer
+          if (buffer.trim()) {
+            try {
+              const c = JSON.parse(buffer);
+              if (c.message?.content) replyContent += c.message.content;
+              if (c.done) {
+                usage = {
+                  prompt_tokens: c.prompt_eval_count || 0,
+                  completion_tokens: c.eval_count || 0,
+                  total_tokens: (c.prompt_eval_count || 0) + (c.eval_count || 0),
+                };
+              }
+            } catch { /* skip */ }
+          }
+        } else {
+          // ---- Online 模型: OpenAI-compat /v1/chat/completions ----
+          const requestBody = {
+            model,
+            messages: [
+              { role: 'system', content: systemPrompt },
+              { role: 'user', content },
+            ],
+            temperature: 0.3,
+            max_tokens: 4096,
+          };
+
+          const headers: Record<string, string> = { 'Content-Type': 'application/json' };
+          if (apiKey) headers['Authorization'] = `Bearer ${apiKey}`;
+
+          const apiUrl = baseUrl.replace(/\/+$/, '') + '/chat/completions';
+          const controller = new AbortController();
+          const timer = setTimeout(() => controller.abort(), 120000); // 2 min
+
+          const response = await fetch(apiUrl, {
+            method: 'POST',
+            headers,
+            body: JSON.stringify(requestBody),
+            signal: controller.signal,
+          });
+          clearTimeout(timer);
+
+          if (!response.ok) {
+            const errText = await response.text().catch(() => 'unknown');
+            return JSON.stringify({
+              status: 'error',
+              engine,
+              provider,
+              model,
+              httpStatus: response.status,
+              message: `LLM API returned ${response.status}: ${errText.slice(0, 500)}. Check onlineApiKey and onlineModel in .devplan/config.json.`,
+              switchTo: 'Set "engine": "cursor" to fallback to Cursor analysis.',
+            });
+          }
+
+          const data = await response.json() as any;
+          replyContent = data?.choices?.[0]?.message?.content || '';
+          usage = data?.usage || {};
+        }
+
+        if (!replyContent) {
+          return JSON.stringify({
+            status: 'error',
+            engine,
+            provider,
+            model,
+            message: `LLM returned empty response.${engine === 'ollama' ? ' Is Ollama running?' : ''}`,
+            switchTo: 'Set "engine": "cursor" to fallback to Cursor analysis.',
+          });
+        }
+
+        // 尝试解析 JSON（LLM 可能返回 markdown 代码块包裹的 JSON）
+        let parsedResult: any = null;
+        let rawContent = replyContent;
+
+        // 去除可能的 markdown 代码块
+        const jsonMatch = rawContent.match(/```(?:json)?\s*\n?([\s\S]*?)\n?```/);
+        if (jsonMatch) {
+          rawContent = jsonMatch[1].trim();
+        }
+
+        try {
+          parsedResult = JSON.parse(rawContent);
+        } catch {
+          parsedResult = null;
+        }
+
+        return JSON.stringify({
+          status: 'ok',
+          projectName,
+          engine,
+          mode,
+          provider,
+          model,
+          baseUrl,
+          anchorName: anchorName || undefined,
+          result: parsedResult,
+          rawContent: parsedResult ? undefined : replyContent,
+          tokens: {
+            prompt: usage.prompt_tokens || 0,
+            completion: usage.completion_tokens || 0,
+            total: usage.total_tokens || 0,
+          },
+          message: parsedResult
+            ? `LLM analysis completed (engine: ${engine}, provider: ${provider}, model: ${model}). Parsed JSON result available.`
+            : `LLM analysis completed (engine: ${engine}, provider: ${provider}, model: ${model}). Raw text returned (JSON parse failed).`,
+        });
+
+      } catch (e: any) {
+        const isAbort = e?.name === 'AbortError';
+        const hint = isAbort
+          ? `Request timed out. ${engine === 'ollama' ? 'The local model may be loading or too slow.' : 'The API server may be overloaded.'}`
+          : engine === 'ollama'
+            ? `Is Ollama running at ${baseUrl.replace(/\/v1\/?$/, '')}?`
+            : `Check onlineApiKey in .devplan/config.json.`;
+        return JSON.stringify({
+          status: 'error',
+          engine,
+          provider,
+          model,
+          message: `LLM analysis failed: ${e instanceof Error ? e.message : String(e)}. ${hint}`,
+          switchTo: 'Set "engine": "cursor" to fallback to Cursor analysis.',
+        });
+      }
+    }
+
+    // ========== Phase-59: 分相批量记忆导入处理器 ==========
+
+    case 'devplan_memory_batch_prepare': {
+      const projectName = args.projectName!;
+      const source = (args.source as 'tasks' | 'docs' | 'both') || 'both';
+      const batchLimit = typeof args.limit === 'number' ? args.limit : 1; // default: 1; 0 = 后台自动全部处理
+      const resume = args.resume !== false; // default true
+
+      // ---- 如果后台任务正在运行，返回状态 ----
+      if (bgTask?.running && bgTask.phase === 'A' && bgTask.projectName === projectName) {
+        const bgElapsed = ((Date.now() - bgTask.startedAt) / 1000).toFixed(0);
+        const bgPercent = bgTask.total > 0 ? Math.round((bgTask.prepared / bgTask.total) * 100) : 0;
+        const barLen = 20;
+        const filled = Math.round((bgPercent / 100) * barLen);
+        const bar = '█'.repeat(filled) + '░'.repeat(barLen - filled);
+        return JSON.stringify({
+          status: 'background_running',
+          projectName,
+          message: `🚀 Phase A 后台运行中 [${bar}] ${bgPercent}% — ${bgTask.prepared}/${bgTask.total} | 当前: "${bgTask.currentTitle}" | 错误: ${bgTask.errors} | 已运行 ${bgElapsed}s`,
+          progress: { prepared: bgTask.prepared, total: bgTask.total, errors: bgTask.errors, percent: `${bgPercent}%` },
+          hint: 'Use devplan_memory_batch_status to check progress anytime.',
+        });
+      }
+
+      const plan = getDevPlan(projectName);
+      if (typeof (plan as any).generateMemoryCandidates !== 'function') {
+        throw new McpError(ErrorCode.InvalidRequest,
+          `Memory generation requires "graph" engine. Project "${projectName}" uses a different engine.`);
+      }
+
+      // ---- 读取 LLM 配置 ----
+      const wsConfig = readDevPlanConfig();
+      const llmCfg = (wsConfig as any)?.llmAnalyze || {};
+      const engine: string = llmCfg.engine || 'ollama';
+
+      if (engine === 'cursor') {
+        return JSON.stringify({
+          status: 'error',
+          message: 'batch_prepare requires an LLM engine (ollama or models_online). engine=cursor is not supported for batch processing. Set "engine": "ollama" in .devplan/config.json.',
+        });
+      }
+
+      // 解析 provider / model / baseUrl / apiKey
+      let provider: string;
+      let model: string;
+      let baseUrl: string;
+      let apiKey: string | undefined;
+
+      if (engine === 'ollama') {
+        provider = 'ollama';
+        model = llmCfg.ollamaModel || 'gemma3:27b';
+        baseUrl = llmCfg.ollamaBaseUrl || 'http://localhost:11434/v1';
+        apiKey = undefined;
+      } else {
+        provider = llmCfg.onlineProvider || 'deepseek';
+        model = llmCfg.onlineModel || 'deepseek-chat';
+        baseUrl = llmCfg.onlineBaseUrl || 'https://api.deepseek.com/v1';
+        apiKey = llmCfg.onlineApiKey || undefined;
+      }
+
+      if (engine === 'models_online' && !apiKey) {
+        return JSON.stringify({
+          status: 'error',
+          message: `Online provider "${provider}" requires an API key. Set onlineApiKey in .devplan/config.json.`,
+        });
+      }
+
+      // ---- 获取或创建缓存 ----
+      const defaultBase = getDefaultBasePath();
+      const cachePath = getCachePath(defaultBase, projectName);
+      let cache: BatchCacheFile | null = resume ? readBatchCache(cachePath) : null;
+
+      if (!cache) {
+        cache = createBatchCache(projectName, engine, model);
+      }
+
+      // 已准备的 sourceId 集合（用于跳过）
+      const preparedSourceIds = new Set(cache.entries.map(e => e.sourceId));
+
+      // ---- 获取候选项列表（优先从缓存读取，避免每次都扫描文档/任务） ----
+      let candidates: any[];
+      if (cache.candidates && cache.candidates.length > 0) {
+        candidates = cache.candidates;
+      } else {
+        const allCandidates = (plan as any).generateMemoryCandidates({
+          source,
+          limit: 999,
+        });
+        candidates = allCandidates?.candidates || [];
+        cache.candidates = candidates.map((c: any) => ({
+          sourceId: c.sourceId,
+          sourceType: c.sourceType || 'doc',
+          title: c.title || c.sourceId || 'unknown',
+          content: c.content || '',
+          contentL3: c.contentL3,
+          suggestedMemoryType: c.suggestedMemoryType,
+          suggestedTags: c.suggestedTags,
+        }));
+        writeBatchCache(cachePath, cache);
+      }
+
+      // 过滤掉已缓存的
+      const pending = candidates.filter((c: any) => !preparedSourceIds.has(c.sourceId));
+      const totalCandidates = candidates.length;
+      const alreadyPrepared = totalCandidates - pending.length;
+
+      if (pending.length === 0) {
+        cache.prepareCompletedAt = Date.now();
+        writeBatchCache(cachePath, cache);
+        const stats = getCacheStats(cache);
+        return JSON.stringify({
+          status: 'completed',
+          projectName,
+          message: `✅ Phase A completed! All ${totalCandidates} candidates prepared. Ready for Phase B (devplan_memory_batch_commit).`,
+          progress: { prepared: totalCandidates, total: totalCandidates, percent: '100%' },
+          stats,
+          cachePath,
+        });
+      }
+
+      // ---- LLM 调用辅助函数 ----
+      const timeoutMs = engine === 'ollama' ? 300000 : 120000;
+
+      const callLlm = async (systemPrompt: string, userContent: string): Promise<string | null> => {
+        try {
+          const controller = new AbortController();
+          const timer = setTimeout(() => controller.abort(), timeoutMs);
+
+          if (engine === 'ollama') {
+            const nativeBase = baseUrl.replace(/\/v1\/?$/, '').replace(/\/+$/, '');
+            const res = await fetch(nativeBase + '/api/chat', {
+              method: 'POST',
+              headers: { 'Content-Type': 'application/json' },
+              body: JSON.stringify({
+                model,
+                messages: [
+                  { role: 'system', content: systemPrompt },
+                  { role: 'user', content: userContent },
+                ],
+                stream: true,
+                keep_alive: '30m',
+                options: { temperature: 0.3, num_predict: 4096 },
+              }),
+              signal: controller.signal,
+            });
+            clearTimeout(timer);
+            if (!res.ok || !res.body) return null;
+
+            const reader = (res.body as any).getReader();
+            const decoder = new TextDecoder();
+            let result = '';
+            let buffer = '';
+            try {
+              while (true) {
+                const { done, value } = await reader.read();
+                if (done) break;
+                buffer += decoder.decode(value, { stream: true });
+                const lines = buffer.split('\n');
+                buffer = lines.pop() || '';
+                for (const line of lines) {
+                  if (!line.trim()) continue;
+                  try {
+                    const chunk = JSON.parse(line);
+                    if (chunk.message?.content) result += chunk.message.content;
+                  } catch { /* skip */ }
+                }
+              }
+            } finally {
+              reader.releaseLock();
+            }
+            if (buffer.trim()) {
+              try { const c = JSON.parse(buffer); if (c.message?.content) result += c.message.content; } catch { /* skip */ }
+            }
+            return result || null;
+          } else {
+            const apiUrl = baseUrl.replace(/\/+$/, '') + '/chat/completions';
+            const headers: Record<string, string> = { 'Content-Type': 'application/json' };
+            if (apiKey) headers['Authorization'] = `Bearer ${apiKey}`;
+            const res = await fetch(apiUrl, {
+              method: 'POST',
+              headers,
+              body: JSON.stringify({
+                model,
+                messages: [
+                  { role: 'system', content: systemPrompt },
+                  { role: 'user', content: userContent },
+                ],
+                temperature: 0.3,
+                max_tokens: 4096,
+              }),
+              signal: controller.signal,
+            });
+            clearTimeout(timer);
+            if (!res.ok) return null;
+            const data = await res.json() as any;
+            return data?.choices?.[0]?.message?.content || null;
+          }
+        } catch {
+          return null;
+        }
+      };
+
+      const parseJsonFromLlm = (raw: string): any => {
+        let cleaned = raw;
+        const jsonMatch = cleaned.match(/```(?:json)?\s*\n?([\s\S]*?)\n?```/);
+        if (jsonMatch) cleaned = jsonMatch[1].trim();
+        try { return JSON.parse(cleaned); } catch { return null; }
+      };
+
+      const systemPrompt = `你是一个记忆构建助手。请根据以下文档/任务内容生成多级记忆。
+生成三个层级（必须以 JSON 返回）：
+- L1（触点摘要）：一句话概括（15~30字），作为记忆的"入口"或"触点"
+- L2（详细记忆）：3~8句话，包含关键技术细节、设计决策、实现方案。要保留重要的技术名词和架构关系
+- L3_summary（结构总结）：列出主要组件、依赖关系及其作用（如果内容是技术文档）。如果是非技术内容，则提供内容的结构化摘要
+- memoryType：从 decision/pattern/bugfix/insight/preference/summary 中选择最合适的类型
+- importance：重要性评分 0~1
+- suggestedTags：建议标签数组
+- anchorName：触点名称（该记忆关联的核心概念/模块/功能）
+- anchorType：触点类型（module/concept/api/architecture/feature/library/protocol）
+- anchorOverview：触点概览（3~5句话的目录索引式摘要，列出该触点包含的关键子项、核心 Flow 条目、主要结构组件等。类似文件夹的 README，帮助 Agent 快速判断是否需要深入查看详情）
+
+请严格以 JSON 格式返回：
+{"L1": "...", "L2": "...", "L3_summary": "...", "memoryType": "...", "importance": 0.7, "suggestedTags": [...], "anchorName": "...", "anchorType": "...", "anchorOverview": "..."}`;
+
+      // ---- 处理单个候选的核心函数 ----
+      const processOneCandidate = async (candidate: any, cacheRef: BatchCacheFile): Promise<{ ok: boolean }> => {
+        const title = candidate.title || candidate.sourceId || 'unknown';
+        const rawContent = candidate.contentL3 || candidate.content || '';
+
+        if (!rawContent || rawContent.length < 50) {
+          return { ok: true }; // 跳过过短内容
+        }
+
+        const truncated = rawContent.length > 12000
+          ? rawContent.slice(0, 12000) + '\n\n[... 内容已截断，共 ' + rawContent.length + ' 字符]'
+          : rawContent;
+
+        const llmResult = await callLlm(systemPrompt, `标题：${title}\n\n${truncated}`);
+
+        let entry: BatchCacheEntry;
+        if (!llmResult) {
+          entry = {
+            sourceId: candidate.sourceId,
+            sourceType: candidate.sourceType || 'doc',
+            memoryType: candidate.suggestedMemoryType || 'insight',
+            contentL1: rawContent.slice(0, 100),
+            contentL2: rawContent.slice(0, 500),
+            contentL3: rawContent,
+            content: rawContent.slice(0, 300),
+            importance: 0.5,
+            tags: candidate.suggestedTags || [],
+            relatedTaskId: candidate.sourceType === 'task' ? candidate.sourceId : undefined,
+            title,
+            preparedAt: Date.now(),
+            committed: false,
+          };
+          appendEntry(cacheRef, entry);
+          writeBatchCache(cachePath, cacheRef);
+          return { ok: false };
+        }
+
+        const parsed = parseJsonFromLlm(llmResult);
+        entry = {
+          sourceId: candidate.sourceId,
+          sourceType: candidate.sourceType || 'doc',
+          memoryType: parsed?.memoryType || candidate.suggestedMemoryType || 'insight',
+          contentL1: parsed?.L1 || rawContent.slice(0, 100),
+          contentL2: parsed?.L2 || rawContent.slice(0, 500),
+          contentL3: rawContent,
+          content: parsed?.L2 || rawContent.slice(0, 300),
+          importance: parsed?.importance || 0.5,
+          tags: parsed?.suggestedTags || candidate.suggestedTags || [],
+          relatedTaskId: candidate.sourceType === 'task' ? candidate.sourceId : undefined,
+          anchorName: parsed?.anchorName,
+          anchorType: parsed?.anchorType,
+          anchorOverview: parsed?.anchorOverview,
+          title,
+          preparedAt: Date.now(),
+          committed: false,
+        };
+        appendEntry(cacheRef, entry);
+        writeBatchCache(cachePath, cacheRef);
+        return { ok: true };
+      };
+
+      // ========== limit=0: 后台自动工作流 ==========
+      if (batchLimit === 0) {
+        // 启动后台异步循环，立即返回
+        bgTask = {
+          running: true,
+          phase: 'A',
+          projectName,
+          prepared: alreadyPrepared,
+          committed: 0,
+          total: totalCandidates,
+          errors: 0,
+          startedAt: Date.now(),
+          lastProcessedAt: Date.now(),
+          currentTitle: pending[0]?.title || '',
+          speed: '',
+        };
+
+        // Fire-and-forget: 后台循环处理所有 pending 候选
+        (async () => {
+          let bgErrors = 0;
+          let bgProcessed = 0;
+          for (const candidate of pending) {
+            if (!bgTask?.running) break; // 允许外部中止
+            const title = candidate.title || candidate.sourceId || 'unknown';
+            bgTask.currentTitle = title;
+
+            const itemStart = Date.now();
+            const result = await processOneCandidate(candidate, cache!);
+            const itemElapsed = ((Date.now() - itemStart) / 1000).toFixed(1);
+
+            bgProcessed++;
+            if (!result.ok) bgErrors++;
+            bgTask.prepared = alreadyPrepared + bgProcessed;
+            bgTask.errors = bgErrors;
+            bgTask.lastProcessedAt = Date.now();
+            bgTask.speed = `${itemElapsed}s/item`;
+          }
+
+          // 完成
+          cache!.prepareCompletedAt = Date.now();
+          writeBatchCache(cachePath, cache!);
+          bgTask!.running = false;
+        })();
+
+        return JSON.stringify({
+          status: 'background_started',
+          projectName,
+          engine,
+          model,
+          message: `🚀 Phase A 后台自动工作流已启动！正在处理 ${pending.length} 个候选（已跳过 ${alreadyPrepared} 个已完成）。\n`
+            + `📊 使用 devplan_memory_batch_status 随时查看实时进度。\n`
+            + `⏹️ 再次调用 batch_prepare(limit=0) 可查看运行状态。`,
+          progress: { prepared: alreadyPrepared, total: totalCandidates, remaining: pending.length, percent: `${Math.round((alreadyPrepared / totalCandidates) * 100)}%` },
+          cachePath,
+        });
+      }
+
+      // ========== limit>0: 同步处理指定数量 ==========
+      const toProcess = pending.slice(0, batchLimit);
+      let processed = 0;
+      let errors = 0;
+      const startTime = Date.now();
+
+      for (const candidate of toProcess) {
+        const result = await processOneCandidate(candidate, cache);
+        processed++;
+        if (!result.ok) errors++;
+      }
+
+      // 检查是否全部完成
+      const allDone = pending.length <= toProcess.length;
+      if (allDone) {
+        cache.prepareCompletedAt = Date.now();
+        writeBatchCache(cachePath, cache);
+      }
+
+      const elapsed = ((Date.now() - startTime) / 1000).toFixed(1);
+      const stats = getCacheStats(cache);
+
+      const nowPrepared = alreadyPrepared + processed;
+      const percent = totalCandidates > 0 ? Math.round((nowPrepared / totalCandidates) * 100) : 100;
+      const remaining = totalCandidates - nowPrepared;
+
+      const barLen = 20;
+      const filled = Math.round((percent / 100) * barLen);
+      const progressBar = '█'.repeat(filled) + '░'.repeat(barLen - filled);
+
+      return JSON.stringify({
+        status: allDone ? 'completed' : 'partial',
+        projectName,
+        engine,
+        model,
+        message: allDone
+          ? `✅ Phase A completed! [${progressBar}] 100% — ${totalCandidates}/${totalCandidates} candidates processed in ${elapsed}s (${errors} errors). Cache ready for Phase B (devplan_memory_batch_commit).`
+          : `🔄 Phase A: [${progressBar}] ${percent}% — ${nowPrepared}/${totalCandidates} prepared (+${processed} this batch, ${elapsed}s). ${remaining} remaining. Call again to continue.`,
+        progress: {
+          prepared: nowPrepared,
+          total: totalCandidates,
+          remaining,
+          percent: `${percent}%`,
+          bar: `[${progressBar}]`,
+          thisBatch: processed,
+          thisBatchErrors: errors,
+        },
+        elapsedSeconds: parseFloat(elapsed),
+        stats,
+        cachePath,
+      });
+    }
+
+    case 'devplan_memory_batch_commit': {
+      const projectName = args.projectName!;
+      const commitLimit = typeof args.limit === 'number' ? args.limit : 10; // default: 10; 0 = 后台自动全部
+      const dryRun = args.dryRun || false;
+
+      // ---- 如果后台 Phase B 正在运行，返回状态 ----
+      if (bgTask?.running && bgTask.phase === 'B' && bgTask.projectName === projectName) {
+        const bgElapsed = ((Date.now() - bgTask.startedAt) / 1000).toFixed(0);
+        const bgPercent = bgTask.total > 0 ? Math.round((bgTask.committed / bgTask.total) * 100) : 0;
+        const barLen = 20;
+        const filled = Math.round((bgPercent / 100) * barLen);
+        const bar = '█'.repeat(filled) + '░'.repeat(barLen - filled);
+        return JSON.stringify({
+          status: 'background_running',
+          projectName,
+          message: `🚀 Phase B 后台运行中 [${bar}] ${bgPercent}% — ${bgTask.committed}/${bgTask.total} | 当前: "${bgTask.currentTitle}" | 错误: ${bgTask.errors} | 已运行 ${bgElapsed}s`,
+          progress: { committed: bgTask.committed, total: bgTask.total, errors: bgTask.errors, percent: `${bgPercent}%` },
+          hint: 'Use devplan_memory_batch_status to check progress anytime.',
+        });
+      }
+
+      const plan = getDevPlan(projectName);
+      if (typeof (plan as any).saveMemory !== 'function') {
+        throw new McpError(ErrorCode.InvalidRequest,
+          `Memory features require "graph" engine. Project "${projectName}" uses a different engine.`);
+      }
+
+      // ---- 读取缓存 ----
+      const defaultBase = getDefaultBasePath();
+      const cachePath = getCachePath(defaultBase, projectName);
+      const cache = readBatchCache(cachePath);
+
+      if (!cache || cache.entries.length === 0) {
+        return JSON.stringify({
+          status: 'error',
+          message: 'No batch cache found. Run devplan_memory_batch_prepare first to generate the cache.',
+          cachePath,
+        });
+      }
+
+      // 获取未提交的条目
+      const pendingEntries = cache.entries.filter(e => !e.committed);
+      if (pendingEntries.length === 0) {
+        cache.commitCompletedAt = Date.now();
+        writeBatchCache(cachePath, cache);
+        const stats = getCacheStats(cache);
+        return JSON.stringify({
+          status: 'completed',
+          projectName,
+          message: `Phase B already completed. All ${cache.entries.length} entries have been committed.`,
+          stats,
+        });
+      }
+
+      if (dryRun) {
+        return JSON.stringify({
+          status: 'dry_run',
+          projectName,
+          message: `Would commit ${pendingEntries.length} entries (${cache.entries.length} total in cache).`,
+          pendingCount: pendingEntries.length,
+          sampleEntries: pendingEntries.slice(0, 5).map(e => ({
+            sourceId: e.sourceId,
+            title: e.title,
+            memoryType: e.memoryType,
+            contentL1: e.contentL1.slice(0, 80),
+          })),
+        });
+      }
+
+      if (!cache.commitStartedAt) {
+        cache.commitStartedAt = Date.now();
+      }
+
+      // ========== limit=0: 后台自动工作流 ==========
+      if (commitLimit === 0) {
+        bgTask = {
+          running: true,
+          phase: 'B',
+          projectName,
+          prepared: 0,
+          committed: cache.entries.length - pendingEntries.length,
+          total: cache.entries.length,
+          errors: 0,
+          startedAt: Date.now(),
+          lastProcessedAt: Date.now(),
+          currentTitle: pendingEntries[0]?.title || '',
+          speed: '',
+        };
+
+        // Fire-and-forget: 后台循环提交所有 pending 条目
+        (async () => {
+          let bgErrors = 0;
+          let bgCommitted = cache.entries.length - pendingEntries.length;
+          for (const entry of pendingEntries) {
+            if (!bgTask?.running) break;
+            bgTask.currentTitle = entry.title || entry.sourceId || '';
+
+            const itemStart = Date.now();
+            await memorySaveMutex.acquire();
+            try {
+              (plan as any).saveMemory({
+                projectName,
+                content: entry.content,
+                memoryType: entry.memoryType as any,
+                importance: entry.importance,
+                tags: entry.tags,
+                relatedTaskId: entry.relatedTaskId,
+                sourceId: entry.sourceId,
+                source: 'batch_import',
+                contentL1: entry.contentL1,
+                contentL2: entry.contentL2,
+                contentL3: entry.contentL3,
+                anchorName: entry.anchorName,
+                anchorType: entry.anchorType,
+                anchorOverview: entry.anchorOverview,
+                changeType: entry.changeType,
+              });
+              entry.committed = true;
+              entry.committedAt = Date.now();
+              bgCommitted++;
+            } catch (e: any) {
+              entry.committed = true;
+              entry.commitError = e instanceof Error ? e.message : String(e);
+              bgErrors++;
+              bgCommitted++;
+            } finally {
+              memorySaveMutex.release();
+            }
+
+            writeBatchCache(cachePath, cache);
+            bgTask.committed = bgCommitted;
+            bgTask.errors = bgErrors;
+            bgTask.lastProcessedAt = Date.now();
+            bgTask.speed = `${((Date.now() - itemStart) / 1000).toFixed(1)}s/item`;
+          }
+
+          // 完成
+          cache.commitCompletedAt = Date.now();
+          writeBatchCache(cachePath, cache);
+          bgTask!.running = false;
+        })();
+
+        const alreadyCommitted = cache.entries.length - pendingEntries.length;
+        return JSON.stringify({
+          status: 'background_started',
+          projectName,
+          message: `🚀 Phase B 后台自动工作流已启动！正在提交 ${pendingEntries.length} 条记忆（已跳过 ${alreadyCommitted} 条已提交）。\n`
+            + `📊 使用 devplan_memory_batch_status 随时查看实时进度。\n`
+            + `⏹️ 再次调用 batch_commit(limit=0) 可查看运行状态。`,
+          progress: { committed: alreadyCommitted, total: cache.entries.length, remaining: pendingEntries.length },
+        });
+      }
+
+      // ========== limit>0: 同步处理指定数量 ==========
+      const toCommit = pendingEntries.slice(0, commitLimit);
+      let committed = 0;
+      let commitErrors = 0;
+      const startTime = Date.now();
+
+      for (const entry of toCommit) {
+        await memorySaveMutex.acquire();
+        try {
+          (plan as any).saveMemory({
+            projectName,
+            content: entry.content,
+            memoryType: entry.memoryType as any,
+            importance: entry.importance,
+            tags: entry.tags,
+            relatedTaskId: entry.relatedTaskId,
+            sourceId: entry.sourceId,
+            source: 'batch_import',
+            contentL1: entry.contentL1,
+            contentL2: entry.contentL2,
+            contentL3: entry.contentL3,
+            anchorName: entry.anchorName,
+            anchorType: entry.anchorType,
+            anchorOverview: entry.anchorOverview,
+            changeType: entry.changeType,
+          });
+
+          entry.committed = true;
+          entry.committedAt = Date.now();
+          committed++;
+        } catch (e: any) {
+          entry.committed = true;
+          entry.commitError = e instanceof Error ? e.message : String(e);
+          commitErrors++;
+        } finally {
+          memorySaveMutex.release();
+        }
+
+        writeBatchCache(cachePath, cache);
+      }
+
+      // 检查是否全部完成
+      const remaining = cache.entries.filter(e => !e.committed).length;
+      const totalEntries = cache.entries.length;
+      const totalCommitted = totalEntries - remaining;
+      if (remaining === 0) {
+        cache.commitCompletedAt = Date.now();
+        writeBatchCache(cachePath, cache);
+      }
+
+      const elapsed = ((Date.now() - startTime) / 1000).toFixed(1);
+      const stats = getCacheStats(cache);
+
+      const commitPercent = totalEntries > 0 ? Math.round((totalCommitted / totalEntries) * 100) : 100;
+      const barLen = 20;
+      const filled = Math.round((commitPercent / 100) * barLen);
+      const commitBar = '█'.repeat(filled) + '░'.repeat(barLen - filled);
+
+      return JSON.stringify({
+        status: remaining === 0 ? 'completed' : 'partial',
+        projectName,
+        message: remaining === 0
+          ? `✅ Phase B completed! [${commitBar}] 100% — ${totalEntries}/${totalEntries} memories saved + embedded in ${elapsed}s (${commitErrors} errors). 🎉 Batch import pipeline finished!`
+          : `🔄 Phase B: [${commitBar}] ${commitPercent}% — ${totalCommitted}/${totalEntries} committed (+${committed} this batch, ${elapsed}s). ${remaining} remaining. Call again to continue.`,
+        progress: {
+          committed: totalCommitted,
+          total: totalEntries,
+          remaining,
+          percent: `${commitPercent}%`,
+          bar: `[${commitBar}]`,
+          thisBatch: committed,
+          thisBatchErrors: commitErrors,
+        },
+        elapsedSeconds: parseFloat(elapsed),
+        stats,
+        hint: remaining === 0
+          ? 'The batch cache can be cleared with devplan_memory_batch_status(clear: true).'
+          : 'Call devplan_memory_batch_commit again to continue.',
+      });
+    }
+
+    case 'devplan_memory_batch_status': {
+      const projectName = args.projectName!;
+      const shouldClear = args.clear || false;
+
+      const defaultBase = getDefaultBasePath();
+      const cachePath = getCachePath(defaultBase, projectName);
+      const cache = readBatchCache(cachePath);
+
+      // ---- 后台工作流实时状态 ----
+      const bgInfo: any = {};
+      if (bgTask && bgTask.projectName === projectName) {
+        const bgElapsed = ((Date.now() - bgTask.startedAt) / 1000).toFixed(0);
+        const bgPercent = bgTask.total > 0 ? Math.round((bgTask.prepared / bgTask.total) * 100) : 0;
+        const barLen = 20;
+        const filled = Math.round((bgPercent / 100) * barLen);
+        const bar = '█'.repeat(filled) + '░'.repeat(barLen - filled);
+        bgInfo.backgroundTask = {
+          running: bgTask.running,
+          phase: bgTask.phase,
+          progress: `[${bar}] ${bgPercent}% — ${bgTask.prepared}/${bgTask.total}`,
+          currentTitle: bgTask.currentTitle,
+          errors: bgTask.errors,
+          speed: bgTask.speed,
+          elapsedSeconds: parseInt(bgElapsed),
+          message: bgTask.running
+            ? `🚀 Phase ${bgTask.phase} 后台运行中 [${bar}] ${bgPercent}% — 当前: "${bgTask.currentTitle}" | ${bgTask.speed} | 错误: ${bgTask.errors} | 已运行 ${bgElapsed}s`
+            : `✅ Phase ${bgTask.phase} 后台任务已完成 — ${bgTask.prepared}/${bgTask.total} 处理完毕，${bgTask.errors} 个错误，耗时 ${bgElapsed}s`,
+        };
+      }
+
+      if (!cache) {
+        return JSON.stringify({
+          status: 'empty',
+          projectName,
+          message: 'No batch cache found. Use devplan_memory_batch_prepare to start a batch import.',
+          cachePath,
+          ...bgInfo,
+        });
+      }
+
+      const stats = getCacheStats(cache);
+
+      const typeBreakdown: Record<string, number> = {};
+      for (const entry of cache.entries) {
+        typeBreakdown[entry.memoryType] = (typeBreakdown[entry.memoryType] || 0) + 1;
+      }
+
+      const errorEntries = cache.entries.filter(e => e.commitError).map(e => ({
+        sourceId: e.sourceId,
+        title: e.title,
+        error: e.commitError,
+      }));
+
+      // Phase A 进度
+      const totalCandidates = cache.candidates?.length || 0;
+      const preparedCount = cache.entries.length;
+      const phaseAPercent = totalCandidates > 0 ? Math.round((preparedCount / totalCandidates) * 100) : (cache.prepareCompletedAt ? 100 : 0);
+      const barLen = 20;
+      const filledA = Math.round((phaseAPercent / 100) * barLen);
+      const barA = '█'.repeat(filledA) + '░'.repeat(barLen - filledA);
+
+      // Phase B 进度
+      const committedCount = cache.entries.filter(e => e.committed).length;
+      const phaseBPercent = preparedCount > 0 ? Math.round((committedCount / preparedCount) * 100) : 0;
+      const filledB = Math.round((phaseBPercent / 100) * barLen);
+      const barB = '█'.repeat(filledB) + '░'.repeat(barLen - filledB);
+
+      const result: any = {
+        status: 'ok',
+        projectName,
+        cachePath,
+        stats,
+        phaseA: {
+          status: cache.prepareCompletedAt ? 'completed' : (bgTask?.running && bgTask.phase === 'A' ? 'background_running' : 'in_progress'),
+          progress: `[${barA}] ${phaseAPercent}% — ${preparedCount}/${totalCandidates}`,
+          startedAt: new Date(cache.prepareStartedAt).toISOString(),
+          completedAt: cache.prepareCompletedAt ? new Date(cache.prepareCompletedAt).toISOString() : null,
+          engine: cache.engine,
+          model: cache.model,
+        },
+        phaseB: {
+          status: cache.commitCompletedAt ? 'completed' : cache.commitStartedAt ? 'in_progress' : 'not_started',
+          progress: `[${barB}] ${phaseBPercent}% — ${committedCount}/${preparedCount}`,
+          startedAt: cache.commitStartedAt ? new Date(cache.commitStartedAt).toISOString() : null,
+          completedAt: cache.commitCompletedAt ? new Date(cache.commitCompletedAt).toISOString() : null,
+        },
+        typeBreakdown,
+        errors: errorEntries.length > 0 ? errorEntries : undefined,
+        ...bgInfo,
+        message: `Phase A: [${barA}] ${phaseAPercent}% (${preparedCount}/${totalCandidates}) ${cache.prepareCompletedAt ? '✅' : '🔄'} | Phase B: [${barB}] ${phaseBPercent}% (${committedCount}/${preparedCount}) ${cache.commitCompletedAt ? '✅' : cache.commitStartedAt ? '🔄' : '⏳'}`,
+      };
+
+      if (shouldClear) {
+        deleteBatchCache(cachePath);
+        // 同时清理后台任务状态
+        if (bgTask?.projectName === projectName) {
+          bgTask.running = false;
+          bgTask = null;
+        }
+        result.cleared = true;
+        result.message += ' | Cache file deleted.';
+      }
+
+      return JSON.stringify(result, null, 2);
     }
 
     default:

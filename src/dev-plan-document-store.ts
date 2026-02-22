@@ -168,6 +168,58 @@ export class DevPlanDocumentStore implements IDevPlanStore {
   }
 
   /**
+   * 新增文档片段（纯新增，如果同 section+subSection 已存在则抛错）
+   */
+  addSection(input: DevPlanDocInput): string {
+    const existing = this.getSection(input.section, input.subSection);
+    if (existing) {
+      const key = input.subSection
+        ? `${input.section}|${input.subSection}`
+        : input.section;
+      throw new Error(
+        `文档 "${key}" 已存在（标题: "${existing.title}"）。如需更新请使用 saveSection/updateSection。`
+      );
+    }
+
+    const version = input.version || '1.0.0';
+    const now = Date.now();
+
+    const tags = [
+      `plan:${this.projectName}`,
+      `section:${input.section}`,
+      ...(input.subSection ? [`sub:${input.subSection}`] : []),
+      `ver:${version}`,
+    ];
+    if (input.moduleId) {
+      tags.push(`module:${input.moduleId}`);
+    }
+
+    const docInput: DocumentInput = {
+      content: input.content,
+      contentType: ContentType.Text,
+      tags,
+      metadata: {
+        projectName: this.projectName,
+        section: input.section,
+        title: input.title,
+        version,
+        subSection: input.subSection || null,
+        relatedSections: input.relatedSections || [],
+        relatedTaskIds: input.relatedTaskIds || [],
+        moduleId: input.moduleId || null,
+        parentDoc: input.parentDoc || null,
+        createdAt: now,
+        updatedAt: now,
+      },
+      importance: sectionImportance(input.section),
+    };
+
+    const id = this.docStore.put(docInput);
+    this.docStore.flush();
+    return id;
+  }
+
+  /**
    * 获取文档片段
    */
   getSection(section: DevPlanSection, subSection?: string): DevPlanDoc | null {

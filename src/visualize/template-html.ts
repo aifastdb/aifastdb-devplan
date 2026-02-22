@@ -137,7 +137,10 @@ export function getHTML(projectName: string): string {
         <!-- Left: Document List -->
         <div class="docs-sidebar">
           <div class="docs-sidebar-header">
-            <h3>📄 文档库</h3>
+            <div class="docs-sidebar-title-row">
+              <h3>📄 文档库</h3>
+              <button class="docs-add-btn" onclick="showAddDocForm()" title="添加新文档">＋ 添加</button>
+            </div>
             <div class="docs-search-wrap">
               <input type="text" class="docs-search" id="docsSearch" placeholder="搜索文档标题..." oninput="filterDocs();toggleSearchClear()">
               <button class="docs-search-clear" id="docsSearchClear" onclick="clearDocsSearch()" title="清空搜索">✕</button>
@@ -201,6 +204,58 @@ export function getHTML(projectName: string): string {
           </div>
         </div>
       </div>
+      <!-- Add Document Overlay -->
+      <div class="add-doc-overlay" id="addDocOverlay" style="display:none;">
+        <div class="add-doc-panel">
+          <div class="add-doc-header">
+            <h3>📝 添加新文档</h3>
+            <button class="add-doc-close" onclick="hideAddDocForm()" title="关闭">✕</button>
+          </div>
+          <div class="add-doc-form">
+            <div class="add-doc-row">
+              <div class="add-doc-field">
+                <label>文档类型 <span class="required">*</span></label>
+                <select id="addDocSection">
+                  <option value="overview">概述 (overview)</option>
+                  <option value="core_concepts">核心概念 (core_concepts)</option>
+                  <option value="api_design">API 设计 (api_design)</option>
+                  <option value="file_structure">文件结构 (file_structure)</option>
+                  <option value="config">配置 (config)</option>
+                  <option value="examples">使用示例 (examples)</option>
+                  <option value="technical_notes" selected>技术笔记 (technical_notes)</option>
+                  <option value="api_endpoints">API 端点 (api_endpoints)</option>
+                  <option value="milestones">里程碑 (milestones)</option>
+                  <option value="changelog">变更记录 (changelog)</option>
+                  <option value="custom">自定义 (custom)</option>
+                </select>
+              </div>
+              <div class="add-doc-field">
+                <label>子分类 <span class="optional">(可选，用于 technical_notes/custom)</span></label>
+                <input type="text" id="addDocSubSection" placeholder="例如: security, performance...">
+              </div>
+            </div>
+            <div class="add-doc-field">
+              <label>文档标题 <span class="required">*</span></label>
+              <input type="text" id="addDocTitle" placeholder="输入文档标题...">
+            </div>
+            <div class="add-doc-field add-doc-content-field">
+              <div class="add-doc-content-header">
+                <label>Markdown 内容 <span class="required">*</span></label>
+                <div class="add-doc-shortcuts"><kbd>Ctrl+Enter</kbd> 提交 · <kbd>Tab</kbd> 缩进</div>
+              </div>
+              <textarea class="add-doc-textarea" id="addDocContent" placeholder="# 在此粘贴或输入 Markdown 内容&#10;&#10;支持从 Cursor 直接复制粘贴 Markdown 格式内容&#10;&#10;## 二级标题&#10;&#10;正文内容，支持 **粗体**、*斜体*、\`行内代码\`&#10;&#10;- 列表项 1&#10;- 列表项 2" spellcheck="false"></textarea>
+              <div class="add-doc-content-footer">
+                <span class="add-doc-char-count" id="addDocCharCount">0 字符 · 0 行</span>
+              </div>
+            </div>
+            <div class="add-doc-actions">
+              <button class="add-doc-btn add-doc-btn-cancel" onclick="hideAddDocForm()">取消</button>
+              <button class="add-doc-btn add-doc-btn-preview" onclick="previewAddDoc()">👁 预览</button>
+              <button class="add-doc-btn add-doc-btn-submit" onclick="submitAddDoc()">📤 发布文档</button>
+            </div>
+          </div>
+        </div>
+      </div>
     </div>
 
     <!-- ===== PAGE: Memory Browser ===== -->
@@ -243,6 +298,11 @@ export function getHTML(projectName: string): string {
                 <div class="memory-generate-dropdown-item auto-import" onclick="autoImportAllMemories()">
                   <span class="mg-icon">⚡</span> 一键全量导入
                   <span style="font-size:10px;color:#6b7280;margin-left:4px;">（自动保存全部）</span>
+                </div>
+                <div class="memory-generate-dropdown-sep"></div>
+                <div class="memory-generate-dropdown-item ai-batch" onclick="startAiBatchGenerate()">
+                  <span class="mg-icon">🚀</span> AI 批量生成（新）
+                  <span style="font-size:10px;color:#22c55e;margin-left:4px;">浏览器直连 Ollama</span>
                 </div>
               </div>
             </div>
@@ -323,6 +383,41 @@ export function getHTML(projectName: string): string {
           <div class="mem-auto-import-status" id="memAutoImportStatus">准备中...</div>
           <div class="mem-auto-import-detail" id="memAutoImportDetail"></div>
           <button class="mem-auto-import-cancel" id="memAutoImportCancelBtn" onclick="cancelAutoImport()">取消</button>
+        </div>
+      </div>
+
+      <!-- Phase-60: AI 批量生成覆盖层（浏览器直连 Ollama） -->
+      <div class="mem-auto-import-overlay" id="aiBatchOverlay" style="display:none;">
+        <div class="mem-auto-import-card" style="max-width:700px;width:90%;">
+          <div class="mem-auto-import-icon">🚀</div>
+          <div class="mem-auto-import-title" id="aiBatchTitle">AI 批量生成记忆</div>
+          <div style="font-size:11px;color:#6b7280;margin-bottom:12px;">浏览器直连 Ollama · 无超时限制 · 实时流式预览</div>
+          <!-- 配置区 -->
+          <div id="aiBatchConfigArea" style="display:flex;gap:8px;align-items:center;margin-bottom:12px;flex-wrap:wrap;">
+            <label style="font-size:11px;color:#9ca3af;">Ollama:</label>
+            <input type="text" id="aiBatchOllamaUrl" value="http://localhost:11434" style="background:#111827;border:1px solid #374151;color:#e5e7eb;border-radius:4px;padding:3px 8px;font-size:11px;width:200px;" />
+            <label style="font-size:11px;color:#9ca3af;">模型:</label>
+            <input type="text" id="aiBatchModel" value="gemma3:27b" style="background:#111827;border:1px solid #374151;color:#e5e7eb;border-radius:4px;padding:3px 8px;font-size:11px;width:120px;" />
+            <label style="font-size:11px;color:#9ca3af;">来源:</label>
+            <select id="aiBatchSource" style="background:#111827;border:1px solid #374151;color:#e5e7eb;border-radius:4px;padding:3px 8px;font-size:11px;">
+              <option value="both">全部</option>
+              <option value="tasks">仅任务</option>
+              <option value="docs">仅文档</option>
+            </select>
+            <button onclick="startAiBatchProcess()" id="aiBatchStartBtn" style="background:linear-gradient(135deg,#8b5cf6,#6366f1);color:white;border:none;border-radius:6px;padding:5px 16px;font-size:12px;cursor:pointer;font-weight:600;">开始</button>
+          </div>
+          <!-- 进度条 -->
+          <div class="mem-auto-import-progress-bar">
+            <div class="mem-auto-import-progress-fill" id="aiBatchProgress" style="width:0%"></div>
+          </div>
+          <!-- 状态 -->
+          <div class="mem-auto-import-status" id="aiBatchStatus" style="min-height:18px;">就绪</div>
+          <div class="mem-auto-import-detail" id="aiBatchDetail" style="min-height:14px;"></div>
+          <!-- LLM 输出流式预览 -->
+          <div id="aiBatchStreamArea" style="display:none;margin-top:8px;background:#0d1117;border:1px solid #21262d;border-radius:6px;padding:8px 10px;max-height:160px;overflow-y:auto;font-family:'Cascadia Code','Fira Code',monospace;font-size:11px;color:#8b949e;line-height:1.5;white-space:pre-wrap;word-break:break-all;"></div>
+          <!-- 统计摘要 -->
+          <div id="aiBatchSummary" style="display:none;margin-top:10px;padding:10px;background:#111827;border-radius:6px;font-size:12px;color:#9ca3af;"></div>
+          <button class="mem-auto-import-cancel" id="aiBatchCancelBtn" onclick="cancelAiBatch()">取消</button>
         </div>
       </div>
     </div>

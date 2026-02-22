@@ -668,6 +668,190 @@ function backToChat() {
   if (input) input.focus();
 }
 
+// ========== Add Document ==========
+
+/** 显示添加文档表单 */
+function showAddDocForm() {
+  var overlay = document.getElementById('addDocOverlay');
+  if (overlay) {
+    overlay.style.display = 'flex';
+    // 重置表单
+    var titleInput = document.getElementById('addDocTitle');
+    var contentArea = document.getElementById('addDocContent');
+    var subSection = document.getElementById('addDocSubSection');
+    var sectionSel = document.getElementById('addDocSection');
+    if (titleInput) titleInput.value = '';
+    if (contentArea) { contentArea.value = ''; updateAddDocCharCount(); }
+    if (subSection) subSection.value = '';
+    if (sectionSel) sectionSel.value = 'technical_notes';
+    // 聚焦标题输入框
+    setTimeout(function() { if (titleInput) titleInput.focus(); }, 100);
+  }
+}
+
+/** 隐藏添加文档表单 */
+function hideAddDocForm() {
+  var overlay = document.getElementById('addDocOverlay');
+  if (overlay) overlay.style.display = 'none';
+}
+
+/** 更新字符计数 */
+function updateAddDocCharCount() {
+  var ta = document.getElementById('addDocContent');
+  var counter = document.getElementById('addDocCharCount');
+  if (!ta || !counter) return;
+  var text = ta.value || '';
+  var chars = text.length;
+  var lines = text ? text.split('\\n').length : 0;
+  counter.textContent = chars + ' 字符 · ' + lines + ' 行';
+}
+
+/** 预览文档（在右侧内容区显示渲染结果） */
+function previewAddDoc() {
+  var content = (document.getElementById('addDocContent').value || '').trim();
+  var title = (document.getElementById('addDocTitle').value || '').trim() || '未命名文档';
+  if (!content) {
+    document.getElementById('addDocContent').focus();
+    return;
+  }
+  // 隐藏添加面板，显示内容区预览
+  hideAddDocForm();
+  document.getElementById('docsEmptyState').style.display = 'none';
+  var contentView = document.getElementById('docsContentView');
+  contentView.style.display = 'flex';
+  document.getElementById('docsContentTitle').textContent = '[预览] ' + title;
+  document.getElementById('docsContentMeta').innerHTML = '<span class="docs-content-tag" style="background:rgba(245,158,11,0.15);color:#fbbf24;">预览模式 — 未保存</span>';
+  var inner = document.getElementById('docsContentInner');
+  if (typeof renderMarkdown === 'function') {
+    inner.innerHTML = renderMarkdown(content);
+  } else if (typeof marked !== 'undefined') {
+    inner.innerHTML = marked.parse(content);
+  } else {
+    inner.innerHTML = '<pre>' + escHtml(content) + '</pre>';
+  }
+  if (typeof mdEnhanceContent === 'function') mdEnhanceContent(inner);
+}
+
+/** 将标题转为 slug（用作 subSection 唯一标识） */
+function titleToSlug(title) {
+  // 保留中文、英文字母、数字，其余替换为连字符
+  return title
+    .toLowerCase()
+    .replace(/[^a-z0-9\\u4e00-\\u9fff]+/g, '-')
+    .replace(/^-+|-+$/g, '')
+    .substring(0, 60) || ('doc-' + Date.now());
+}
+
+/** 提交添加文档 */
+function submitAddDoc() {
+  var section = document.getElementById('addDocSection').value;
+  var subSectionInput = (document.getElementById('addDocSubSection').value || '').trim();
+  var title = (document.getElementById('addDocTitle').value || '').trim();
+  var content = (document.getElementById('addDocContent').value || '').trim();
+
+  // 校验必填字段
+  if (!title) {
+    alert('请输入文档标题');
+    document.getElementById('addDocTitle').focus();
+    return;
+  }
+  if (!content) {
+    alert('请输入 Markdown 内容');
+    document.getElementById('addDocContent').focus();
+    return;
+  }
+
+  // 自动生成 subSection：用户未填时从标题生成 slug，确保每篇文档有唯一的 section|subSection 键
+  var subSection = subSectionInput || titleToSlug(title);
+
+  // 禁用提交按钮
+  var submitBtn = document.querySelector('.add-doc-btn-submit');
+  if (submitBtn) { submitBtn.disabled = true; submitBtn.textContent = '⏳ 提交中...'; }
+
+  var payload = {
+    section: section,
+    subSection: subSection,
+    title: title,
+    content: content
+  };
+
+  // 使用 /api/doc/add（纯新增 API），后端会在文档已存在时返回 409 冲突
+  fetch('/api/doc/add', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(payload)
+  }).then(function(r) {
+    return r.json().then(function(body) { return { status: r.status, body: body }; });
+  }).then(function(resp) {
+    if (resp.status === 409) {
+      // 文档已存在 — 询问用户是否覆盖
+      if (confirm('已存在同名文档，是否覆盖更新？\\n' + (resp.body.error || ''))) {
+        // 用户确认覆盖 → 走 /api/doc/save（upsert 语义）
+        return fetch('/api/doc/save', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify(payload)
+        }).then(function(r2) {
+          if (!r2.ok) throw new Error('HTTP ' + r2.status);
+          return r2.json();
+        }).then(function(result) {
+          if (result.error) throw new Error(result.error);
+          return { success: true };
+        });
+      } else {
+        // 用户取消
+        if (submitBtn) { submitBtn.disabled = false; submitBtn.textContent = '📤 发布文档'; }
+        return { cancelled: true };
+      }
+    }
+    if (resp.body.error) throw new Error(resp.body.error);
+    return { success: true };
+  }).then(function(outcome) {
+    if (!outcome || outcome.cancelled) return;
+    // 成功
+    hideAddDocForm();
+    // 刷新文档列表
+    docsLoaded = false;
+    loadDocsData(function(data) {
+      renderDocsList(docsData);
+      // 自动选中刚添加的文档
+      var newKey = section + '|' + subSection;
+      selectDoc(newKey);
+    });
+    if (submitBtn) { submitBtn.disabled = false; submitBtn.textContent = '📤 发布文档'; }
+  }).catch(function(err) {
+    alert('保存失败: ' + (err.message || err));
+    if (submitBtn) { submitBtn.disabled = false; submitBtn.textContent = '📤 发布文档'; }
+  });
+}
+
+// 添加文档 textarea 事件绑定（在 DOM 就绪后）
+(function() {
+  var ta = document.getElementById('addDocContent');
+  if (ta) {
+    ta.addEventListener('input', updateAddDocCharCount);
+    // Ctrl+Enter 提交
+    ta.addEventListener('keydown', function(e) {
+      if (e.ctrlKey && e.key === 'Enter') { e.preventDefault(); submitAddDoc(); }
+      // Tab 缩进
+      if (e.key === 'Tab') {
+        e.preventDefault();
+        var start = ta.selectionStart;
+        var end = ta.selectionEnd;
+        ta.value = ta.value.substring(0, start) + '  ' + ta.value.substring(end);
+        ta.selectionStart = ta.selectionEnd = start + 2;
+        updateAddDocCharCount();
+      }
+    });
+  }
+  // 点击 overlay 背景关闭
+  var overlay = document.getElementById('addDocOverlay');
+  if (overlay) {
+    overlay.addEventListener('click', function(e) {
+      if (e.target === overlay) hideAddDocForm();
+    });
+  }
+})();
 
 // ========== Stats Dashboard ==========
 var statsLoaded = false;
@@ -1680,6 +1864,646 @@ function showPhasePickerForGenerate() {
   }).catch(function() {
     alert('获取阶段列表失败');
   });
+}
+
+// ========== Phase-60: AI 批量生成（浏览器直连 Ollama） ==========
+var _aiBatchCancelled = false;
+var _aiBatchRunning = false;
+var _aiBatchConfig = null; // { ollamaBaseUrl, ollamaModel, systemPrompt }
+var _BATCH_CACHE_KEY = 'aiBatch_phaseA_cache';  // Phase-65: localStorage key
+
+// ─── Phase-65: localStorage 断点续传辅助函数 ───
+function _batchCacheLoad() {
+  try {
+    var raw = localStorage.getItem(_BATCH_CACHE_KEY);
+    if (!raw) return null;
+    var cache = JSON.parse(raw);
+    if (!cache || !Array.isArray(cache.results)) return null;
+    return cache; // { timestamp, model, source, results: [{sourceId, ...saveBody}] }
+  } catch(e) { return null; }
+}
+
+function _batchCacheSave(model, source, results) {
+  try {
+    localStorage.setItem(_BATCH_CACHE_KEY, JSON.stringify({
+      timestamp: Date.now(),
+      model: model,
+      source: source,
+      results: results
+    }));
+  } catch(e) {
+    // localStorage full or unavailable — silent fail
+    console.warn('[BatchCache] localStorage save failed:', e);
+  }
+}
+
+function _batchCacheClear() {
+  try { localStorage.removeItem(_BATCH_CACHE_KEY); } catch(e) {}
+}
+
+function _batchCacheSourceIds(cache) {
+  var set = {};
+  if (cache && cache.results) {
+    for (var i = 0; i < cache.results.length; i++) {
+      if (cache.results[i].sourceId) set[cache.results[i].sourceId] = true;
+    }
+  }
+  return set;
+}
+
+function startAiBatchGenerate() {
+  // close dropdown
+  var dd = document.getElementById('memGenDropdown');
+  if (dd) dd.classList.remove('show');
+
+  var overlay = document.getElementById('aiBatchOverlay');
+  if (overlay) overlay.style.display = 'flex';
+
+  // reset UI
+  var statusEl = document.getElementById('aiBatchStatus');
+  var detailEl = document.getElementById('aiBatchDetail');
+  var progressEl = document.getElementById('aiBatchProgress');
+  var streamArea = document.getElementById('aiBatchStreamArea');
+  var summaryEl = document.getElementById('aiBatchSummary');
+  var configArea = document.getElementById('aiBatchConfigArea');
+  var startBtn = document.getElementById('aiBatchStartBtn');
+  var cancelBtn = document.getElementById('aiBatchCancelBtn');
+  if (statusEl) statusEl.textContent = '正在加载配置...';
+  if (detailEl) detailEl.textContent = '';
+  if (progressEl) progressEl.style.width = '0%';
+  if (streamArea) { streamArea.style.display = 'none'; streamArea.textContent = ''; }
+  if (summaryEl) summaryEl.style.display = 'none';
+  if (configArea) configArea.style.display = 'flex';
+  if (startBtn) { startBtn.disabled = false; startBtn.textContent = '开始'; }
+  if (cancelBtn) { cancelBtn.disabled = false; cancelBtn.textContent = '取消'; cancelBtn.onclick = function() { cancelAiBatch(); }; }
+
+  // Phase-65: 移除旧的续传按钮（如果有）
+  var oldResumeBtn = document.getElementById('aiBatchResumeBtn');
+  if (oldResumeBtn) oldResumeBtn.remove();
+  var oldClearBtn = document.getElementById('aiBatchClearCacheBtn');
+  if (oldClearBtn) oldClearBtn.remove();
+  var oldCacheInfo = document.getElementById('aiBatchCacheInfo');
+  if (oldCacheInfo) oldCacheInfo.remove();
+
+  // fetch config from server
+  fetch('/api/batch/config').then(function(r) { return r.json(); }).then(function(cfg) {
+    _aiBatchConfig = cfg;
+    var urlInput = document.getElementById('aiBatchOllamaUrl');
+    var modelInput = document.getElementById('aiBatchModel');
+    if (urlInput) urlInput.value = cfg.ollamaBaseUrl || 'http://localhost:11434';
+    if (modelInput) modelInput.value = cfg.ollamaModel || 'gemma3:27b';
+
+    // Phase-65: 检测 localStorage 缓存
+    var existingCache = _batchCacheLoad();
+    if (existingCache && existingCache.results.length > 0) {
+      var cacheAge = Date.now() - (existingCache.timestamp || 0);
+      var cacheAgeMin = Math.round(cacheAge / 60000);
+      var cacheAgeStr = cacheAgeMin < 60
+        ? cacheAgeMin + ' 分钟前'
+        : Math.round(cacheAgeMin / 60) + ' 小时前';
+
+      // 显示缓存信息
+      if (statusEl) statusEl.textContent = '🔄 发现未完成的批量任务';
+
+      var cacheInfo = document.createElement('div');
+      cacheInfo.id = 'aiBatchCacheInfo';
+      cacheInfo.style.cssText = 'margin:8px 0 12px;padding:10px 14px;background:rgba(96,165,250,0.15);border:1px solid rgba(96,165,250,0.3);border-radius:8px;font-size:13px;color:#93c5fd;';
+      cacheInfo.innerHTML = '📦 Phase A 缓存: <b>' + existingCache.results.length + ' 条</b> LLM 结果'
+        + '<br><span style="color:#9ca3af;font-size:12px;">模型: ' + (existingCache.model || '?') + ' · 来源: ' + (existingCache.source || 'both') + ' · ' + cacheAgeStr + '</span>';
+
+      // 续传按钮
+      var resumeBtn = document.createElement('button');
+      resumeBtn.id = 'aiBatchResumeBtn';
+      resumeBtn.textContent = '⚡ 续传（跳过已缓存，继续 Phase A → Phase B）';
+      resumeBtn.style.cssText = 'padding:8px 16px;background:linear-gradient(135deg,#3b82f6,#6366f1);color:#fff;border:none;border-radius:6px;cursor:pointer;font-size:13px;margin:4px 8px 4px 0;';
+      resumeBtn.onclick = function() { startAiBatchProcess(true); };
+
+      // 仅 Phase B 按钮（跳过所有 Phase A，直接保存已缓存的）
+      var phaseBOnlyBtn = document.createElement('button');
+      phaseBOnlyBtn.id = 'aiBatchPhaseBOnlyBtn';
+      phaseBOnlyBtn.textContent = '💾 仅 Phase B（直接保存 ' + existingCache.results.length + ' 条缓存）';
+      phaseBOnlyBtn.style.cssText = 'padding:8px 16px;background:linear-gradient(135deg,#22c55e,#16a34a);color:#fff;border:none;border-radius:6px;cursor:pointer;font-size:13px;margin:4px 8px 4px 0;';
+      phaseBOnlyBtn.onclick = function() { startAiBatchProcess('phaseB_only'); };
+
+      // 清除缓存按钮
+      var clearCacheBtn = document.createElement('button');
+      clearCacheBtn.id = 'aiBatchClearCacheBtn';
+      clearCacheBtn.textContent = '🗑 清除缓存，重新开始';
+      clearCacheBtn.style.cssText = 'padding:8px 16px;background:rgba(239,68,68,0.2);color:#f87171;border:1px solid rgba(239,68,68,0.3);border-radius:6px;cursor:pointer;font-size:13px;margin:4px 0;';
+      clearCacheBtn.onclick = function() {
+        _batchCacheClear();
+        cacheInfo.remove();
+        resumeBtn.remove();
+        phaseBOnlyBtn.remove();
+        clearCacheBtn.remove();
+        if (statusEl) statusEl.textContent = '就绪 — 缓存已清除，点击"开始"重新启动';
+      };
+
+      // 插入到 configArea 前面
+      var configArea2 = document.getElementById('aiBatchConfigArea');
+      if (configArea2 && configArea2.parentNode) {
+        configArea2.parentNode.insertBefore(cacheInfo, configArea2);
+        configArea2.parentNode.insertBefore(resumeBtn, configArea2);
+        configArea2.parentNode.insertBefore(phaseBOnlyBtn, configArea2);
+        configArea2.parentNode.insertBefore(clearCacheBtn, configArea2);
+      }
+    } else {
+      if (statusEl) statusEl.textContent = '就绪 — 点击"开始"启动';
+    }
+  }).catch(function(err) {
+    if (statusEl) statusEl.textContent = '⚠️ 加载配置失败，使用默认值';
+    _aiBatchConfig = { ollamaBaseUrl: 'http://localhost:11434', ollamaModel: 'gemma3:27b', systemPrompt: '' };
+  });
+}
+
+function cancelAiBatch() {
+  if (_aiBatchRunning) {
+    _aiBatchCancelled = true;
+    var cancelBtn = document.getElementById('aiBatchCancelBtn');
+    if (cancelBtn) { cancelBtn.disabled = true; cancelBtn.textContent = '取消中...'; }
+  } else {
+    closeAiBatch();
+  }
+}
+
+function closeAiBatch() {
+  var overlay = document.getElementById('aiBatchOverlay');
+  if (overlay) overlay.style.display = 'none';
+  _aiBatchRunning = false;
+  _aiBatchCancelled = false;
+}
+
+// Phase-65: resumeMode 参数:
+//   false/undefined = 重新开始（清除缓存 → Phase A → Phase B）
+//   true = 续传（从缓存续传 Phase A 剩余 → Phase B）
+//   'phaseB_only' = 仅执行 Phase B（跳过 Phase A，直接保存缓存）
+function startAiBatchProcess(resumeMode) {
+  var urlInput = document.getElementById('aiBatchOllamaUrl');
+  var modelInput = document.getElementById('aiBatchModel');
+  var sourceSelect = document.getElementById('aiBatchSource');
+  var ollamaUrl = urlInput ? urlInput.value.trim() : 'http://localhost:11434';
+  var model = modelInput ? modelInput.value.trim() : 'gemma3:27b';
+  var source = sourceSelect ? sourceSelect.value : 'both';
+
+  // get systemPrompt from config or use default
+  var systemPrompt = (_aiBatchConfig && _aiBatchConfig.systemPrompt) ? _aiBatchConfig.systemPrompt : '你是一个记忆构建助手。请根据以下文档/任务内容生成多级记忆。\\n生成三个层级（必须以 JSON 返回）：\\n- L1（触点摘要）：一句话概括（15~30字）\\n- L2（详细记忆）：3~8句话，包含关键技术细节\\n- L3_summary（结构总结）：列出主要组件、依赖关系\\n- memoryType：从 decision/pattern/bugfix/insight/preference/summary 选择\\n- importance：0~1\\n- suggestedTags：标签数组\\n- anchorName：触点名称\\n- anchorType：触点类型（module/concept/api/architecture/feature/library/protocol）\\n- anchorOverview：触点概览（3~5句话目录索引式摘要，列出关键子项、核心 Flow、主要组件）\\n\\n请严格以 JSON 格式返回：\\n{"L1": "...", "L2": "...", "L3_summary": "...", "memoryType": "...", "importance": 0.7, "suggestedTags": [...], "anchorName": "...", "anchorType": "...", "anchorOverview": "..."}';
+
+  _aiBatchCancelled = false;
+  _aiBatchRunning = true;
+
+  var configArea = document.getElementById('aiBatchConfigArea');
+  var startBtn = document.getElementById('aiBatchStartBtn');
+  if (configArea) configArea.style.display = 'none';
+  if (startBtn) startBtn.disabled = true;
+
+  // Phase-65: 隐藏续传相关按钮
+  var resumeBtn = document.getElementById('aiBatchResumeBtn');
+  var phaseBOnlyBtn = document.getElementById('aiBatchPhaseBOnlyBtn');
+  var clearCacheBtn = document.getElementById('aiBatchClearCacheBtn');
+  var cacheInfoEl = document.getElementById('aiBatchCacheInfo');
+  if (resumeBtn) resumeBtn.style.display = 'none';
+  if (phaseBOnlyBtn) phaseBOnlyBtn.style.display = 'none';
+  if (clearCacheBtn) clearCacheBtn.style.display = 'none';
+  if (cacheInfoEl) cacheInfoEl.style.display = 'none';
+
+  var titleEl = document.getElementById('aiBatchTitle');
+  var statusEl = document.getElementById('aiBatchStatus');
+  var detailEl = document.getElementById('aiBatchDetail');
+  var progressEl = document.getElementById('aiBatchProgress');
+  var streamArea = document.getElementById('aiBatchStreamArea');
+  var summaryEl = document.getElementById('aiBatchSummary');
+  var cancelBtn = document.getElementById('aiBatchCancelBtn');
+
+  var modeLabel = resumeMode === 'phaseB_only' ? '仅 Phase B' : (resumeMode ? '续传模式' : '分相模式');
+  if (titleEl) titleEl.textContent = '🚀 AI 批量生成记忆（' + modeLabel + '）';
+  if (statusEl) statusEl.textContent = '正在获取候选项...';
+  if (streamArea) { streamArea.style.display = 'block'; streamArea.textContent = ''; }
+
+  var totalSaved = 0;
+  var totalFailed = 0;
+  var totalSkipped = 0;
+  var phaseASkipped = 0;
+  var phaseACached = 0;  // Phase-65: 从缓存恢复的数量
+  var startTime = Date.now();
+
+  // Phase-64: 分相缓存 — Phase A 的 LLM 结果暂存在 JS 数组中
+  var preparedResults = [];
+
+  // Phase-65: 加载已有缓存（如果是续传模式）
+  var existingCache = (resumeMode) ? _batchCacheLoad() : null;
+  var cachedSourceIds = existingCache ? _batchCacheSourceIds(existingCache) : {};
+
+  if (resumeMode && existingCache && existingCache.results.length > 0) {
+    // 恢复已缓存的 Phase A 结果
+    preparedResults = existingCache.results.slice();
+    phaseACached = preparedResults.length;
+    // 使用缓存中的 source 配置
+    if (existingCache.source) source = existingCache.source;
+  } else if (!resumeMode) {
+    // 重新开始：清除旧缓存
+    _batchCacheClear();
+  }
+
+  // phaseB_only 模式：跳过 Phase A，直接 Phase B
+  if (resumeMode === 'phaseB_only') {
+    if (preparedResults.length === 0) {
+      if (statusEl) statusEl.textContent = '❌ 没有缓存数据可用';
+      _aiBatchRunning = false;
+      if (cancelBtn) { cancelBtn.textContent = '关闭'; cancelBtn.onclick = function() { closeAiBatch(); }; }
+      return;
+    }
+    if (statusEl) statusEl.textContent = '📦 从缓存加载 ' + preparedResults.length + ' 条 → 直接进入 Phase B...';
+    if (streamArea) {
+      streamArea.textContent = '⚡ 跳过 Phase A（使用 ' + preparedResults.length + ' 条缓存结果）\\n🔄 切换到 Phase B: 保存记忆 + Embedding ...\\n   （Ollama 将切换到 embedding 模型，请稍候）';
+    }
+    setTimeout(function() { processPhaseB(); }, 1000);
+    return;
+  }
+
+  // Step 1: Get all candidates
+  fetch('/api/memories/generate?source=' + encodeURIComponent(source) + '&limit=99999')
+    .then(function(r) { return r.json(); })
+    .then(function(data) {
+      var candidates = data.candidates || [];
+      totalSkipped = (data.stats && data.stats.skippedWithMemory) || 0;
+
+      if (candidates.length === 0 && preparedResults.length === 0) {
+        if (statusEl) statusEl.textContent = '✅ 没有可处理的候选项' + (totalSkipped > 0 ? '（已跳过 ' + totalSkipped + ' 条已有记忆）' : '');
+        _aiBatchRunning = false;
+        _batchCacheClear();
+        if (cancelBtn) { cancelBtn.textContent = '关闭'; cancelBtn.onclick = function() { closeAiBatch(); }; }
+        return;
+      }
+
+      // Phase-65: 如果没有新候选但有缓存 → 直接 Phase B
+      if (candidates.length === 0 && preparedResults.length > 0) {
+        if (statusEl) statusEl.textContent = '✅ 无新候选项，直接保存 ' + preparedResults.length + ' 条缓存结果';
+        if (streamArea) {
+          streamArea.textContent = '📦 无需 Phase A（全部已缓存: ' + preparedResults.length + ' 条）\\n🔄 切换到 Phase B: 保存记忆 + Embedding ...';
+        }
+        setTimeout(function() { processPhaseB(); }, 1000);
+        return;
+      }
+
+      // Phase-65: 过滤已缓存的候选项
+      var newCandidates = [];
+      var cacheHits = 0;
+      for (var ci = 0; ci < candidates.length; ci++) {
+        if (cachedSourceIds[candidates[ci].sourceId]) {
+          cacheHits++;
+        } else {
+          newCandidates.push(candidates[ci]);
+        }
+      }
+
+      var totalCandidates = newCandidates.length + phaseACached;
+      if (resumeMode && cacheHits > 0) {
+        if (statusEl) statusEl.textContent = '📦 缓存命中: ' + phaseACached + ' 条 · 新增: ' + newCandidates.length + ' 条 — Phase A: LLM 生成开始...';
+      } else {
+        if (statusEl) statusEl.textContent = '共 ' + newCandidates.length + ' 条候选项' + (totalSkipped > 0 ? '（跳过 ' + totalSkipped + ' 条已有）' : '') + ' — Phase A: LLM 生成开始...';
+      }
+
+      // 如果没有新候选需要处理 → 直接 Phase B
+      if (newCandidates.length === 0) {
+        if (streamArea) {
+          streamArea.textContent = '✅ Phase A: 全部 ' + phaseACached + ' 条已在缓存中，无需重新生成\\n🔄 切换到 Phase B: 保存记忆 + Embedding ...';
+        }
+        setTimeout(function() { processPhaseB(); }, 1000);
+        return;
+      }
+
+      // ═══════════════════════════════════════════════════
+      // Phase A: 新候选 → callOllamaStream(gemma3:27b) → 缓存到 preparedResults
+      //   gemma3:27b 全程保持加载，不会触发 Embedding 模型
+      // ═══════════════════════════════════════════════════
+      var idxA = 0;
+      function processPhaseA() {
+        if (_aiBatchCancelled || idxA >= newCandidates.length) {
+          onPhaseADone();
+          return;
+        }
+
+        var c = newCandidates[idxA];
+        var rawContent = c.contentL3 || c.content || '';
+        var candidateTitle = c.sourceTitle || c.title || c.sourceId || 'unknown';
+
+        // Skip very short content
+        if (!rawContent || rawContent.length < 50) {
+          idxA++;
+          phaseASkipped++;
+          if (detailEl) detailEl.textContent = '跳过过短内容: ' + candidateTitle;
+          setTimeout(processPhaseA, 50);
+          return;
+        }
+
+        var truncated = rawContent.length > 12000
+          ? rawContent.slice(0, 12000) + '\\n\\n[... 内容已截断，共 ' + rawContent.length + ' 字符]'
+          : rawContent;
+
+        var doneCount = phaseACached + idxA;
+        var pct = Math.round(((doneCount + 1) / totalCandidates) * 50);  // Phase A 占 0~50%
+        if (progressEl) progressEl.style.width = pct + '%';
+        if (statusEl) statusEl.textContent = 'Phase A (' + model + '): ' + (doneCount + 1) + '/' + totalCandidates + ' — LLM 生成 L1/L2/L3...' + (phaseACached > 0 ? ' (缓存: ' + phaseACached + ')' : '');
+        if (detailEl) {
+          var elapsed = ((Date.now() - startTime) / 1000).toFixed(0);
+          var speed = idxA > 0 ? ((Date.now() - startTime) / idxA / 1000).toFixed(1) + 's/条' : '';
+          detailEl.textContent = '📝 ' + candidateTitle + ' · 已缓存: ' + preparedResults.length + ' · 已用: ' + elapsed + 's' + (speed ? ' · ' + speed : '');
+        }
+        if (streamArea) { streamArea.textContent = ''; streamArea.style.display = 'block'; }
+
+        // Call Ollama native /api/chat with streaming (gemma3:27b stays loaded)
+        callOllamaStream(ollamaUrl, model, systemPrompt, '标题：' + candidateTitle + '\\n\\n' + truncated, streamArea, function(llmResult) {
+          if (_aiBatchCancelled) { onPhaseADone(); return; }
+
+          // Parse JSON from LLM output
+          var parsed = parseJsonFromLlmOutput(llmResult);
+
+          var memContent = '';
+          var memContentL1 = '';
+          var memContentL2 = '';
+          var memContentL3 = rawContent;
+          var memType = c.suggestedMemoryType || 'summary';
+          var memImportance = c.suggestedImportance || 0.5;
+          var memTags = c.suggestedTags || [];
+          var anchorName = null;
+          var anchorType = null;
+          var anchorOverview = null;
+
+          if (parsed) {
+            memContentL1 = parsed.L1 || rawContent.slice(0, 100);
+            memContentL2 = parsed.L2 || rawContent.slice(0, 500);
+            memContent = parsed.L2 || parsed.L1 || rawContent.slice(0, 500);
+            memType = parsed.memoryType || memType;
+            memImportance = parsed.importance || memImportance;
+            if (parsed.suggestedTags && parsed.suggestedTags.length > 0) memTags = parsed.suggestedTags;
+            anchorName = parsed.anchorName || null;
+            anchorType = parsed.anchorType || null;
+            anchorOverview = parsed.anchorOverview || null;
+          } else {
+            // Fallback: no valid JSON from LLM
+            memContentL1 = rawContent.slice(0, 100);
+            memContentL2 = rawContent.slice(0, 500);
+            memContent = rawContent.slice(0, 500);
+          }
+
+          // 缓存到 JS 数组，不立即调用 /api/batch/save
+          preparedResults.push({
+            memoryType: memType,
+            content: memContent,
+            tags: memTags,
+            relatedTaskId: c.sourceType === 'task' ? c.sourceId : undefined,
+            sourceId: c.sourceId,
+            importance: memImportance,
+            contentL1: memContentL1,
+            contentL2: memContentL2,
+            contentL3: memContentL3,
+            anchorName: anchorName,
+            anchorType: anchorType,
+            anchorOverview: anchorOverview,
+            _title: candidateTitle
+          });
+
+          // Phase-65: 增量保存到 localStorage（每条 LLM 完成后立即持久化）
+          _batchCacheSave(model, source, preparedResults);
+
+          idxA++;
+          setTimeout(processPhaseA, 100);
+        });
+      }
+
+      // ═══════════════════════════════════════════════════
+      // Phase A 完成回调 → 启动 Phase B
+      // ═══════════════════════════════════════════════════
+      function onPhaseADone() {
+        // Phase-65: 确保最终状态也保存到 localStorage
+        _batchCacheSave(model, source, preparedResults);
+
+        if (_aiBatchCancelled && preparedResults.length === 0) {
+          finishAiBatch(totalCandidates);
+          return;
+        }
+
+        var phaseATime = ((Date.now() - startTime) / 1000).toFixed(1);
+        if (streamArea) {
+          streamArea.textContent = '✅ Phase A 完成: ' + preparedResults.length + ' 条 LLM 结果已缓存 (' + phaseATime + 's)'
+            + (phaseACached > 0 ? '\\n   （其中 ' + phaseACached + ' 条来自断点续传缓存）' : '')
+            + (_aiBatchCancelled ? '\\n⚠ 已取消，将保存已缓存的 ' + preparedResults.length + ' 条' : '')
+            + '\\n\\n🔄 切换到 Phase B: 保存记忆 + Embedding ...\\n   （Ollama 将切换到 embedding 模型，请稍候）';
+        }
+
+        if (preparedResults.length === 0) {
+          finishAiBatch(totalCandidates);
+          return;
+        }
+
+        // Phase B 开始前稍等一下，让用户看到提示
+        setTimeout(function() { processPhaseB(); }, 1500);
+      }
+
+      // 启动 Phase A
+      processPhaseA();
+    })
+    .catch(function(err) {
+      if (statusEl) statusEl.textContent = '❌ 获取候选项失败: ' + (err.message || err);
+      _aiBatchRunning = false;
+      if (cancelBtn) { cancelBtn.textContent = '关闭'; cancelBtn.onclick = function() { closeAiBatch(); }; }
+    });
+
+  // ═══════════════════════════════════════════════════
+  // Phase B: 全部缓存结果 → /api/batch/save → Embedding (qwen3-embedding:8b)
+  //   embedding 模型全程保持加载，不会再触发 gemma3:27b
+  // ═══════════════════════════════════════════════════
+  var idxB = 0;
+  var phaseBStart = 0;
+  function processPhaseB() {
+    phaseBStart = Date.now();
+    processNextB();
+  }
+
+  function processNextB() {
+    if (_aiBatchCancelled || idxB >= preparedResults.length) {
+      finishAiBatch(preparedResults.length);
+      return;
+    }
+
+    var entry = preparedResults[idxB];
+    var pct = 50 + Math.round(((idxB + 1) / preparedResults.length) * 50);  // Phase B 占 50~100%
+    if (progressEl) progressEl.style.width = pct + '%';
+    if (statusEl) statusEl.textContent = 'Phase B (Embedding): ' + (idxB + 1) + '/' + preparedResults.length + ' — 保存记忆 + 向量化...';
+    if (detailEl) {
+      var elapsed = ((Date.now() - phaseBStart) / 1000).toFixed(0);
+      var speed = idxB > 0 ? ((Date.now() - phaseBStart) / idxB / 1000).toFixed(1) + 's/条' : '';
+      detailEl.textContent = '💾 ' + (entry._title || entry.sourceId) + ' · 已保存: ' + totalSaved + '/' + preparedResults.length + ' · Phase B 用时: ' + elapsed + 's' + (speed ? ' · ' + speed : '');
+    }
+
+    var saveBody = {
+      memoryType: entry.memoryType,
+      content: entry.content,
+      tags: entry.tags,
+      relatedTaskId: entry.relatedTaskId,
+      sourceId: entry.sourceId,
+      importance: entry.importance,
+      contentL1: entry.contentL1,
+      contentL2: entry.contentL2,
+      contentL3: entry.contentL3,
+      anchorName: entry.anchorName,
+      anchorType: entry.anchorType,
+      anchorOverview: entry.anchorOverview,
+    };
+
+    fetch('/api/batch/save', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(saveBody)
+    }).then(function(r) { return r.json(); }).then(function(result) {
+      totalSaved++;
+      idxB++;
+      setTimeout(processNextB, 50);
+    }).catch(function(err) {
+      totalFailed++;
+      idxB++;
+      setTimeout(processNextB, 50);
+    });
+  }
+
+  function finishAiBatch(total) {
+    _aiBatchRunning = false;
+    var elapsed = ((Date.now() - startTime) / 1000).toFixed(1);
+    var progressEl = document.getElementById('aiBatchProgress');
+    if (progressEl) progressEl.style.width = '100%';
+
+    var reason = _aiBatchCancelled ? '已取消' : '完成';
+    var titleEl = document.getElementById('aiBatchTitle');
+    if (titleEl) titleEl.textContent = _aiBatchCancelled ? '⏹ 已取消' : '✅ 全部完成！';
+    if (statusEl) statusEl.textContent = reason + ' — Phase A 缓存: ' + preparedResults.length + ' 条' + (phaseACached > 0 ? ' (续传: ' + phaseACached + ')' : '') + ' · Phase B 保存: ' + (totalSaved + totalFailed) + ' 条';
+
+    var summaryEl = document.getElementById('aiBatchSummary');
+    if (summaryEl) {
+      summaryEl.style.display = 'block';
+      summaryEl.innerHTML = '<div style="display:flex;gap:16px;justify-content:center;flex-wrap:wrap;">'
+        + '<span style="color:#22c55e;">✅ 保存: ' + totalSaved + '</span>'
+        + (totalFailed > 0 ? '<span style="color:#f87171;">❌ 失败: ' + totalFailed + '</span>' : '')
+        + '<span style="color:#6b7280;">⏭ 跳过: ' + (totalSkipped + phaseASkipped) + '</span>'
+        + '<span style="color:#60a5fa;">📦 缓存: ' + preparedResults.length + (phaseACached > 0 ? ' (续传' + phaseACached + ')' : '') + '</span>'
+        + '<span style="color:#6b7280;">⏱ 总用时: ' + elapsed + 's</span>'
+        + '</div>'
+        + '<div style="margin-top:8px;font-size:12px;color:#9ca3af;">模型切换: ' + model + ' → embedding · 仅 1 次 VRAM 切换</div>';
+    }
+
+    // Phase-65: 全部完成 → 清除 localStorage 缓存；取消 → 保留缓存以供续传
+    if (!_aiBatchCancelled && totalFailed === 0) {
+      _batchCacheClear();
+    }
+    // 如果有失败的，也保留缓存（用户可能想重试）
+
+    if (cancelBtn) {
+      cancelBtn.textContent = '关闭';
+      cancelBtn.disabled = false;
+      cancelBtn.onclick = function() {
+        closeAiBatch();
+        memoryLoaded = false;
+        loadMemoryPage();
+      };
+    }
+  }
+}
+
+/** 浏览器端调用 Ollama 原生 /api/chat 流式 API */
+function callOllamaStream(baseUrl, model, systemPrompt, userContent, streamEl, callback) {
+  var nativeUrl = baseUrl.replace(/\\/v1\\/?$/, '').replace(/\\/+$/, '') + '/api/chat';
+
+  fetch(nativeUrl, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({
+      model: model,
+      messages: [
+        { role: 'system', content: systemPrompt },
+        { role: 'user', content: userContent }
+      ],
+      stream: true,
+      keep_alive: '30m',
+      options: { temperature: 0.3, num_predict: 4096 }
+    })
+  }).then(function(response) {
+    if (!response.ok || !response.body) {
+      if (streamEl) streamEl.textContent = '❌ Ollama 返回 ' + response.status;
+      callback('');
+      return;
+    }
+
+    var reader = response.body.getReader();
+    var decoder = new TextDecoder();
+    var result = '';
+    var buffer = '';
+
+    function readChunk() {
+      reader.read().then(function(chunk) {
+        if (chunk.done) {
+          // process remaining buffer
+          if (buffer.trim()) {
+            try {
+              var c = JSON.parse(buffer);
+              if (c.message && c.message.content) result += c.message.content;
+            } catch(e) {}
+          }
+          callback(result);
+          return;
+        }
+
+        buffer += decoder.decode(chunk.value, { stream: true });
+        var lines = buffer.split('\\n');
+        buffer = lines.pop() || '';
+
+        for (var i = 0; i < lines.length; i++) {
+          if (!lines[i].trim()) continue;
+          try {
+            var parsed = JSON.parse(lines[i]);
+            if (parsed.message && parsed.message.content) {
+              result += parsed.message.content;
+              if (streamEl) {
+                streamEl.textContent = result;
+                streamEl.scrollTop = streamEl.scrollHeight;
+              }
+            }
+          } catch(e) {}
+        }
+
+        readChunk();
+      }).catch(function(err) {
+        if (streamEl) streamEl.textContent += '\\n❌ 流读取错误: ' + (err.message || err);
+        callback(result);
+      });
+    }
+
+    readChunk();
+  }).catch(function(err) {
+    if (streamEl) streamEl.textContent = '❌ 连接 Ollama 失败: ' + (err.message || err) + '\\n请确认 Ollama 正在运行：' + baseUrl;
+    callback('');
+  });
+}
+
+/** 从 LLM 输出中解析 JSON */
+function parseJsonFromLlmOutput(raw) {
+  if (!raw) return null;
+  var cleaned = raw;
+  // 尝试从 json code block 中提取
+  var tick3 = String.fromCharCode(96,96,96);
+  var jsonMatch = cleaned.match(new RegExp(tick3 + '(?:json)?\\\\s*\\\\n?([\\\\s\\\\S]*?)\\\\n?' + tick3));
+  if (jsonMatch) cleaned = jsonMatch[1].trim();
+  // 尝试从 { 开始到 } 结束
+  if (!jsonMatch) {
+    var firstBrace = cleaned.indexOf('{');
+    var lastBrace = cleaned.lastIndexOf('}');
+    if (firstBrace >= 0 && lastBrace > firstBrace) {
+      cleaned = cleaned.slice(firstBrace, lastBrace + 1);
+    }
+  }
+  try {
+    return JSON.parse(cleaned);
+  } catch(e) {
+    return null;
+  }
 }
 
 // ========== 一键全量导入 ==========

@@ -532,6 +532,98 @@ export interface DevPlanGraphStoreConfig {
    */
   enableTextSearch?: boolean;
 
+  /**
+   * Phase-54: 是否启用 LLM Reranking（搜索结果精排）
+   *
+   * 启用后，searchSectionsAdvanced 和 recallMemory 的搜索结果
+   * 会经过 LLM 语义重排，提升相关性。需要本地 Ollama 或其他 LLM 服务。
+   *
+   * ⚠️ 优雅降级：Ollama 不可用时自动跳过重排，返回原始 RRF 排序结果。
+   *
+   * 在 .devplan/config.json 中配置：
+   * ```json
+   * {
+   *   "enableReranking": true,
+   *   "rerankModel": "gemma3:4b",
+   *   "rerankBaseUrl": "http://localhost:11434/v1"
+   * }
+   * ```
+   */
+  enableReranking?: boolean;
+
+  /**
+   * Phase-54: LLM Reranking 使用的模型名称
+   *
+   * 默认 "gemma3:4b"（轻量快速，适合重排任务）。
+   */
+  rerankModel?: string;
+
+  /**
+   * Phase-54: LLM 服务的 Base URL
+   *
+   * 默认 "http://localhost:11434/v1"（本地 Ollama）。
+   */
+  rerankBaseUrl?: string;
+
+  /**
+   * Phase-57B: LLM 分析提供者配置
+   *
+   * 控制 devplan_llm_analyze 工具使用的 LLM 后端。
+   * 通过 `engine` 参数一键切换分析模式，切换时只需修改此字段。
+   *
+   * engine 可选值：
+   * - `"cursor"` — 由 Cursor 自己完成分析（devplan_llm_analyze 返回 engine=cursor 提示）
+   * - `"ollama"` — 通过 LlmGateway 连接本机 Ollama（免费，需运行 Ollama）
+   * - `"models_online"` — 通过 LlmGateway 连接在线模型（DeepSeek 等，需 API Key）
+   *
+   * 在 .devplan/config.json 中配置：
+   * ```json
+   * {
+   *   "llmAnalyze": {
+   *     "engine": "models_online",
+   *     "ollamaModel": "gemma3:27b",
+   *     "ollamaBaseUrl": "http://localhost:11434/v1",
+   *     "onlineProvider": "deepseek",
+   *     "onlineModel": "deepseek-chat",
+   *     "onlineBaseUrl": "https://api.deepseek.com/v1",
+   *     "onlineApiKey": "sk-..."
+   *   }
+   * }
+   * ```
+   *
+   * 切换到 Ollama：只需改 `"engine": "ollama"`
+   * 切换到 Cursor：只需改 `"engine": "cursor"`
+   * 不配置 llmAnalyze：默认 engine="cursor"
+   */
+  llmAnalyze?: {
+    /**
+     * 分析引擎选择（一键切换）
+     * - "cursor": Cursor 自己分析（不调用 LLM，工具返回提示）
+     * - "ollama": LlmGateway → 本机 Ollama
+     * - "models_online": LlmGateway → 在线模型（DeepSeek 等）
+     * 默认: "cursor"
+     */
+    engine?: 'cursor' | 'ollama' | 'models_online';
+
+    // ---- Ollama 配置 ----
+    /** 本机 Ollama 模型（默认 "gemma3:27b"） */
+    ollamaModel?: string;
+    /** 本机 Ollama API 地址（默认 "http://localhost:11434/v1"） */
+    ollamaBaseUrl?: string;
+
+    // ---- 在线模型配置 ----
+    /** 在线提供者标识：deepseek / openai / 自定义（默认 "deepseek"） */
+    onlineProvider?: string;
+    /** 在线模型名称（默认 "deepseek-chat"） */
+    onlineModel?: string;
+    /** 在线 API Base URL（默认 "https://api.deepseek.com/v1"） */
+    onlineBaseUrl?: string;
+    /** 在线 API Key（首次注册后持久化到 LlmGateway store） */
+    onlineApiKey?: string;
+    /** 协议类型：openai_compat（默认） / anthropic */
+    onlineProtocol?: string;
+  };
+
   /** Git 操作的工作目录（多项目路由时指向项目根目录，默认 process.cwd()） */
   gitCwd?: string;
 }
@@ -884,6 +976,91 @@ export interface MemoryInput {
    * 例如: 当前任务描述、项目背景等。
    */
   decomposeContext?: string;
+
+  // ---- Phase-57: 三维记忆 Anchor / Flow / Structure ----
+
+  /**
+   * 触点名称（可选）— Phase-57 新增
+   *
+   * 显式指定记忆关联的触点（Anchor）名称。
+   * 如果不提供，saveMemory 会使用 AnchorExtractor 从 content 中自动提取。
+   */
+  anchorName?: string;
+
+  /**
+   * 触点类型（可选）— Phase-57 新增
+   *
+   * 触点分类：module | concept | api | architecture | feature | library | protocol
+   * 不提供时默认为 'concept'。
+   */
+  anchorType?: string;
+
+  /**
+   * 触点概览（可选）— Phase-63 新增
+   *
+   * L2 目录索引层，类似 OpenViking 的 `.overview.md`。
+   * 3~5 句话的目录索引式摘要，列出该触点的关键子项、核心 Flow 条目、
+   * 主要结构组件等。帮助 Agent 快速判断是否需要深入查看触点详情。
+   *
+   * 在批量导入中由 LLM 自动生成。
+   */
+  anchorOverview?: string;
+
+  /**
+   * 变更类型（可选）— Phase-57 新增
+   *
+   * 描述此记忆对应的变更性质：
+   * - 'created': 新功能/概念首次出现
+   * - 'upgraded': 功能升级/增强
+   * - 'modified': 小修改/调整
+   * - 'removed': 功能移除
+   * - 'deprecated': 功能弃用
+   *
+   * 不提供时默认为 'modified'。
+   */
+  changeType?: string;
+
+  /**
+   * 结构组件列表（可选）— Phase-57 新增
+   *
+   * 当记忆描述的功能由多个子组件组成时，可以指定其结构。
+   * 每个组件引用一个已有的 Anchor ID + 角色。
+   * 示例: [{ anchorId: "xxx", role: "core", versionHint: "v2" }]
+   */
+  structureComponents?: Array<{
+    anchorId: string;
+    role: string;
+    versionHint?: string;
+  }>;
+
+  // ---- Phase-58: Claude Skills 三层内容分离 ----
+
+  /**
+   * L1 触点摘要（可选）— Phase-58 新增
+   *
+   * 一句话概括，作为记忆的"入口"触点描述（~50字）。
+   * 用于 Anchor.description 字段。
+   * 如果不提供，从 content 前 100 字符截取。
+   */
+  contentL1?: string;
+
+  /**
+   * L2 详细记忆（可选）— Phase-58 新增
+   *
+   * 3~5句话，包含关键技术细节、设计决策、API 签名等（~500字）。
+   * 用于 FlowEntry.detail 字段和向量索引。
+   * 如果不提供，使用 content 全文。
+   */
+  contentL2?: string;
+
+  /**
+   * L3 完整内容（可选）— Phase-58 新增
+   *
+   * 原始文档全文或近全文内容（~5000字）。
+   * 存储在 Memory 实体的 contentL3 属性中，供深度检索和引用。
+   * 如果不提供，不额外存储 L3 内容。
+   */
+  contentL3?: string;
 }
 
 /**
@@ -955,6 +1132,57 @@ export interface Memory {
     /** 自动创建的关系 ID（如有） */
     relationCreated?: string;
   }>;
+
+  // ---- Phase-58: Claude Skills 三层内容 ----
+
+  /**
+   * L3 完整内容（Phase-58 新增）
+   *
+   * 当 saveMemory 提供 contentL3 时存储在此字段。
+   * 原始文档全文或近全文内容，供深度检索和引用。
+   */
+  contentL3?: string;
+
+  // ---- Phase-57: 三维记忆 Anchor / Flow / Structure ----
+
+  /**
+   * 关联的触点信息（当 saveMemory 自动/手动触发触点关联时返回）
+   */
+  anchorInfo?: {
+    /** Anchor 实体 ID */
+    id: string;
+    /** 触点名称 */
+    name: string;
+    /** 触点类型 */
+    anchorType: string;
+    /** 描述 */
+    description: string;
+    /** 当前版本 */
+    version: number;
+    /** 是否为新创建的触点（saveMemory 时返回） */
+    isNew?: boolean;
+    /** 记忆流条目数量（recallMemory 时返回） */
+    flowCount?: number;
+  };
+
+  /**
+   * 关联的记忆流条目（当追加到记忆流时返回）
+   */
+  flowEntry?: {
+    /** FlowEntry 实体 ID */
+    id: string;
+    /** 版本号 */
+    version: number;
+    /** 变更类型 */
+    changeType: string;
+    /** 摘要 */
+    summary: string;
+  };
+
+  /**
+   * 结构快照 ID（当创建了结构快照时返回）
+   */
+  structureSnapshotId?: string;
 }
 
 /**
@@ -971,6 +1199,37 @@ export interface ScoredMemory extends Memory {
   docSubSection?: string;
   /** 当 sourceKind='doc' 时，文档标题 */
   docTitle?: string;
+
+  // ---- Phase-57: 三维记忆召回增强 ----
+  // anchorInfo 继承自 Memory（不重定义）
+
+  /**
+   * 记忆流条目（L2 层：该触点的演进历史，最近 N 条）
+   * 仅在 recallMemory 层级下钻时填充。
+   */
+  flowEntries?: Array<{
+    id: string;
+    version: number;
+    changeType: string;
+    summary: string;
+    detail: string;
+    sourceTask?: string;
+    createdAt: number;
+  }>;
+
+  /**
+   * 结构快照（L3 层：该触点当前的组成结构）
+   * 仅在 recallMemory 层级下钻时填充。
+   */
+  structureSnapshot?: {
+    id: string;
+    version: number;
+    components: Array<{
+      anchorId: string;
+      role: string;
+      versionHint?: string;
+    }>;
+  };
 }
 
 /**
@@ -1025,6 +1284,54 @@ export interface MemoryContext {
     memoryCount: number;
     topMemoryTypes: string[];
   }>;
+
+  /**
+   * Phase-57: 触点索引 — 项目中已注册的记忆触点列表
+   *
+   * 触点（Anchor）是记忆系统中同一实体的唯一标识/入口，
+   * 每个触点关联一个记忆流（Memory Flow）记录实体的演变历程。
+   * 帮助 AI 快速了解项目中有哪些核心概念/模块/功能已被跟踪。
+   */
+  anchorIndex?: Array<{
+    /** 触点 ID */
+    id: string;
+    /** 触点名称 */
+    name: string;
+    /** 触点类型 (module | concept | api | architecture | feature 等) */
+    type: string;
+    /** 触点描述 */
+    description: string;
+    /** 当前版本号 */
+    version: number;
+    /** 状态 (active | deprecated | removed) */
+    status: string;
+    /** 关联的记忆流条目数 */
+    flowCount: number;
+  }>;
+
+  /**
+   * Phase-57: 结构概览 — 项目核心实体的组成结构快照
+   *
+   * 展示关键触点（如 feature/module 类型）的当前结构组成，
+   * 帮助 AI 理解各模块的依赖和组件关系。
+   */
+  structureOverview?: Array<{
+    /** 触点名称 */
+    anchorName: string;
+    /** 触点类型 */
+    anchorType: string;
+    /** 当前结构版本 */
+    version: number;
+    /** 组件列表 */
+    components: Array<{
+      /** 组件触点 ID */
+      anchorId: string;
+      /** 组件角色 (core | dependency | plugin 等) */
+      role: string;
+      /** 版本提示 */
+      versionHint?: string;
+    }>;
+  }>;
 }
 
 // ============================================================================
@@ -1071,6 +1378,60 @@ export interface MemoryCandidate {
     /** 关系说明 */
     reason?: string;
   }>;
+
+  // ---- Phase-57: 三维记忆触点匹配建议 ----
+
+  /**
+   * 建议的触点名称（从内容中自动提取或匹配已有触点）
+   *
+   * AI 在调用 devplan_memory_save 时可将此值传入 anchorName 参数。
+   */
+  suggestedAnchor?: string;
+
+  /**
+   * 建议的触点类型（module | concept | api | architecture | feature 等）
+   */
+  suggestedAnchorType?: string;
+
+  /**
+   * 建议的变更类型（created | upgraded | modified | removed | deprecated）
+   *
+   * 基于是否已有同名触点来判断：
+   * - 无已有触点 → 'created'
+   * - 有已有触点 → 'modified' 或 'upgraded'（根据内容推断）
+   */
+  suggestedChangeType?: string;
+
+  /**
+   * 是否已有同名触点（帮助 AI 判断是新功能还是升级）
+   */
+  hasExistingAnchor?: boolean;
+
+  // ---- Phase-58: Claude Skills 三层差异化内容 ----
+
+  /**
+   * Phase-58: 原始文档的完整内容（用于 LLM 分层生成）
+   *
+   * 对于文档来源，这是完整的文档内容（不截断）。
+   * 对于任务来源，这是聚合的任务+子任务内容。
+   * AI 可将此传入 devplan_memory_save 的 contentL3 参数。
+   */
+  contentL3?: string;
+
+  /**
+   * Phase-58: Claude Skills 指令 — 指导 AI 如何生成 L1/L2/L3 内容
+   *
+   * 包含针对不同层级的 Prompt 模板或具体指令，
+   * 供 AI 在调用 devplan_llm_analyze 时使用。
+   */
+  skillInstructions?: {
+    /** L1 触点摘要生成指令 */
+    l1Prompt?: string;
+    /** L2 详细记忆生成指令 */
+    l2Prompt?: string;
+    /** L3 结构化摘要生成指令 */
+    l3Prompt?: string;
+  };
 }
 
 /**
