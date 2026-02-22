@@ -90,6 +90,8 @@ import type {
   MemoryCandidate,
   MemoryGenerateResult,
   PerceptionPresetName,
+  RecallDepth,
+  RecallScope,
 } from './types';
 
 // ============================================================================
@@ -2806,7 +2808,15 @@ export class DevPlanGraphStore implements IDevPlanStore {
    * 仅处理 sourceKind='memory' 的结果（文档类型不需要下钻）。
    * 所有操作都是优雅降级的 — NAPI 不可用时静默跳过。
    */
-  private enrichMemoriesWithAnchorInfo(results: ScoredMemory[]): void {
+  /**
+   * Phase-57→124: 三维记忆层级下钻 — 为记忆附加 Anchor/Flow/Structure 信息
+   *
+   * Phase-124 增强: 支持 depth 参数控制信息层级，避免不必要的 Token 消耗。
+   *
+   * @param results - 待增强的记忆召回结果
+   * @param depth - 信息层级: L1(摘要) / L2(详情) / L3(完整)，默认 L1
+   */
+  private enrichMemoriesWithAnchorInfo(results: ScoredMemory[], depth: RecallDepth = 'L1'): void {
     const g = this.graph as any;
     if (typeof g.anchorGetById !== 'function') return;
 
@@ -2822,58 +2832,149 @@ export class DevPlanGraphStore implements IDevPlanStore {
         const anchor: NativeAnchorInfo | null = g.anchorGetById(anchorId);
         if (!anchor) continue;
 
-        // 附加 L1 触点信息
+        // 附加 L1 触点信息（始终包含）
         mem.anchorInfo = {
           id: anchor.id,
           name: anchor.name,
           anchorType: anchor.anchor_type,
           description: anchor.description,
+          overview: anchor.overview || null,  // Phase-124: L2 目录索引概览
           version: anchor.version,
           flowCount: anchor.flow_count,
         };
 
-        // L2: 查询记忆流（最近 5 条）
-        try {
-          const entries: NativeFlowEntry[] = g.flowQuery(anchorId, {
-            limit: 5,
-            newestFirst: true,
-          });
-          if (entries && entries.length > 0) {
-            mem.flowEntries = entries.map(e => ({
-              id: e.id,
-              version: e.version,
-              changeType: e.change_type,
-              summary: e.summary,
-              detail: e.detail,
-              sourceTask: e.source_task,
-              createdAt: e.created_at,
-            }));
+        // L2: 查询记忆流（仅 depth >= L2 时加载）
+        if (depth === 'L2' || depth === 'L3') {
+          try {
+            const entries: NativeFlowEntry[] = g.flowQuery(anchorId, {
+              limit: 5,
+              newestFirst: true,
+            });
+            if (entries && entries.length > 0) {
+              mem.flowEntries = entries.map(e => ({
+                id: e.id,
+                version: e.version,
+                changeType: e.change_type,
+                summary: e.summary,
+                detail: e.detail,
+                sourceTask: e.source_task,
+                createdAt: e.created_at,
+              }));
+            }
+          } catch {
+            // L2 失败不影响 L1
           }
-        } catch {
-          // L2 失败不影响 L1
         }
 
-        // L3: 查询当前结构快照
-        try {
-          const snapshot: NativeStructureSnapshot | null = g.structureCurrent(anchorId);
-          if (snapshot && snapshot.components.length > 0) {
-            mem.structureSnapshot = {
-              id: snapshot.id,
-              version: snapshot.version,
-              components: snapshot.components.map(c => ({
-                anchorId: c.anchorId,
-                role: c.role,
-                versionHint: c.versionHint,
-              })),
-            };
+        // L3: 查询当前结构快照（仅 depth = L3 时加载）
+        if (depth === 'L3') {
+          try {
+            const snapshot: NativeStructureSnapshot | null = g.structureCurrent(anchorId);
+            if (snapshot && snapshot.components.length > 0) {
+              mem.structureSnapshot = {
+                id: snapshot.id,
+                version: snapshot.version,
+                components: snapshot.components.map(c => ({
+                  anchorId: c.anchorId,
+                  role: c.role,
+                  versionHint: c.versionHint,
+                })),
+              };
+            }
+          } catch {
+            // L3 失败不影响 L1/L2
           }
-        } catch {
-          // L3 失败不影响 L1/L2
         }
       } catch {
         // 单条记忆的 anchor enrichment 失败不影响其他记忆
       }
     }
+  }
+
+  /**
+   * Phase-124: 范围限定过滤（Scope-based Filtering）
+   *
+   * 根据 scope 条件过滤记忆列表。支持四种过滤维度：
+   * - moduleId: 通过 MODULE_MEMORY 关系匹配
+   * - taskId: 通过 relatedTaskId 属性匹配
+   * - anchorType: 通过 anchored_by 关系 + Anchor.anchor_type 匹配
+   * - anchorName: 通过 anchored_by 关系 + Anchor.name 匹配
+   *
+   * 多个条件为 AND 关系。
+   *
+   * @param memories - 待过滤的记忆列表
+   * @param scope - 范围限定条件
+   * @returns 过滤后的记忆列表
+   */
+  private filterMemoriesByScope(memories: ScoredMemory[], scope: RecallScope): ScoredMemory[] {
+    if (!scope.moduleId && !scope.taskId && !scope.anchorType && !scope.anchorName) {
+      return memories; // 无 scope 条件，原样返回
+    }
+
+    const g = this.graph as any;
+
+    // ---- 预计算模块关联的记忆 ID 集合（避免逐条查询） ----
+    let moduleMemoryIds: Set<string> | null = null;
+    if (scope.moduleId) {
+      moduleMemoryIds = new Set<string>();
+      const modEntity = this.findEntityByProp(ET.MODULE, 'moduleId', scope.moduleId);
+      if (modEntity) {
+        try {
+          // MODULE_MEMORY 关系: module → memory
+          const rels = this.graph.outgoingByType(modEntity.id, RT.MODULE_MEMORY) as Relation[];
+          for (const rel of rels || []) {
+            moduleMemoryIds.add(rel.target);
+          }
+        } catch {
+          // 关系查询失败，保持空集合（会过滤掉所有结果）
+        }
+      }
+      // 如果模块不存在或无关联记忆，moduleMemoryIds 为空集 → 所有记忆都被过滤
+    }
+
+    return memories.filter(mem => {
+      // 仅对 memory 类型应用 scope 过滤，doc 类型不受影响
+      if (mem.sourceKind === 'doc') return true;
+
+      // 1. moduleId 过滤
+      if (moduleMemoryIds !== null && !moduleMemoryIds.has(mem.id)) {
+        return false;
+      }
+
+      // 2. taskId 过滤（直接检查属性）
+      if (scope.taskId && mem.relatedTaskId !== scope.taskId) {
+        return false;
+      }
+
+      // 3. anchorType / anchorName 过滤（需要查询 anchored_by 关系）
+      if (scope.anchorType || scope.anchorName) {
+        try {
+          const outgoing = this.graph.outgoingByType(mem.id, 'anchored_by') as Relation[];
+          if (!outgoing || outgoing.length === 0) return false;
+
+          const anchorId = outgoing[0].target;
+
+          if (typeof g.anchorGetById === 'function') {
+            const anchor: NativeAnchorInfo | null = g.anchorGetById(anchorId);
+            if (!anchor) return false;
+
+            if (scope.anchorType && anchor.anchor_type !== scope.anchorType) return false;
+            if (scope.anchorName && anchor.name !== scope.anchorName) return false;
+          } else {
+            // NAPI 不可用时，尝试从 Entity 属性中获取
+            const anchorEntity = this.graph.getEntity(anchorId);
+            if (!anchorEntity) return false;
+            const ap = anchorEntity.properties as any;
+            if (scope.anchorType && ap.anchor_type !== scope.anchorType) return false;
+            if (scope.anchorName && ap.name !== scope.anchorName) return false;
+          }
+        } catch {
+          return false; // 查询失败视为不匹配
+        }
+      }
+
+      return true;
+    });
   }
 
   /**
@@ -3318,12 +3419,29 @@ export class DevPlanGraphStore implements IDevPlanStore {
     graphExpand?: boolean;
     /** Phase-49: 是否使用记忆树激活引擎搜索（默认 true，不可用时自动回退） */
     useActivation?: boolean;
+    /**
+     * Phase-124: 分层召回深度（默认 "L1"）
+     *
+     * - "L1": 摘要层 — 记忆内容 + Anchor.description + Anchor.overview
+     * - "L2": 详情层 — 额外返回 FlowEntry 列表（summary + detail）
+     * - "L3": 完整层 — 额外返回 Structure Snapshot（组件组合关系）
+     */
+    depth?: RecallDepth;
+    /**
+     * Phase-124: 范围限定检索（默认无限制）
+     *
+     * 限制搜索范围，只返回符合 scope 条件的记忆。
+     * 多个条件为 AND 关系。
+     */
+    scope?: RecallScope;
   }): ScoredMemory[] {
     const limit = options?.limit || 10;
     const minScore = options?.minScore || 0;
     const includeDocs = options?.includeDocs !== false; // 默认 true
     const graphExpand = options?.graphExpand !== false; // 默认 true
     const useActivation = options?.useActivation !== false; // 默认 true
+    const depth: RecallDepth = options?.depth || 'L1'; // Phase-124: 默认 L1 摘要层
+    const scope = options?.scope; // Phase-124: 范围限定
     const now = Date.now();
 
     // ---- Phase-49: 优先使用记忆树激活引擎 ----
@@ -3357,11 +3475,16 @@ export class DevPlanGraphStore implements IDevPlanStore {
       }
     }
 
+    // ---- Phase-124: 范围限定过滤（Scope-based Filtering）----
+    if (scope) {
+      memoryResults = this.filterMemoriesByScope(memoryResults, scope);
+    }
+
     // ---- 2. 文档召回（统一召回） ----
     if (!includeDocs || options?.memoryType) {
       // 如果不需要文档或指定了 memoryType 过滤，直接返回记忆结果
-      // Phase-57: 三维记忆层级下钻
-      this.enrichMemoriesWithAnchorInfo(memoryResults);
+      // Phase-57→124: 三维记忆层级下钻（受 depth 控制）
+      this.enrichMemoriesWithAnchorInfo(memoryResults, depth);
       // Phase-54: LLM Reranking
       return this.rerankSearchResults(query, memoryResults, limit);
     }
@@ -3411,8 +3534,8 @@ export class DevPlanGraphStore implements IDevPlanStore {
       finalResults = this.rrfMergeResults(memoryResults, docResults, limit);
     }
 
-    // Phase-57: 三维记忆层级下钻 — 为 memory 类型的结果附加 anchor/flow/structure 信息
-    this.enrichMemoriesWithAnchorInfo(finalResults);
+    // Phase-57→124: 三维记忆层级下钻（受 depth 控制）
+    this.enrichMemoriesWithAnchorInfo(finalResults, depth);
 
     // Phase-54: LLM Reranking 作为最终精排步骤
     return this.rerankSearchResults(query, finalResults, limit);
@@ -5174,12 +5297,14 @@ export class DevPlanGraphStore implements IDevPlanStore {
     includeNodeDegree?: boolean;
     enableBackendDegreeFallback?: boolean;
     includePrompts?: boolean;
+    includeMemories?: boolean;
   }): DevPlanExportedGraph {
     const includeDocuments = options?.includeDocuments !== false;
     const includeModules = options?.includeModules !== false;
     const includeNodeDegree = options?.includeNodeDegree !== false;
     const enableBackendDegreeFallback = options?.enableBackendDegreeFallback !== false;
     const includePrompts = options?.includePrompts !== false;
+    const includeMemories = options?.includeMemories !== false;
 
     const nodes: DevPlanGraphNode[] = [];
     const edges: DevPlanGraphEdge[] = [];
@@ -5281,8 +5406,8 @@ export class DevPlanGraphStore implements IDevPlanStore {
       }
     }
 
-    // Memory 节点
-    {
+    // Memory 节点（Phase-68: 可通过 includeMemories 控制是否导出）
+    if (includeMemories) {
       const memories = this.listMemories ? this.listMemories() : [];
       const memoryIdSet = new Set<string>();
       for (const mem of memories) {

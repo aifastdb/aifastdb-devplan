@@ -36,6 +36,8 @@ import type {
   ScoredMemory,
   MemoryContext,
   MemoryGenerateResult,
+  RecallDepth,
+  RecallScope,
 } from './types';
 
 // ============================================================================
@@ -292,6 +294,12 @@ export interface IDevPlanStore {
     minScore?: number;
     /** 是否包含文档搜索（统一召回，默认 true） */
     includeDocs?: boolean;
+    /** Phase-38: 是否启用图谱关联扩展（默认 true） */
+    graphExpand?: boolean;
+    /** Phase-124: 分层召回深度（默认 "L1"） */
+    depth?: RecallDepth;
+    /** Phase-124: 范围限定检索 */
+    scope?: RecallScope;
   }): ScoredMemory[];
 
   /**
@@ -411,6 +419,7 @@ export interface IDevPlanStore {
     includeNodeDegree?: boolean;
     enableBackendDegreeFallback?: boolean;
     includePrompts?: boolean;
+    includeMemories?: boolean;
   }): DevPlanExportedGraph | null;
 
   // ==========================================================================

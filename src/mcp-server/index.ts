@@ -1009,7 +1009,7 @@ const TOOLS = [
   },
   {
     name: 'devplan_memory_recall',
-    description: 'Intelligently recall memories relevant to a query using semantic vector search. Automatically updates hit counts for recalled memories. Falls back to literal matching when semantic search is unavailable.\n通过语义向量搜索智能召回与查询相关的记忆。自动更新被召回记忆的命中次数。语义搜索不可用时退化为字面匹配。\n\n**Unified Recall (统一召回)**: By default, also searches document sections and merges results via RRF fusion. Each result includes `sourceKind` ("memory" or "doc") to indicate its origin. Set `includeDocs=false` to search memories only.',
+    description: 'Intelligently recall memories relevant to a query using semantic vector search. Automatically updates hit counts for recalled memories. Falls back to literal matching when semantic search is unavailable.\n通过语义向量搜索智能召回与查询相关的记忆。自动更新被召回记忆的命中次数。语义搜索不可用时退化为字面匹配。\n\n**Unified Recall (统一召回)**: By default, also searches document sections and merges results via RRF fusion. Each result includes `sourceKind` ("memory" or "doc") to indicate its origin. Set `includeDocs=false` to search memories only.\n\n**Hierarchical Recall (分层召回, Phase-124)**: Controls information depth returned per result. Default "L1" returns only summaries (Anchor.description + overview). "L2" adds FlowEntry history. "L3" adds Structure Snapshot. Token savings: L1 ~30 tokens/result vs L3 ~500 tokens/result ≈ 16x reduction.\n\n**Scope-based Search (范围限定检索, Phase-124)**: Limits search scope by module, task, or anchor type/name. Multiple scope conditions are AND-combined.',
     inputSchema: {
       type: 'object' as const,
       properties: {
@@ -1041,6 +1041,33 @@ const TOOLS = [
         graphExpand: {
           type: 'boolean',
           description: 'Whether to expand results via MEMORY_RELATES graph traversal (default: true). When enabled, related memories connected through the memory network are also discovered and RRF-fused with vector results.\n是否通过 MEMORY_RELATES 图谱遍历扩展结果（默认 true）。启用时，通过记忆网络关联的记忆也会被发现并与向量结果 RRF 融合。',
+        },
+        depth: {
+          type: 'string',
+          enum: ['L1', 'L2', 'L3'],
+          description: 'Hierarchical recall depth (default: "L1"). Controls how much context is returned per result.\n分层召回深度（默认 "L1"）。控制每条结果返回的上下文层级。\n\n- "L1" (default): Summary — memory content + Anchor.description + Anchor.overview. ~30 tokens/result.\n- "L2": Detail — adds FlowEntry list (summary + detail). ~200 tokens/result.\n- "L3": Full — adds Structure Snapshot (component composition). ~500 tokens/result.\n\nToken savings: 100 results × L1 ≈ 3K tokens vs L3 ≈ 50K tokens.',
+        },
+        scope: {
+          type: 'object',
+          description: 'Scope-based search filter (Phase-124). Limits search to specific modules, tasks, or anchor types.\n范围限定检索（Phase-124）。限制搜索范围到特定模块、任务或触点类型。\n\nMultiple conditions are AND-combined.\n多个条件为 AND 关系。',
+          properties: {
+            moduleId: {
+              type: 'string',
+              description: 'Filter by module ID (via MODULE_MEMORY relation). e.g., "vector-store"\n按模块 ID 过滤。例如 "vector-store"',
+            },
+            taskId: {
+              type: 'string',
+              description: 'Filter by related task ID (via relatedTaskId property). e.g., "phase-14"\n按关联任务 ID 过滤。例如 "phase-14"',
+            },
+            anchorType: {
+              type: 'string',
+              description: 'Filter by anchor type. Values: module | concept | api | architecture | feature | library | protocol\n按触点类型过滤。',
+            },
+            anchorName: {
+              type: 'string',
+              description: 'Filter by anchor name (exact match). e.g., "SocialGraphV2"\n按触点名称精确匹配。例如 "SocialGraphV2"',
+            },
+          },
         },
       },
       required: ['projectName', 'query'],
@@ -1560,7 +1587,7 @@ interface ToolArgs {
   taskId?: string;
   taskType?: string;
   status?: string;
-  scope?: string;
+  scope?: string | { moduleId?: string; taskId?: string; anchorType?: string; anchorName?: string };
   /** devplan_sync_git: 是否仅预览不实际修改 */
   dryRun?: boolean;
   /** devplan_upsert_task: 是否保留已有更高级状态 */
@@ -1629,6 +1656,8 @@ interface ToolArgs {
   includeDocs?: boolean;
   /** devplan_memory_recall: 是否启用图谱关联扩展 (Phase-38) */
   graphExpand?: boolean;
+  /** Phase-124: devplan_memory_recall: 分层召回深度 (L1/L2/L3) */
+  depth?: string;
   /** devplan_memory_clear: 确认删除（安全保护） */
   confirm?: boolean;
   /** Phase-47: devplan_memory_save: 记忆分解模式 */
@@ -3014,12 +3043,17 @@ async function handleToolCall(name: string, args: ToolArgs): Promise<string> {
 
       const includeDocs = args.includeDocs !== undefined ? args.includeDocs : true;
       const graphExpand = args.graphExpand !== undefined ? args.graphExpand : true;
+      const depth = args.depth || 'L1'; // Phase-124: 分层召回深度
+      const scope = args.scope as { moduleId?: string; taskId?: string; anchorType?: string; anchorName?: string } | undefined;
+
       const memories = (plan as any).recallMemory(query, {
         memoryType: args.memoryType as any,
         limit: args.limit,
         minScore: args.minScore,
         includeDocs,
         graphExpand,
+        depth,   // Phase-124: 传递分层召回深度
+        scope,   // Phase-124: 传递范围限定条件
       });
 
       // 统计来源分布
@@ -3033,6 +3067,8 @@ async function handleToolCall(name: string, args: ToolArgs): Promise<string> {
         memoryCount,
         docCount,
         unifiedRecall: includeDocs,
+        depth,   // Phase-124: 返回当前使用的层级
+        scope: scope || null,  // Phase-124: 返回当前使用的范围
         memories,
       }, null, 2);
     }

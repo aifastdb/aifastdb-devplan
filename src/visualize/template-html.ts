@@ -121,7 +121,7 @@ export function getHTML(projectName: string): string {
         <div class="legend-item toggle active" data-type="main-task" onclick="toggleFilter('main-task')" title="点击切换主任务显隐"><input type="checkbox" class="filter-cb" id="cb-main-task" checked><div class="legend-icon circle"></div> 主任务</div>
         <div class="legend-item toggle active" data-type="sub-task" onclick="toggleFilter('sub-task')" title="点击切换子任务显隐"><input type="checkbox" class="filter-cb" id="cb-sub-task" checked><div class="legend-icon dot"></div> 子任务</div>
         <div class="legend-item toggle active" data-type="document" onclick="toggleFilter('document')" title="点击切换文档显隐"><input type="checkbox" class="filter-cb" id="cb-document" checked><div class="legend-icon square"></div> 文档</div>
-        <div class="legend-item toggle active" data-type="memory" onclick="toggleFilter('memory')" title="点击切换记忆显隐"><input type="checkbox" class="filter-cb" id="cb-memory" checked><div class="legend-icon hexagon"></div> 记忆</div>
+        <div class="legend-item toggle" data-type="memory" onclick="toggleFilter('memory')" title="点击加载并显示记忆"><input type="checkbox" class="filter-cb" id="cb-memory"><div class="legend-icon hexagon"></div> 记忆</div>
         <div class="legend-divider"></div>
         <!-- 边类型图例 -->
         <div class="legend-item"><div class="legend-line solid"></div> 主任务</div>
@@ -251,8 +251,10 @@ export function getHTML(projectName: string): string {
             <div class="add-doc-actions">
               <button class="add-doc-btn add-doc-btn-cancel" onclick="hideAddDocForm()">取消</button>
               <button class="add-doc-btn add-doc-btn-preview" onclick="previewAddDoc()">👁 预览</button>
+              <button class="add-doc-btn add-doc-btn-batch" onclick="triggerBatchImport()">📂 批量导入</button>
               <button class="add-doc-btn add-doc-btn-submit" onclick="submitAddDoc()">📤 发布文档</button>
             </div>
+            <input type="file" id="batchImportInput" webkitdirectory multiple style="display:none" onchange="handleBatchImportFiles(this.files)">
           </div>
         </div>
       </div>
@@ -713,6 +715,49 @@ export function getHTML(projectName: string): string {
 
 <!-- Settings Toast -->
 <div class="settings-saved-toast" id="settingsSavedToast">✅ 引擎修改成功，正在重新加载页面...</div>
+
+<!-- Batch Import Progress Modal -->
+<div class="batch-import-overlay" id="batchImportOverlay">
+  <div class="batch-import-modal">
+    <div class="batch-import-header">
+      <h4 id="batchImportTitle">📂 批量导入文档</h4>
+      <button class="batch-import-close" id="batchImportCloseBtn" onclick="closeBatchImport()" style="display:none">&times;</button>
+    </div>
+    <div class="batch-import-body">
+      <div class="batch-import-progress-wrap">
+        <div class="batch-import-progress-bar"><div class="batch-import-progress-fill" id="batchImportProgressFill" style="width:0%"></div></div>
+        <div class="batch-import-progress-text" id="batchImportProgressText">准备中...</div>
+      </div>
+      <div class="batch-import-log" id="batchImportLog"></div>
+      <div class="batch-import-summary" id="batchImportSummary" style="display:none"></div>
+    </div>
+  </div>
+</div>
+
+<!-- Document Management Modal -->
+<div class="doc-manage-overlay" id="docManageOverlay" onclick="if(event.target===this)closeDocManageModal()">
+  <div class="doc-manage-modal">
+    <div class="doc-manage-header">
+      <h4>📄 文档管理</h4>
+      <button class="doc-manage-close" onclick="closeDocManageModal()">&times;</button>
+    </div>
+    <div class="doc-manage-body">
+      <div class="doc-manage-info">
+        <div class="doc-manage-info-title" id="docManageTitle"></div>
+        <div class="doc-manage-info-meta" id="docManageMeta"></div>
+      </div>
+      <div class="doc-manage-actions">
+        <button class="doc-manage-btn danger" id="docManageDeleteBtn" onclick="confirmDeleteDoc()">
+          <span class="doc-manage-btn-icon">🗑️</span>
+          <div>
+            <div class="doc-manage-btn-text">删除文档</div>
+            <div class="doc-manage-btn-desc">永久删除此文档，不可恢复</div>
+          </div>
+        </button>
+      </div>
+    </div>
+  </div>
+</div>
 
 <!-- Stats Modal -->
 <div class="stats-modal-overlay" id="statsModalOverlay">

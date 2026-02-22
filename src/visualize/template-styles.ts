@@ -525,6 +525,29 @@ export function getStyles(): string {
     .docs-children .docs-children .docs-item { padding-left: 60px; font-size: 11px; opacity: 0.75; }
     .docs-child-line { position: absolute; left: 35px; top: 0; bottom: 0; width: 1px; background: #374151; }
     .docs-item-wrapper { position: relative; }
+    .docs-item-more { display: none; align-items: center; justify-content: center; width: 20px; height: 20px; border-radius: 4px; background: transparent; border: none; color: #6b7280; font-size: 14px; cursor: pointer; flex-shrink: 0; transition: all 0.15s; padding: 0; line-height: 1; letter-spacing: 1px; }
+    .docs-item:hover .docs-item-more { display: flex; }
+    .docs-item-more:hover { background: rgba(99,102,241,0.25); color: #a5b4fc; }
+
+    .doc-manage-overlay { position: fixed; top: 0; left: 0; right: 0; bottom: 0; background: rgba(0,0,0,0.5); z-index: 9000; display: none; align-items: center; justify-content: center; }
+    .doc-manage-overlay.active { display: flex; }
+    .doc-manage-modal { background: #1e1e2e; border: 1px solid #374151; border-radius: 12px; padding: 0; width: 380px; max-width: 90vw; box-shadow: 0 20px 60px rgba(0,0,0,0.5); overflow: hidden; }
+    .doc-manage-header { padding: 16px 20px; border-bottom: 1px solid #374151; display: flex; align-items: center; justify-content: space-between; }
+    .doc-manage-header h4 { margin: 0; font-size: 15px; color: #f3f4f6; font-weight: 600; }
+    .doc-manage-close { background: none; border: none; color: #6b7280; font-size: 18px; cursor: pointer; padding: 0 4px; line-height: 1; }
+    .doc-manage-close:hover { color: #f3f4f6; }
+    .doc-manage-body { padding: 16px 20px; }
+    .doc-manage-info { margin-bottom: 16px; padding: 12px; background: rgba(55,65,81,0.4); border-radius: 8px; }
+    .doc-manage-info-title { font-size: 13px; color: #e5e7eb; font-weight: 600; margin-bottom: 4px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+    .doc-manage-info-meta { font-size: 11px; color: #6b7280; }
+    .doc-manage-actions { display: flex; flex-direction: column; gap: 8px; }
+    .doc-manage-btn { display: flex; align-items: center; gap: 10px; padding: 10px 14px; border-radius: 8px; border: 1px solid #374151; background: rgba(55,65,81,0.3); color: #d1d5db; font-size: 13px; cursor: pointer; transition: all 0.15s; }
+    .doc-manage-btn:hover { background: rgba(55,65,81,0.6); }
+    .doc-manage-btn.danger { border-color: rgba(239,68,68,0.3); }
+    .doc-manage-btn.danger:hover { background: rgba(239,68,68,0.15); color: #fca5a5; border-color: rgba(239,68,68,0.5); }
+    .doc-manage-btn-icon { font-size: 16px; flex-shrink: 0; }
+    .doc-manage-btn-text { flex: 1; }
+    .doc-manage-btn-desc { font-size: 11px; color: #6b7280; margin-top: 2px; }
 
     .docs-content { flex: 1; display: flex; flex-direction: column; min-width: 0; overflow: hidden; }
     .docs-content-header { padding: 16px 28px 12px; border-bottom: 1px solid #374151; flex-shrink: 0; display: flex; align-items: flex-start; justify-content: space-between; gap: 16px; }
@@ -575,7 +598,32 @@ export function getStyles(): string {
     .add-doc-btn-preview:hover { background: rgba(59,130,246,0.2); color: #bfdbfe; }
     .add-doc-btn-submit { background: rgba(16,185,129,0.15); border-color: rgba(16,185,129,0.3); color: #6ee7b7; }
     .add-doc-btn-submit:hover { background: rgba(16,185,129,0.25); color: #a7f3d0; }
+    .add-doc-btn-batch { background: rgba(245,158,11,0.12); border-color: rgba(245,158,11,0.3); color: #fbbf24; }
+    .add-doc-btn-batch:hover { background: rgba(245,158,11,0.2); color: #fde68a; }
     .add-doc-btn:disabled { opacity: 0.5; cursor: not-allowed; }
+
+    /* Batch Import Progress Modal */
+    .batch-import-overlay { position: fixed; top: 0; left: 0; right: 0; bottom: 0; background: rgba(0,0,0,0.55); z-index: 9100; display: none; align-items: center; justify-content: center; }
+    .batch-import-overlay.active { display: flex; }
+    .batch-import-modal { background: #1e1e2e; border: 1px solid #374151; border-radius: 12px; width: 520px; max-width: 92vw; max-height: 80vh; box-shadow: 0 20px 60px rgba(0,0,0,0.5); display: flex; flex-direction: column; overflow: hidden; }
+    .batch-import-header { padding: 16px 20px; border-bottom: 1px solid #374151; display: flex; align-items: center; justify-content: space-between; flex-shrink: 0; }
+    .batch-import-header h4 { margin: 0; font-size: 15px; color: #f3f4f6; font-weight: 600; }
+    .batch-import-close { background: none; border: none; color: #6b7280; font-size: 18px; cursor: pointer; padding: 0 4px; line-height: 1; }
+    .batch-import-close:hover { color: #f3f4f6; }
+    .batch-import-body { padding: 16px 20px; overflow-y: auto; flex: 1; min-height: 0; }
+    .batch-import-progress-wrap { margin-bottom: 14px; }
+    .batch-import-progress-bar { height: 8px; background: #374151; border-radius: 4px; overflow: hidden; }
+    .batch-import-progress-fill { height: 100%; background: linear-gradient(90deg, #6366f1, #818cf8); border-radius: 4px; transition: width 0.3s ease; }
+    .batch-import-progress-text { font-size: 12px; color: #9ca3af; margin-top: 6px; text-align: center; }
+    .batch-import-log { max-height: 280px; overflow-y: auto; font-size: 12px; font-family: 'Cascadia Code', 'Fira Code', monospace; background: rgba(0,0,0,0.3); border-radius: 8px; padding: 10px 12px; scrollbar-width: thin; scrollbar-color: #374151 transparent; }
+    .batch-import-log::-webkit-scrollbar { width: 5px; }
+    .batch-import-log::-webkit-scrollbar-thumb { background: #374151; border-radius: 3px; }
+    .batch-import-log-item { padding: 3px 0; color: #9ca3af; line-height: 1.4; display: flex; align-items: flex-start; gap: 6px; }
+    .batch-import-log-item.success { color: #6ee7b7; }
+    .batch-import-log-item.error { color: #fca5a5; }
+    .batch-import-log-item.skip { color: #fbbf24; }
+    .batch-import-log-icon { flex-shrink: 0; width: 16px; text-align: center; }
+    .batch-import-summary { margin-top: 14px; padding: 12px; background: rgba(99,102,241,0.1); border: 1px solid rgba(99,102,241,0.2); border-radius: 8px; font-size: 13px; color: #d1d5db; text-align: center; }
 
     /* RAG Chat UI */
     .docs-chat-container { display: flex; flex-direction: column; flex: 1; min-height: 0; }

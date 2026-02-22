@@ -294,6 +294,8 @@ function startServer(projectName: string, basePath: string, port: number): void 
           const enableBackendDegreeFallback = url.searchParams.get('enableBackendDegreeFallback') !== 'false';
           // 可视化页面默认不渲染 Prompt 节点（通过顶部统计栏点击查看 Prompt 列表）
           const includePrompts = url.searchParams.get('includePrompts') === 'true';
+          // Phase-68: 可视化页面默认不加载记忆节点，勾选记忆复选框后才加载
+          const includeMemories = url.searchParams.get('includeMemories') !== 'false';
 
           if (store.exportGraph) {
             const graph = store.exportGraph({
@@ -302,6 +304,7 @@ function startServer(projectName: string, basePath: string, port: number): void 
               includeNodeDegree,
               enableBackendDegreeFallback,
               includePrompts,
+              includeMemories,
             });
             res.writeHead(200, { 'Content-Type': 'application/json; charset=utf-8' });
             res.end(JSON.stringify(graph));
@@ -815,6 +818,38 @@ function startServer(projectName: string, basePath: string, port: number): void 
             const isConflict = addErr.message && addErr.message.includes('已存在');
             res.writeHead(isConflict ? 409 : 500, { 'Content-Type': 'application/json; charset=utf-8' });
             res.end(JSON.stringify({ error: addErr.message || String(addErr), conflict: isConflict }));
+          }
+          break;
+        }
+
+        case '/api/doc/delete': {
+          // POST /api/doc/delete — 删除文档片段
+          if (req.method !== 'POST') {
+            res.writeHead(405, { 'Content-Type': 'application/json; charset=utf-8' });
+            res.end(JSON.stringify({ error: 'Method Not Allowed. Use POST.' }));
+            break;
+          }
+
+          const delDocBody = await readRequestBody(req);
+          if (!delDocBody || !delDocBody.section) {
+            res.writeHead(400, { 'Content-Type': 'application/json; charset=utf-8' });
+            res.end(JSON.stringify({ error: '缺少必需参数: section' }));
+            break;
+          }
+
+          try {
+            const delDocStore = createFreshStore(projectName, basePath);
+            const deleted = delDocStore.deleteSection(delDocBody.section, delDocBody.subSection || undefined);
+            if (deleted) {
+              res.writeHead(200, { 'Content-Type': 'application/json; charset=utf-8' });
+              res.end(JSON.stringify({ success: true, message: '文档已删除' }));
+            } else {
+              res.writeHead(404, { 'Content-Type': 'application/json; charset=utf-8' });
+              res.end(JSON.stringify({ error: '文档未找到或删除失败' }));
+            }
+          } catch (delErr: any) {
+            res.writeHead(500, { 'Content-Type': 'application/json; charset=utf-8' });
+            res.end(JSON.stringify({ error: '删除文档失败: ' + (delErr.message || String(delErr)) }));
           }
           break;
         }

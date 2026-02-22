@@ -695,7 +695,7 @@ var allNodes = [];
 var allEdges = [];
 var nodesDataSet = null;
 var edgesDataSet = null;
-var hiddenTypes = {};
+var hiddenTypes = { memory: true }; // Phase-68: 记忆默认隐藏，勾选后懒加载
 var ctrlPressed = false;
 var INCLUDE_NODE_DEGREE = true;
 var ENABLE_BACKEND_DEGREE_FALLBACK = true;
@@ -709,6 +709,7 @@ var tieredLoadState = {
   l0l1Loaded: false,     // L0+L1 core nodes loaded
   l2Loaded: false,       // L2 sub-tasks loaded
   l3Loaded: false,       // L3 documents loaded
+  memoryLoaded: false,   // Phase-68: 记忆节点是否已加载
   expandedPhases: {},    // phase-X -> true: which main-tasks have been expanded
   totalNodes: 0,         // total node count from server
 };

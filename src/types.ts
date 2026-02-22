@@ -1155,8 +1155,16 @@ export interface Memory {
     name: string;
     /** 触点类型 */
     anchorType: string;
-    /** 描述 */
+    /** 描述 (L1 层) */
     description: string;
+    /**
+     * L2 目录索引概览（Phase-124 新增，借鉴 OpenViking .overview.md）
+     *
+     * 3~5 句话的目录索引式摘要，列出关键子项、核心流程入口和结构组件。
+     * 帮助 Agent 快速决定是否需要深入加载 L3 详情。
+     * `null` 表示尚未生成 overview。
+     */
+    overview?: string | null;
     /** 当前版本 */
     version: number;
     /** 是否为新创建的触点（saveMemory 时返回） */
@@ -1183,6 +1191,84 @@ export interface Memory {
    * 结构快照 ID（当创建了结构快照时返回）
    */
   structureSnapshotId?: string;
+}
+
+// ============================================================================
+// Phase-124: 分层召回 + 范围限定检索 (借鉴 OpenViking L0/L1/L2 渐进加载)
+// ============================================================================
+
+/**
+ * 分层召回深度（Phase-124 新增）
+ *
+ * 借鉴 OpenViking 的 L0/L1/L2 分层上下文加载策略，
+ * 控制 `recallMemory` 返回的信息层级，减少 Token 消耗。
+ *
+ * - `"L1"` (默认): 摘要层 — 仅返回记忆内容 + Anchor.description + Anchor.overview。
+ *   Token 消耗 ~30/条。适用于导航、发现阶段。
+ *
+ * - `"L2"`: 详情层 — 额外返回 FlowEntry 列表（每条含 summary + detail）。
+ *   Token 消耗 ~200/条。适用于需要了解演进历史时。
+ *
+ * - `"L3"`: 完整层 — 额外返回 Structure Snapshot（组件组合关系）。
+ *   Token 消耗 ~500/条。适用于需要完整上下文时。
+ *
+ * Token 节省估算：100 条记忆的 L1 摘要 ~3000 token vs L3 完整 ~50000 token ≈ 16x 节省
+ */
+export type RecallDepth = 'L1' | 'L2' | 'L3';
+
+/**
+ * 范围限定检索（Phase-124 新增）
+ *
+ * 参考 OpenViking 的 `target_uri` 限制检索范围，
+ * 避免返回与当前任务无关的记忆，提高检索精度。
+ *
+ * 多个 scope 条件为 AND 关系（全部满足才返回）。
+ * 不提供 scope 时搜索全部记忆。
+ *
+ * @example
+ * ```typescript
+ * // 只搜索 vector-store 模块相关的记忆
+ * recallMemory(query, { scope: { moduleId: 'vector-store' } })
+ *
+ * // 只搜索 phase-14 相关的记忆
+ * recallMemory(query, { scope: { taskId: 'phase-14' } })
+ *
+ * // 只搜索 API 类型触点关联的记忆
+ * recallMemory(query, { scope: { anchorType: 'api' } })
+ *
+ * // 组合: vector-store 模块 + api 类型
+ * recallMemory(query, { scope: { moduleId: 'vector-store', anchorType: 'api' } })
+ * ```
+ */
+export interface RecallScope {
+  /**
+   * 按模块 ID 过滤（通过 MODULE_MEMORY 关系匹配）
+   *
+   * 只返回属于指定模块的记忆。
+   * 模块通过 `devplan_memory_save` 的 `moduleId` 参数关联。
+   */
+  moduleId?: string;
+
+  /**
+   * 按主任务 ID 过滤（通过 relatedTaskId 属性匹配）
+   *
+   * 只返回与指定主任务关联的记忆。
+   */
+  taskId?: string;
+
+  /**
+   * 按触点类型过滤（通过 anchored_by 关系 + Anchor.anchor_type 匹配）
+   *
+   * 可选值: module | concept | api | architecture | feature | library | protocol
+   */
+  anchorType?: string;
+
+  /**
+   * 按触点名称过滤（通过 anchored_by 关系 + Anchor.name 匹配）
+   *
+   * 精确匹配指定触点关联的记忆。
+   */
+  anchorName?: string;
 }
 
 /**

@@ -976,6 +976,12 @@ function toggleFilter(type) {
     if (cb) cb.checked = true;
     delete hiddenTypes[type];
 
+    // Phase-68: 记忆懒加载 — 首次勾选时从后端获取记忆数据
+    if (type === 'memory' && !tieredLoadState.memoryLoaded) {
+      loadMemoryNodesLazy();
+      return;
+    }
+
     // 分层模式: 如果该类型数据尚未加载，触发按需加载
     if (!USE_3D && tieredLoadState.l0l1Loaded) {
       if (type === 'sub-task' && !tieredLoadState.l2Loaded) {
@@ -1154,10 +1160,83 @@ function loadTierDataByType(type) {
 }
 
 /**
+ * Phase-68: 记忆节点懒加载。
+ * 首次勾选记忆复选框时触发，从后端获取仅包含记忆节点的图数据并合并。
+ */
+function loadMemoryNodesLazy() {
+  var el = document.querySelector('.legend-item.toggle[data-type="memory"]');
+  if (el) {
+    el.classList.add('loading');
+    el.title = '正在加载记忆数据...';
+  }
+  log('按需加载: 记忆节点...', true);
+
+  // 请求仅包含记忆的图数据（不含文档、模块等，避免重复）
+  var url = '/api/graph?includeMemories=true&includeDocuments=false&includeModules=false&includeNodeDegree=false';
+  fetch(url).then(function(r) { return r.json(); }).then(function(result) {
+    var newNodes = result.nodes || [];
+    var newEdges = result.edges || [];
+
+    // 只保留 memory 类型节点（API 也会返回 project / main-task 等已存在的节点）
+    var existingIds = {};
+    for (var i = 0; i < allNodes.length; i++) existingIds[allNodes[i].id] = true;
+
+    var addedNodes = [];
+    var addedEdges = [];
+    for (var i = 0; i < newNodes.length; i++) {
+      if (!existingIds[newNodes[i].id]) {
+        allNodes.push(newNodes[i]);
+        addedNodes.push(newNodes[i]);
+        existingIds[newNodes[i].id] = true;
+      }
+    }
+    var existingEdgeSet = {};
+    for (var i = 0; i < allEdges.length; i++) {
+      existingEdgeSet[allEdges[i].from + '->' + allEdges[i].to] = true;
+    }
+    for (var i = 0; i < newEdges.length; i++) {
+      var e = newEdges[i];
+      var edgeKey = e.from + '->' + e.to;
+      if (!existingEdgeSet[edgeKey] && existingIds[e.from] && existingIds[e.to]) {
+        allEdges.push(e);
+        addedEdges.push(e);
+        existingEdgeSet[edgeKey] = true;
+      }
+    }
+
+    tieredLoadState.memoryLoaded = true;
+    if (el) {
+      el.classList.remove('loading');
+      el.classList.remove('not-loaded');
+      el.title = '点击切换记忆显隐';
+    }
+    log('记忆加载完成: +' + addedNodes.length + ' 记忆节点, +' + addedEdges.length + ' 边', true);
+
+    // 增量添加到图谱
+    if (networkReusable && nodesDataSet && edgesDataSet && network && !USE_3D) {
+      incrementalAddNodes(addedNodes, addedEdges);
+    } else {
+      renderGraph();
+    }
+  }).catch(function(err) {
+    if (el) {
+      el.classList.remove('loading');
+      el.title = '加载失败，点击重试';
+    }
+    // 恢复隐藏状态以便重试
+    hiddenTypes['memory'] = true;
+    if (el) el.classList.remove('active');
+    var cb = document.getElementById('cb-memory');
+    if (cb) cb.checked = false;
+    log('记忆加载失败: ' + err.message, false);
+  });
+}
+
+/**
  * 同步图例 toggle 状态与当前 hiddenTypes（页面初始化 / 分层加载后调用）。
  */
 function syncLegendToggleState() {
-  var types = ['module', 'main-task', 'sub-task', 'document'];
+  var types = ['module', 'main-task', 'sub-task', 'document', 'memory'];
   for (var i = 0; i < types.length; i++) {
     var el = document.querySelector('.legend-item.toggle[data-type="' + types[i] + '"]');
     var cb = document.getElementById('cb-' + types[i]);
@@ -1187,6 +1266,12 @@ function markUnloadedTypeLegends() {
     docEl.classList.add('not-loaded');
     docEl.title = '点击加载文档';
   }
+  // Phase-68: 记忆默认未加载
+  var memEl = document.querySelector('.legend-item.toggle[data-type="memory"]');
+  if (memEl && !tieredLoadState.memoryLoaded) {
+    memEl.classList.add('not-loaded');
+    memEl.title = '点击加载记忆';
+  }
 }
 
 /**
@@ -1197,13 +1282,14 @@ function clearUnloadedTypeLegends() {
   for (var i = 0; i < els.length; i++) {
     els[i].classList.remove('not-loaded');
   }
-  // 确保所有 toggle 为 active
+  // 确保所有 toggle 为 active（Phase-68: 跳过 hiddenTypes 中的类型）
   var toggles = document.querySelectorAll('.legend-item.toggle');
   for (var i = 0; i < toggles.length; i++) {
+    var tp = toggles[i].getAttribute('data-type');
+    if (tp && hiddenTypes[tp]) continue; // Phase-68: 不强制激活被隐藏的类型
     if (!toggles[i].classList.contains('active')) {
       toggles[i].classList.add('active');
     }
-    var tp = toggles[i].getAttribute('data-type');
     if (tp) toggles[i].title = '点击切换' + tp + '显隐';
   }
 }

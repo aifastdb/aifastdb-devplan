@@ -26,7 +26,7 @@ function loadData() {
  */
 function loadDataTiered() {
   log('分层加载: 首屏仅加载核心节点 (project/module/main-task)...', true);
-  tieredLoadState = { l0l1Loaded: false, l2Loaded: false, l3Loaded: false, expandedPhases: {}, totalNodes: 0 };
+  tieredLoadState = { l0l1Loaded: false, l2Loaded: false, l3Loaded: false, memoryLoaded: false, expandedPhases: {}, totalNodes: 0 };
   networkReusable = false;
 
   // Fetch L0+L1 nodes + progress in parallel
@@ -60,8 +60,10 @@ function loadDataTiered() {
 
 /** Phase-10: Full load fallback (same as original loadData for vis-network) */
 function loadDataFull() {
+  // Phase-68: 初始加载不包含记忆节点（includeMemories=false），勾选后懒加载
   var graphApiUrl = '/api/graph?includeNodeDegree=' + (INCLUDE_NODE_DEGREE ? 'true' : 'false') +
-    '&enableBackendDegreeFallback=' + (ENABLE_BACKEND_DEGREE_FALLBACK ? 'true' : 'false');
+    '&enableBackendDegreeFallback=' + (ENABLE_BACKEND_DEGREE_FALLBACK ? 'true' : 'false') +
+    '&includeMemories=false';
   Promise.all([
     fetch(graphApiUrl).then(function(r) { return r.json(); }),
     fetch('/api/progress').then(function(r) { return r.json(); })
@@ -73,10 +75,12 @@ function loadDataFull() {
     tieredLoadState.l0l1Loaded = true;
     tieredLoadState.l2Loaded = true;
     tieredLoadState.l3Loaded = true;
+    tieredLoadState.memoryLoaded = false; // Phase-68: 记忆尚未加载
     tieredLoadState.totalNodes = allNodes.length;
     networkReusable = false; // Force full rebuild
     // 全量加载完成：清除所有隐藏状态 + 未加载标记，同步图例为全部激活
-    hiddenTypes = {};
+    // Phase-68: 保留 memory 的隐藏状态
+    hiddenTypes = { memory: true };
     clearUnloadedTypeLegends();
     syncLegendToggleState();
     log('全量数据: ' + allNodes.length + ' 节点, ' + allEdges.length + ' 边', true);

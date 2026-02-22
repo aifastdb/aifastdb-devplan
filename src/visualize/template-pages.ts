@@ -214,6 +214,8 @@ function renderDocItemWithChildren(item, childrenMap, secIcon, selectFn) {
   if (item.updatedAt) {
     html += '<span class="docs-item-sub">' + fmtDateShort(item.updatedAt) + '</span>';
   }
+  // 更多按钮
+  html += '<button class="docs-item-more" onclick="event.stopPropagation();openDocManageModal(\\x27' + docKey.replace(/'/g, "\\\\'") + '\\x27)" title="更多操作">⋯</button>';
   html += '</div>';
 
   // 子文档列表
@@ -298,6 +300,95 @@ function filterDocs(searchId, targetId, selectFn) {
     }
   }
   renderDocsList(filtered, targetId, selectFn);
+}
+
+// ========== Document Management Modal ==========
+var _docManageKey = '';  // 当前管理弹层的文档 key
+
+/** 打开文档管理弹层 */
+function openDocManageModal(docKey) {
+  _docManageKey = docKey;
+  var overlay = document.getElementById('docManageOverlay');
+  var titleEl = document.getElementById('docManageTitle');
+  var metaEl = document.getElementById('docManageMeta');
+  if (!overlay) return;
+
+  // 从 docsData 中查找文档信息
+  var doc = null;
+  for (var i = 0; i < docsData.length; i++) {
+    if (docItemKey(docsData[i]) === docKey) { doc = docsData[i]; break; }
+  }
+
+  if (titleEl) titleEl.textContent = doc ? doc.title : docKey;
+  if (metaEl) {
+    var meta = '';
+    if (doc) {
+      meta = doc.section + (doc.subSection ? ' | ' + doc.subSection : '');
+      if (doc.updatedAt) meta += ' · ' + fmtDateShort(doc.updatedAt);
+    }
+    metaEl.textContent = meta;
+  }
+
+  // 重置删除按钮状态
+  var delBtn = document.getElementById('docManageDeleteBtn');
+  if (delBtn) { delBtn.disabled = false; delBtn.querySelector('.doc-manage-btn-text').textContent = '删除文档'; }
+
+  overlay.classList.add('active');
+}
+
+/** 关闭文档管理弹层 */
+function closeDocManageModal() {
+  var overlay = document.getElementById('docManageOverlay');
+  if (overlay) overlay.classList.remove('active');
+  _docManageKey = '';
+}
+
+/** 确认并执行删除文档 */
+function confirmDeleteDoc() {
+  if (!_docManageKey) return;
+  var parts = _docManageKey.split('|');
+  var section = parts[0];
+  var subSection = parts[1] || null;
+
+  // 从 docsData 查找文档标题用于确认
+  var docTitle = '';
+  for (var i = 0; i < docsData.length; i++) {
+    if (docItemKey(docsData[i]) === _docManageKey) { docTitle = docsData[i].title; break; }
+  }
+
+  if (!confirm('确定要删除文档「' + (docTitle || _docManageKey) + '」吗？\\n\\n此操作不可恢复！')) return;
+
+  var delBtn = document.getElementById('docManageDeleteBtn');
+  if (delBtn) { delBtn.disabled = true; delBtn.querySelector('.doc-manage-btn-text').textContent = '删除中...'; }
+
+  fetch('/api/doc/delete', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ section: section, subSection: subSection })
+  }).then(function(r) { return r.json().then(function(d) { return { status: r.status, body: d }; }); })
+  .then(function(resp) {
+    if (resp.status === 200 && resp.body.success) {
+      // 删除成功：关闭弹层，刷新列表
+      closeDocManageModal();
+      // 从本地数据中移除
+      docsData = docsData.filter(function(d) { return docItemKey(d) !== _docManageKey; });
+      renderDocsList(docsData);
+      // 如果当前正在查看被删除的文档，清空右侧内容
+      if (currentDocKey === _docManageKey) {
+        currentDocKey = '';
+        var contentInner = document.getElementById('docsContentInner');
+        if (contentInner) contentInner.innerHTML = '<div style="text-align:center;padding:60px 20px;color:#6b7280;font-size:13px;">文档已删除</div>';
+        var contentTitle = document.getElementById('docsContentTitle');
+        if (contentTitle) contentTitle.textContent = '';
+      }
+    } else {
+      alert('删除失败: ' + (resp.body.error || '未知错误'));
+      if (delBtn) { delBtn.disabled = false; delBtn.querySelector('.doc-manage-btn-text').textContent = '删除文档'; }
+    }
+  }).catch(function(err) {
+    alert('删除失败: ' + err.message);
+    if (delBtn) { delBtn.disabled = false; delBtn.querySelector('.doc-manage-btn-text').textContent = '删除文档'; }
+  });
 }
 
 /** 选中并加载文档内容 */
@@ -852,6 +943,245 @@ function submitAddDoc() {
     });
   }
 })();
+
+// ========== Batch Import ==========
+
+/** 触发文件夹选择器 */
+function triggerBatchImport() {
+  var input = document.getElementById('batchImportInput');
+  if (input) {
+    input.value = ''; // 重置以支持重复选择同一文件夹
+    input.click();
+  }
+}
+
+/** 处理选中的文件夹文件 */
+function handleBatchImportFiles(files) {
+  if (!files || files.length === 0) return;
+
+  // 过滤 .md 文件
+  var mdFiles = [];
+  for (var i = 0; i < files.length; i++) {
+    var f = files[i];
+    var name = f.name || '';
+    if (name.toLowerCase().endsWith('.md') && f.size > 0) {
+      mdFiles.push(f);
+    }
+  }
+
+  if (mdFiles.length === 0) {
+    alert('选中的文件夹中没有找到 .md 文件');
+    return;
+  }
+
+  // 按相对路径排序
+  mdFiles.sort(function(a, b) {
+    var pa = a.webkitRelativePath || a.name;
+    var pb = b.webkitRelativePath || b.name;
+    return pa.localeCompare(pb);
+  });
+
+  // 确认导入
+  if (!confirm('发现 ' + mdFiles.length + ' 个 .md 文件，确定批量导入吗？\\n\\n已存在的同名文档将被自动覆盖更新。')) return;
+
+  // 隐藏添加表单，打开进度弹层
+  hideAddDocForm();
+  startBatchImport(mdFiles);
+}
+
+/** 从 Markdown 内容中提取标题（第一个 # 标题或文件名） */
+function extractMdTitle(content, fileName) {
+  // 匹配第一个 # 标题
+  var match = content.match(/^#\\s+(.+)/m);
+  if (match && match[1].trim()) return match[1].trim();
+  // 回退到文件名（去掉 .md 扩展名）
+  return (fileName || 'untitled').replace(/\\.md$/i, '');
+}
+
+/** 从相对路径推断 section 和 subSection */
+function inferDocMeta(relativePath, fileName) {
+  // relativePath 格式: "folder/subfolder/file.md" 或 "folder/file.md"
+  var parts = relativePath.split('/');
+  // 去掉最外层文件夹名和最后的文件名
+  // e.g. "docs/api/auth.md" → parts = ["docs", "api", "auth.md"]
+  var pathParts = parts.slice(1, -1); // 中间的子文件夹路径
+  var baseName = (fileName || parts[parts.length - 1] || '').replace(/\\.md$/i, '');
+
+  // section: 从子文件夹名映射到 DevPlan section 类型
+  var sectionMap = {
+    'overview': 'overview', 'api': 'api_design', 'api_design': 'api_design',
+    'api_endpoints': 'api_endpoints', 'core': 'core_concepts', 'core_concepts': 'core_concepts',
+    'config': 'config', 'examples': 'examples', 'notes': 'technical_notes',
+    'technical_notes': 'technical_notes', 'tech': 'technical_notes',
+    'file_structure': 'file_structure', 'structure': 'file_structure',
+    'milestones': 'milestones', 'changelog': 'changelog', 'custom': 'custom'
+  };
+
+  var section = 'technical_notes'; // 默认 section
+  if (pathParts.length > 0) {
+    var firstDir = pathParts[0].toLowerCase().replace(/[^a-z0-9_]/g, '_');
+    if (sectionMap[firstDir]) {
+      section = sectionMap[firstDir];
+    }
+  }
+
+  // subSection: 文件名转 slug
+  var subSection = baseName.toLowerCase()
+    .replace(/[^a-z0-9\\u4e00-\\u9fff]+/g, '-')
+    .replace(/^-+|-+$/g, '')
+    .substring(0, 60) || ('doc-' + Date.now());
+
+  // 如果有多层子文件夹，将中间路径也加入 subSection 作前缀
+  if (pathParts.length > 1) {
+    var prefix = pathParts.slice(sectionMap[pathParts[0].toLowerCase().replace(/[^a-z0-9_]/g, '_')] ? 1 : 0)
+      .join('-').toLowerCase().replace(/[^a-z0-9\\u4e00-\\u9fff-]+/g, '-').replace(/^-+|-+$/g, '');
+    if (prefix) subSection = prefix + '-' + subSection;
+  }
+
+  return { section: section, subSection: subSection };
+}
+
+/** 开始批量导入流程 */
+function startBatchImport(mdFiles) {
+  var overlay = document.getElementById('batchImportOverlay');
+  var progressFill = document.getElementById('batchImportProgressFill');
+  var progressText = document.getElementById('batchImportProgressText');
+  var logEl = document.getElementById('batchImportLog');
+  var summaryEl = document.getElementById('batchImportSummary');
+  var closeBtn = document.getElementById('batchImportCloseBtn');
+  var titleEl = document.getElementById('batchImportTitle');
+
+  if (!overlay) return;
+
+  // 重置 UI
+  progressFill.style.width = '0%';
+  progressText.textContent = '准备导入 ' + mdFiles.length + ' 个文件...';
+  logEl.innerHTML = '';
+  summaryEl.style.display = 'none';
+  summaryEl.innerHTML = '';
+  closeBtn.style.display = 'none';
+  titleEl.textContent = '📂 批量导入文档';
+  overlay.classList.add('active');
+
+  var total = mdFiles.length;
+  var done = 0;
+  var successCount = 0;
+  var errorCount = 0;
+  var skipCount = 0;
+  var cancelled = false;
+
+  function addLog(icon, text, cls) {
+    var item = document.createElement('div');
+    item.className = 'batch-import-log-item' + (cls ? ' ' + cls : '');
+    item.innerHTML = '<span class="batch-import-log-icon">' + icon + '</span><span>' + text + '</span>';
+    logEl.appendChild(item);
+    logEl.scrollTop = logEl.scrollHeight;
+  }
+
+  function updateProgress() {
+    var pct = Math.round(done / total * 100);
+    progressFill.style.width = pct + '%';
+    progressText.textContent = done + ' / ' + total + ' (' + pct + '%)';
+  }
+
+  function finish() {
+    closeBtn.style.display = '';
+    titleEl.textContent = cancelled ? '📂 导入已中断' : '📂 导入完成';
+    summaryEl.style.display = '';
+    summaryEl.innerHTML = '<div style="font-weight:600;margin-bottom:6px;">' + (cancelled ? '⚠️ 导入中断' : '✅ 导入完成') + '</div>'
+      + '成功: <strong style="color:#6ee7b7;">' + successCount + '</strong> · '
+      + '失败: <strong style="color:#fca5a5;">' + errorCount + '</strong> · '
+      + '总计: <strong>' + total + '</strong>';
+
+    // 刷新文档列表
+    if (successCount > 0) {
+      docsLoaded = false;
+      loadDocsData(function() {
+        renderDocsList(docsData);
+      });
+    }
+  }
+
+  // 逐个读取并上传
+  function processNext(index) {
+    if (cancelled || index >= total) {
+      finish();
+      return;
+    }
+
+    var file = mdFiles[index];
+    var relativePath = file.webkitRelativePath || file.name;
+
+    var reader = new FileReader();
+    reader.onload = function(e) {
+      var content = e.target.result || '';
+      if (!content.trim()) {
+        addLog('⏭', escHtml(relativePath) + ' — <em>空文件，已跳过</em>', 'skip');
+        done++;
+        skipCount++;
+        updateProgress();
+        processNext(index + 1);
+        return;
+      }
+
+      var title = extractMdTitle(content, file.name);
+      var meta = inferDocMeta(relativePath, file.name);
+
+      var payload = {
+        section: meta.section,
+        subSection: meta.subSection,
+        title: title,
+        content: content
+      };
+
+      // 使用 /api/doc/save（upsert 语义）直接覆盖
+      fetch('/api/doc/save', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(payload)
+      }).then(function(r) {
+        return r.json().then(function(body) { return { status: r.status, body: body }; });
+      }).then(function(resp) {
+        done++;
+        if (resp.body.success || resp.status === 200) {
+          successCount++;
+          addLog('✅', escHtml(relativePath), 'success');
+        } else {
+          errorCount++;
+          addLog('❌', escHtml(relativePath) + ' — ' + escHtml(resp.body.error || '未知错误'), 'error');
+        }
+        updateProgress();
+        // 使用 setTimeout 避免阻塞 UI
+        setTimeout(function() { processNext(index + 1); }, 50);
+      }).catch(function(err) {
+        done++;
+        errorCount++;
+        addLog('❌', escHtml(relativePath) + ' — ' + escHtml(err.message), 'error');
+        updateProgress();
+        setTimeout(function() { processNext(index + 1); }, 50);
+      });
+    };
+
+    reader.onerror = function() {
+      done++;
+      errorCount++;
+      addLog('❌', escHtml(relativePath) + ' — 读取文件失败', 'error');
+      updateProgress();
+      processNext(index + 1);
+    };
+
+    reader.readAsText(file, 'UTF-8');
+  }
+
+  addLog('📂', '开始导入 ' + total + ' 个 .md 文件...', '');
+  processNext(0);
+}
+
+/** 关闭批量导入弹层 */
+function closeBatchImport() {
+  var overlay = document.getElementById('batchImportOverlay');
+  if (overlay) overlay.classList.remove('active');
+}
 
 // ========== Stats Dashboard ==========
 var statsLoaded = false;
