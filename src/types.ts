@@ -434,6 +434,34 @@ export type PerceptionPresetName =
   | 'none';
 
 /**
+ * Phase-52: 召回检索调优参数
+ *
+ * 用于将 RRF 融合参数和 BM25 专有名词策略外部化到 .devplan/config.json。
+ */
+export interface RecallSearchTuningConfig {
+  /** RRF 常数 k（默认 60） */
+  rrfK?: number;
+  /** 向量通道权重（默认 1.0） */
+  vectorWeight?: number;
+  /** BM25 / literal 通道权重（默认 1.0） */
+  bm25Weight?: number;
+  /** 图谱扩展通道权重（默认 1.0） */
+  graphWeight?: number;
+  /** 专有名词命中时 BM25 分数加权倍数（默认 2.0） */
+  bm25TermBoost?: number;
+  /**
+   * BM25 专有名词词典（如 WAL/HNSW/NAPI/MCP）。
+   * 会被写入 Tantivy user dictionary 并用于命中加权判定。
+   */
+  bm25DomainTerms?: string[];
+  /**
+   * Tantivy user dictionary 文件路径（可选）。
+   * 未配置时自动在项目 .devplan 下生成并维护。
+   */
+  bm25UserDictPath?: string;
+}
+
+/**
  * DevPlanStore 配置（SocialGraphV2 模式）
  */
 export interface DevPlanGraphStoreConfig {
@@ -531,6 +559,24 @@ export interface DevPlanGraphStoreConfig {
    * ```
    */
   enableTextSearch?: boolean;
+
+  /**
+   * Phase-52: Recall/BM25 调优配置（RRF 权重 + 专有名词加权）
+   */
+  recallSearchTuning?: RecallSearchTuningConfig;
+
+  /**
+   * Phase-52/T52.5: 启用文档 TreeIndex 补充检索（可选）
+   *
+   * 启用后，会基于 Markdown 标题层级构建轻量 Tree 节点候选，
+   * 并在 LLM 可用时做推理式重排，作为 recall 文档通道的补充结果。
+   */
+  enableTreeIndexRetrieval?: boolean;
+
+  /**
+   * TreeIndex 候选节点上限（默认 10）
+   */
+  treeIndexMaxNodes?: number;
 
   /**
    * Phase-54: 是否启用 LLM Reranking（搜索结果精排）
@@ -655,6 +701,13 @@ export interface RebuildIndexResult {
   durationMs: number;
   /** 失败的文档 ID（如果有） */
   failedDocIds?: string[];
+  /** Phase-78B: 记忆向量重建统计 */
+  memories?: {
+    total: number;
+    indexed: number;
+    failed: number;
+    failedIds?: string[];
+  };
 }
 
 // ============================================================================
@@ -1167,6 +1220,10 @@ export interface Memory {
     overview?: string | null;
     /** 当前版本 */
     version: number;
+    /** Phase-132: URI 索引 */
+    uri?: string;
+    /** Phase-132: 路径索引 */
+    path?: string;
     /** 是否为新创建的触点（saveMemory 时返回） */
     isNew?: boolean;
     /** 记忆流条目数量（recallMemory 时返回） */
@@ -1297,6 +1354,64 @@ export interface RecallScope {
    * 精确匹配指定触点关联的记忆。
    */
   anchorName?: string;
+}
+
+/**
+ * Unified Recall 参数（Phase-79，对齐 ai_db phase132~136）
+ */
+export interface UnifiedRecallOptions {
+  /** URI 寻址提示（如 aidb://memory/anchors/concept/socialgraphv2） */
+  uri?: string;
+  /** 按记忆类型过滤 */
+  memoryType?: MemoryType;
+  /** 最大返回数 */
+  limit?: number;
+  /** 最低分数阈值 */
+  minScore?: number;
+  /** 是否包含文档搜索（已废弃，推荐使用 docStrategy） */
+  includeDocs?: boolean;
+  /** 是否启用图谱扩展 */
+  graphExpand?: boolean;
+  /** 是否启用递归召回（由 feature flag 控制生效） */
+  recursive?: boolean;
+  /** 分层深度 */
+  depth?: RecallDepth;
+  /** 范围限定 */
+  scope?: RecallScope;
+  /** 文档检索策略 */
+  docStrategy?: DocStrategy;
+}
+
+/**
+ * Recall Feature Flags（Phase-79）
+ */
+export interface RecallFeatureFlags {
+  autoSession: boolean;
+  recursiveRecall: boolean;
+  uriIndex: boolean;
+}
+
+/**
+ * Recall Feature Flags Patch（部分更新）
+ */
+export interface RecallFeatureFlagsPatch {
+  autoSession?: boolean;
+  recursiveRecall?: boolean;
+  uriIndex?: boolean;
+}
+
+/**
+ * Recall 可观测性指标（Phase-79）
+ */
+export interface RecallObservability {
+  totalCalls: number;
+  totalFallbacks: number;
+  fallbackRate: number;
+  avgLatencyMs: number;
+  lastLatencyMs: number;
+  alert: boolean;
+  alertReason?: string;
+  lastError?: string;
 }
 
 /**

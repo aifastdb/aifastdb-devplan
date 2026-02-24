@@ -65,6 +65,7 @@ function startApp() {
 
 
 // ========== Init: 动态加载渲染引擎 ==========
+initRoutingFromLocation();
 loadRenderEngine();
 </script>
 </body>

@@ -24,12 +24,6 @@ export function getHTML(projectName: string): string {
         <span class="nav-item-text">图谱可视化</span>
         <span class="nav-tooltip">图谱可视化</span>
       </div>
-      <div class="nav-item disabled" data-page="tasks" onclick="navTo('tasks')">
-        <span class="nav-item-icon">📋</span>
-        <span class="nav-item-text">任务看板</span>
-        <span class="nav-item-badge">即将推出</span>
-        <span class="nav-tooltip">任务看板 (即将推出)</span>
-      </div>
       <div class="nav-item" data-page="docs" onclick="navTo('docs')">
         <span class="nav-item-icon">📄</span>
         <span class="nav-item-text">文档库</span>
@@ -269,14 +263,10 @@ export function getHTML(projectName: string): string {
             <p class="memory-header-desc">跨会话积累的开发知识：决策、模式、Bug 修复、洞察</p>
           </div>
           <div class="memory-header-right">
-            <div class="memory-view-toggle">
-              <button class="memory-view-btn active" data-view="list" onclick="switchMemoryView('list')" title="列表视图">
-                <span>📋</span> 列表
-              </button>
-              <button class="memory-view-btn" data-view="graph" onclick="switchMemoryView('graph')" title="3D 图谱">
-                <span>🌐</span> 图谱
-              </button>
-            </div>
+            <!-- Phase-78: 独立完整性检测按钮 -->
+            <button class="memory-verify-btn" onclick="checkAllMemoriesIntegrity()" title="检测所有记忆的完整性（Embedding / Anchor / 类型 / 重要性）">
+              🔍 完整性检测
+            </button>
             <!-- Phase-70: 精简为单按钮，直接触发 AI 批量生成 -->
             <button class="memory-generate-btn ai-batch-btn" onclick="startAiBatchGenerate()" title="AI 批量生成记忆（浏览器直连 Ollama）">
               ✨ 生成记忆
@@ -293,24 +283,10 @@ export function getHTML(projectName: string): string {
           <button class="memory-filter-btn" data-type="preference" onclick="filterMemories('preference')">⚙️ 偏好</button>
           <button class="memory-filter-btn" data-type="summary" onclick="filterMemories('summary')">📝 摘要</button>
         </div>
+        <!-- Phase-78: 全局完整性检测结果区域 -->
+        <div id="memoryVerifyResultArea" style="display:none;margin-bottom:12px;"></div>
         <div class="memory-list" id="memoryList">
           <div style="text-align:center;padding:60px;color:#6b7280;font-size:13px;">加载中...</div>
-        </div>
-        <!-- 3D Graph Container (hidden by default) -->
-        <div class="memory-graph-container" id="memoryGraphContainer" style="display:none;">
-          <div class="memory-graph-loading" id="memoryGraphLoading">
-            <div class="spinner" style="width:32px;height:32px;border-width:3px;margin:0 auto 12px;"></div>
-            <div>正在加载记忆网络...</div>
-          </div>
-          <div id="memoryGraph3D" style="width:100%;height:100%;"></div>
-          <div class="memory-graph-legend">
-            <div class="mg-legend-item"><span class="mg-legend-dot" style="background:#c026d3;"></span> 记忆</div>
-            <div class="mg-legend-item"><span class="mg-legend-dot" style="background:#3b82f6;"></span> 任务</div>
-            <div class="mg-legend-item"><span class="mg-legend-dot" style="background:#60a5fa;"></span> 文档</div>
-            <div class="mg-legend-item"><span class="mg-legend-dot" style="background:#ff8533;"></span> 模块</div>
-            <div class="mg-legend-item"><span class="mg-legend-dot" style="background:#6366f1;"></span> 项目</div>
-          </div>
-          <div class="memory-graph-stats" id="memoryGraphStats"></div>
         </div>
       </div>
 

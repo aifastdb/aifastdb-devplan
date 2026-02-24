@@ -93,6 +93,11 @@ import type {
   RecallDepth,
   RecallScope,
   DocStrategy,
+  UnifiedRecallOptions,
+  RecallSearchTuningConfig,
+  RecallFeatureFlags,
+  RecallFeatureFlagsPatch,
+  RecallObservability,
 } from './types';
 
 // ============================================================================
@@ -137,6 +142,16 @@ const RT = {
   MEMORY_CONFLICTS: 'memory_conflicts',
 } as const;
 
+type ResolvedRecallSearchTuning = {
+  rrfK: number;
+  vectorWeight: number;
+  bm25Weight: number;
+  graphWeight: number;
+  bm25TermBoost: number;
+  bm25DomainTerms: string[];
+  bm25UserDictPath?: string;
+};
+
 // ============================================================================
 // Phase-57: Memory Anchor / Flow / Structure Chain Types
 //
@@ -170,6 +185,8 @@ interface NativeAnchorInfo {
   name: string;
   anchor_type: string;
   description: string;
+  uri?: string;
+  path?: string;
   /** L2 目录索引概览（Phase-63，inspired by OpenViking .overview.md） */
   overview?: string;
   version: number;
@@ -268,6 +285,17 @@ function sectionKey(section: string, subSection?: string): string {
  * 层级关系（项目→主任务→子任务、模块→任务）映射为图边（Relation）。
  */
 export class DevPlanGraphStore implements IDevPlanStore {
+  private static readonly DEFAULT_BM25_DOMAIN_TERMS = [
+    'WAL',
+    'HNSW',
+    'NAPI',
+    'MCP',
+    'RRF',
+    'BM25',
+    'VibeSynapse',
+    'SocialGraphV2',
+  ];
+
   private graph: SocialGraphV2;
   private projectName: string;
   /** Git 操作的工作目录（多项目路由时指向项目根目录） */
@@ -286,6 +314,33 @@ export class DevPlanGraphStore implements IDevPlanStore {
   private rerankReady: boolean = false;
   /** Phase-54: 重排使用的模型名称 */
   private rerankModel: string = 'gemma3:4b';
+  /** Phase-52/T52.5: 文档 TreeIndex 检索是否启用（需 LLM Gateway 可用） */
+  private treeIndexRetrievalEnabled: boolean = false;
+  /** TreeIndex 候选节点上限 */
+  private treeIndexMaxNodes: number = 10;
+  /** Phase-79: Unified Recall Feature Flags */
+  private recallFeatureFlags: RecallFeatureFlags = {
+    autoSession: false,
+    recursiveRecall: true,
+    uriIndex: true,
+  };
+  /** Phase-79: Unified Recall Observability 累计指标 */
+  private recallObservabilityRaw = {
+    totalCalls: 0,
+    totalFallbacks: 0,
+    totalLatencyMs: 0,
+    lastLatencyMs: 0,
+    lastError: undefined as string | undefined,
+  };
+  /** Phase-52: Recall/BM25 调优参数（可通过 .devplan/config.json 外部化） */
+  private recallSearchTuning: ResolvedRecallSearchTuning = {
+    rrfK: 60,
+    vectorWeight: 1,
+    bm25Weight: 1,
+    graphWeight: 1,
+    bm25TermBoost: 2,
+    bm25DomainTerms: [...DevPlanGraphStore.DEFAULT_BM25_DOMAIN_TERMS],
+  };
 
   constructor(projectName: string, config: DevPlanGraphStoreConfig) {
     this.projectName = projectName;
@@ -306,6 +361,7 @@ export class DevPlanGraphStore implements IDevPlanStore {
       typeShardMapping: DEVPLAN_TYPE_SHARD_MAPPING,
       relationShardId: DEVPLAN_RELATION_SHARD_ID,
     };
+    const recallSearchTuning = DevPlanGraphStore.resolveRecallSearchTuning(config.recallSearchTuning);
 
     // 如果启用语义搜索，配置 SocialGraphV2 的向量搜索
     // 维度自动解析: explicitDimension > perception.dimension > MODEL_DIMENSION_REGISTRY[modelId] > 384
@@ -328,9 +384,15 @@ export class DevPlanGraphStore implements IDevPlanStore {
 
     // Phase-52: 如果启用 Tantivy BM25 全文搜索，配置 textSearch
     if (config.enableTextSearch) {
+      const userDictPath = DevPlanGraphStore.resolveBm25UserDictPath(
+        config.graphPath,
+        recallSearchTuning.bm25DomainTerms,
+        recallSearchTuning.bm25UserDictPath,
+      );
       graphConfig.textSearch = {
         enableChinese: true,  // DevPlan 面向中文开发者，默认启用中文分词
         autoCommit: true,     // 自动提交索引更新
+        ...(userDictPath ? { userDictPath } : {}),
       } satisfies TextSearchConfig;
     }
 
@@ -356,6 +418,7 @@ export class DevPlanGraphStore implements IDevPlanStore {
         this.textSearchReady = false;
       }
     }
+    this.recallSearchTuning = recallSearchTuning;
 
     // 初始化 VibeSynapse（用于 Embedding 生成）
     if (config.enableSemanticSearch) {
@@ -381,9 +444,14 @@ export class DevPlanGraphStore implements IDevPlanStore {
     // 确保项目根实体存在
     this.ensureProjectEntity();
 
-    // Phase-54: 初始化 LLM Reranking（优雅降级：失败时静默跳过）
-    if (config.enableReranking) {
+    // Phase-54 + T52.5: 初始化 LLM Gateway（重排或 TreeIndex 推理检索任一启用即可尝试初始化）
+    if (config.enableReranking || config.enableTreeIndexRetrieval) {
       this.initLlmReranking(config);
+    }
+    this.treeIndexMaxNodes = Math.max(3, Math.min(50, Number(config.treeIndexMaxNodes || 10)));
+    this.treeIndexRetrievalEnabled = Boolean(config.enableTreeIndexRetrieval) && this.rerankReady;
+    if (config.enableTreeIndexRetrieval && !this.treeIndexRetrievalEnabled) {
+      console.warn('[DevPlan] TreeIndex retrieval requested but LLM Gateway is unavailable. TreeIndex channel disabled.');
     }
   }
 
@@ -417,6 +485,63 @@ export class DevPlanGraphStore implements IDevPlanStore {
 
     // 3. 默认 miniLM
     return { ...PerceptionPresets.miniLM(), autoDownload: true };
+  }
+
+  private static resolveRecallSearchTuning(config?: RecallSearchTuningConfig): ResolvedRecallSearchTuning {
+    const safeNumber = (v: unknown, fallback: number): number => {
+      const n = Number(v);
+      return Number.isFinite(n) && n > 0 ? n : fallback;
+    };
+    const domainTermsRaw = Array.isArray(config?.bm25DomainTerms)
+      ? config!.bm25DomainTerms!
+      : DevPlanGraphStore.DEFAULT_BM25_DOMAIN_TERMS;
+    const bm25DomainTerms = Array.from(
+      new Set(
+        domainTermsRaw
+          .map(t => String(t || '').trim())
+          .filter(Boolean),
+      ),
+    );
+    return {
+      rrfK: Math.floor(safeNumber(config?.rrfK, 60)),
+      vectorWeight: safeNumber(config?.vectorWeight, 1),
+      bm25Weight: safeNumber(config?.bm25Weight, 1),
+      graphWeight: safeNumber(config?.graphWeight, 1),
+      bm25TermBoost: safeNumber(config?.bm25TermBoost, 2),
+      bm25DomainTerms,
+      bm25UserDictPath: config?.bm25UserDictPath,
+    };
+  }
+
+  private static resolveBm25UserDictPath(
+    graphPath: string,
+    domainTerms: string[],
+    preferredPath?: string,
+  ): string | undefined {
+    const preferred = (preferredPath || '').trim();
+    if (preferred) return preferred;
+    if (domainTerms.length === 0) return undefined;
+    const dictDir = path.resolve(graphPath, '..', 'tantivy-dict');
+    fs.mkdirSync(dictDir, { recursive: true });
+    const dictPath = path.join(dictDir, 'user-dict.txt');
+    fs.writeFileSync(dictPath, `${domainTerms.join('\n')}\n`, 'utf8');
+    return dictPath;
+  }
+
+  private getBm25BoostTermsForQuery(query: string): string[] {
+    const q = query.toLowerCase();
+    if (!q) return [];
+    return this.recallSearchTuning.bm25DomainTerms
+      .filter(term => q.includes(term.toLowerCase()));
+  }
+
+  private applyBm25TermBoost(baseScore: number, query: string, haystack: string): number {
+    if (this.recallSearchTuning.bm25TermBoost <= 1) return baseScore;
+    const boostTerms = this.getBm25BoostTermsForQuery(query);
+    if (boostTerms.length === 0) return baseScore;
+    const text = haystack.toLowerCase();
+    if (!boostTerms.some(term => text.includes(term.toLowerCase()))) return baseScore;
+    return baseScore * this.recallSearchTuning.bm25TermBoost;
   }
 
   /**
@@ -1242,11 +1367,20 @@ export class DevPlanGraphStore implements IDevPlanStore {
         const bm25Hits: TextSearchHit[] = this.graph.searchEntitiesByText(query, ET.DOC, limit * 2);
         textResults = bm25Hits
           .filter(h => (h.entity.properties as any)?.projectName === this.projectName)
-          .map(h => ({
-            id: h.entityId,
-            score: h.score,
-            doc: this.entityToDevPlanDoc(h.entity),
-          }));
+          .map(h => {
+            const doc = this.entityToDevPlanDoc(h.entity);
+            const score = this.applyBm25TermBoost(
+              Number(h.score || 0),
+              query,
+              `${h.snippet || ''}\n${doc.title}\n${doc.content}`,
+            );
+            return {
+              id: h.entityId,
+              score,
+              doc,
+            };
+          })
+          .sort((a, b) => (b.score || 0) - (a.score || 0));
       } catch (e) {
         console.warn(`[DevPlan] Tantivy BM25 search failed: ${e instanceof Error ? e.message : String(e)}. Falling back to literal.`);
         // 降级为朴素字面搜索
@@ -1304,9 +1438,12 @@ export class DevPlanGraphStore implements IDevPlanStore {
   }
 
   /**
-   * 重建所有文档的向量索引
+   * 重建所有文档 + 记忆的向量索引
    *
-   * 适用于：首次启用语义搜索、模型切换、索引损坏修复。
+   * Phase-78B: 扩展支持 memory 向量重建。批量导入时 Ollama VRAM 被 LLM 模型占用，
+   * 导致 embedding 模型无法加载，所有记忆缺失向量。此方法一次性重建全部向量。
+   *
+   * 适用于：首次启用语义搜索、模型切换、索引损坏修复、批量导入后向量补全。
    */
   rebuildIndex(): RebuildIndexResult {
     const startTime = Date.now();
@@ -1325,15 +1462,49 @@ export class DevPlanGraphStore implements IDevPlanStore {
       };
     }
 
+    // ---- 文档向量重建 ----
+    // Phase-78B: 先 removeEntityVector 再 indexEntity，确保替换旧向量
     for (const doc of docs) {
       try {
         const text = `${doc.title}\n${doc.content}`;
+        if (typeof this.graph.removeEntityVector === 'function') {
+          try { this.graph.removeEntityVector(doc.id); } catch { /* 可能没有旧向量 */ }
+        }
         const embedding = this.synapse.embed(text);
         this.graph.indexEntity(doc.id, embedding);
         indexed++;
       } catch (e) {
         failed++;
         failedDocIds.push(doc.id);
+      }
+    }
+
+    // ---- Phase-78B: 记忆向量重建 ----
+    let memIndexed = 0;
+    let memFailed = 0;
+    const memFailedIds: string[] = [];
+    const memories = this.listMemories ? this.listMemories() : [];
+
+    for (const mem of memories) {
+      try {
+        const content = mem.content || '';
+        if (content.trim().length === 0) {
+          memFailed++;
+          memFailedIds.push(mem.id);
+          continue;
+        }
+        // Phase-78B: 先清除旧向量再重建
+        if (typeof this.graph.removeEntityVector === 'function') {
+          try { this.graph.removeEntityVector(mem.id); } catch { /* 可能没有旧向量 */ }
+        }
+        const embedding = this.synapse.embed(content);
+        this.graph.indexEntity(mem.id, embedding);
+        // 补建记忆间语义关联（如果之前缺失）
+        this.autoLinkSimilarMemories(mem.id, embedding);
+        memIndexed++;
+      } catch (e) {
+        memFailed++;
+        memFailedIds.push(mem.id);
       }
     }
 
@@ -1345,6 +1516,12 @@ export class DevPlanGraphStore implements IDevPlanStore {
       failed,
       durationMs: Date.now() - startTime,
       failedDocIds: failedDocIds.length > 0 ? failedDocIds : undefined,
+      memories: {
+        total: memories.length,
+        indexed: memIndexed,
+        failed: memFailed,
+        failedIds: memFailedIds.length > 0 ? memFailedIds : undefined,
+      },
     };
   }
 
@@ -2323,64 +2500,90 @@ export class DevPlanGraphStore implements IDevPlanStore {
   saveMemory(input: MemoryInput): Memory {
     const now = Date.now();
 
-    // ---- 去重检测 ----
-    const existingDup = this.findDuplicateMemory(input);
-    if (existingDup) {
-      // 已存在相同记忆 → 更新而非新建
-      const oldProps = existingDup.properties as any;
-      // Phase-58: 更新时也使用 L2 作为可搜索内容, L3 存原文
-      const updatedContent = input.contentL2 || input.content;
-      this.graph.updateEntity(existingDup.id, {
-        properties: {
-          ...oldProps,
-          content: updatedContent,
-          contentL3: input.contentL3 || oldProps.contentL3 || null,
-          memoryType: input.memoryType,
-          tags: input.tags || oldProps.tags || [],
-          importance: input.importance ?? oldProps.importance ?? 0.5,
-          sourceId: input.sourceId || oldProps.sourceId || null,
-          updatedAt: now,
-        },
-      });
-
-      // 重新索引向量
-      if (this.semanticSearchReady && this.synapse) {
-        try {
-          const embedding = this.synapse.embed(input.content);
-          this.graph.indexEntity(existingDup.id, embedding);
-        } catch (e) {
-          console.warn(`[DevPlan] Failed to re-index memory ${existingDup.id}: ${e instanceof Error ? e.message : String(e)}`);
-        }
-      }
-
-      this.graph.flush();
-      const updated = this.graph.getEntity(existingDup.id);
-      return this.entityToMemory(updated || existingDup);
-    }
-
-    // ---- 新建记忆 ----
-    const entityName = `Memory: ${input.memoryType} — ${input.content.slice(0, 40)}`;
-
     // Phase-58: 三层内容差异化存储
     // - content: 用于向量索引和语义搜索（优先使用 L2 详细内容）
     // - contentL3: 原始文档全文（如提供）
     const searchableContent = input.contentL2 || input.content;
-    const entity = this.graph.addEntity(entityName, ET.MEMORY, {
-      projectName: this.projectName,
-      memoryType: input.memoryType,
-      content: searchableContent,
-      contentL3: input.contentL3 || null,
-      tags: input.tags || [],
-      relatedTaskId: input.relatedTaskId || null,
-      sourceId: input.sourceId || null,
-      importance: input.importance ?? 0.5,
-      hitCount: 0,
-      lastAccessedAt: null,
-      createdAt: now,
-      updatedAt: now,
-    });
+    const entityName = `Memory: ${input.memoryType} — ${input.content.slice(0, 40)}`;
 
-    // project → memory 关系
+    // Phase-78B: 统一使用 upsertEntityByProp 保持 UUID 稳定
+    // 策略：有 sourceId 时用 sourceId 做 upsert key；无 sourceId 时退回 findDuplicateMemory
+    let entity: Entity;
+    let isUpdate = false;
+
+    if (input.sourceId) {
+      // ---- 有 sourceId → upsertEntityByProp（引擎级去重，UUID 不变） ----
+      entity = this.graph.upsertEntityByProp(
+        ET.MEMORY, 'sourceId', input.sourceId, entityName, {
+        projectName: this.projectName,
+        memoryType: input.memoryType,
+        content: searchableContent,
+        contentL3: input.contentL3 || null,
+        tags: input.tags || [],
+        relatedTaskId: input.relatedTaskId || null,
+        sourceId: input.sourceId,
+        importance: input.importance ?? 0.5,
+        hitCount: 0,
+        lastAccessedAt: null,
+        createdAt: now,
+        updatedAt: now,
+      });
+      // 检测是否是更新（createdAt 可能不等于 now，说明是旧实体）
+      const ep = entity.properties as any;
+      if (ep.createdAt && ep.createdAt < now - 1000) {
+        isUpdate = true;
+        // 更新已有实体的可变字段（upsertEntityByProp 只在 create 时写入全部 properties）
+        this.graph.updateEntity(entity.id, {
+          properties: {
+            ...ep,
+            content: searchableContent,
+            contentL3: input.contentL3 || ep.contentL3 || null,
+            memoryType: input.memoryType,
+            tags: input.tags || ep.tags || [],
+            importance: input.importance ?? ep.importance ?? 0.5,
+            updatedAt: now,
+          },
+        });
+      }
+    } else {
+      // ---- 无 sourceId → 传统去重检测 ----
+      const existingDup = this.findDuplicateMemory(input);
+      if (existingDup) {
+        isUpdate = true;
+        entity = existingDup;
+        const oldProps = existingDup.properties as any;
+        this.graph.updateEntity(existingDup.id, {
+          properties: {
+            ...oldProps,
+            content: searchableContent,
+            contentL3: input.contentL3 || oldProps.contentL3 || null,
+            memoryType: input.memoryType,
+            tags: input.tags || oldProps.tags || [],
+            importance: input.importance ?? oldProps.importance ?? 0.5,
+            sourceId: input.sourceId || oldProps.sourceId || null,
+            updatedAt: now,
+          },
+        });
+      } else {
+        // 真正的新建
+        entity = this.graph.addEntity(entityName, ET.MEMORY, {
+          projectName: this.projectName,
+          memoryType: input.memoryType,
+          content: searchableContent,
+          contentL3: input.contentL3 || null,
+          tags: input.tags || [],
+          relatedTaskId: input.relatedTaskId || null,
+          sourceId: input.sourceId || null,
+          importance: input.importance ?? 0.5,
+          hitCount: 0,
+          lastAccessedAt: null,
+          createdAt: now,
+          updatedAt: now,
+        });
+      }
+    }
+
+    // project → memory 关系（putRelation 引擎级幂等）
     this.graph.putRelation(this.getProjectId(), entity.id, RT.HAS_MEMORY);
 
     // memory → task 关系（可选）
@@ -2391,10 +2594,15 @@ export class DevPlanGraphStore implements IDevPlanStore {
       }
     }
 
-    // 向量索引（如启用语义搜索）
+    // Phase-78B: 向量索引 — 先 removeEntityVector 再 indexEntity
+    //   indexEntity 是幂等的（已有向量时不更新），必须先清除旧向量
     let embedding: number[] | null = null;
     if (this.semanticSearchReady && this.synapse) {
       try {
+        // 更新或重建时，先清除旧向量
+        if (isUpdate && typeof this.graph.removeEntityVector === 'function') {
+          try { this.graph.removeEntityVector(entity.id); } catch { /* 可能没有旧向量 */ }
+        }
         embedding = this.synapse.embed(input.content);
         this.graph.indexEntity(entity.id, embedding);
       } catch (e) {
@@ -2839,6 +3047,8 @@ export class DevPlanGraphStore implements IDevPlanStore {
           name: anchor.name,
           anchorType: anchor.anchor_type,
           description: anchor.description,
+          uri: anchor.uri,
+          path: anchor.path,
           overview: anchor.overview || null,  // Phase-124: L2 目录索引概览
           version: anchor.version,
           flowCount: anchor.flow_count,
@@ -3526,85 +3736,72 @@ export class DevPlanGraphStore implements IDevPlanStore {
   }
 
   /**
-   * 智能召回记忆 — 语义向量搜索 + 图谱遍历扩展 + RRF 融合
+   * Unified Recall（Phase-79）— 对齐 ai_db phase132~136 的统一召回入口
    *
-   * Phase-38 增强: 向量搜索结果沿 MEMORY_RELATES 关系扩展，发现关联记忆。
-   * Phase-125 增强: docStrategy 支持 'vector'(默认) | 'guided'(记忆驱动) | 'none'。
-   * 如语义搜索不可用，退化为字面匹配。
-   * 命中的记忆自动更新 hitCount 和 lastAccessedAt。
+   * 统一接收 URI/depth/scope/docStrategy/recursive 等参数，并输出可观测指标。
    */
-  recallMemory(query: string, options?: {
-    memoryType?: MemoryType;
-    limit?: number;
-    minScore?: number;
-    /** 是否包含文档搜索（统一召回，默认 true）。当 docStrategy 有值时此参数被忽略。 */
-    includeDocs?: boolean;
-    /** Phase-38: 是否启用图谱关联扩展（默认 true） */
-    graphExpand?: boolean;
-    /** Phase-49: 是否使用记忆树激活引擎搜索（默认 true，不可用时自动回退） */
-    useActivation?: boolean;
-    /**
-     * Phase-124: 分层召回深度（默认 "L1"）
-     *
-     * - "L1": 摘要层 — 记忆内容 + Anchor.description + Anchor.overview
-     * - "L2": 详情层 — 额外返回 FlowEntry 列表（summary + detail）
-     * - "L3": 完整层 — 额外返回 Structure Snapshot（组件组合关系）
-     */
-    depth?: RecallDepth;
-    /**
-     * Phase-124: 范围限定检索（默认无限制）
-     *
-     * 限制搜索范围，只返回符合 scope 条件的记忆。
-     * 多个条件为 AND 关系。
-     */
-    scope?: RecallScope;
-    /**
-     * Phase-125: 文档检索策略（默认 'vector'）
-     *
-     * - 'vector': 传统模式 — 对文档库独立向量搜索，与记忆并行，RRF 融合
-     * - 'guided': 记忆驱动 — 基于记忆中的图谱关系反向查找关联文档，精准且省 token
-     * - 'none':   不检索文档（等价于 includeDocs=false）
-     *
-     * 当 docStrategy 有值时，includeDocs 参数被忽略。
-     */
-    docStrategy?: DocStrategy;
-  }): ScoredMemory[] {
+  recallUnified(query: string, options?: UnifiedRecallOptions): ScoredMemory[] {
+    const t0 = Date.now();
     const limit = options?.limit || 10;
     const minScore = options?.minScore || 0;
-    const graphExpand = options?.graphExpand !== false; // 默认 true
-    const useActivation = options?.useActivation !== false; // 默认 true
-    const depth: RecallDepth = options?.depth || 'L1'; // Phase-124: 默认 L1 摘要层
-    const scope = options?.scope; // Phase-124: 范围限定
+    const depth: RecallDepth = options?.depth || 'L1';
+    const scope = options?.scope;
     const now = Date.now();
 
-    // Phase-125: 解析 docStrategy（兼容旧 includeDocs 参数）
+    // recursive 由入参与 feature flag 共同决定
+    const graphExpand = (options?.recursive ?? true) && this.recallFeatureFlags.recursiveRecall;
+    // useActivation 由 recursive 驱动（激活引擎内含图遍历扩展）
+    const useActivation = graphExpand;
+
+    // URI 目前作为查询提示（后续可升级为 anchor_find_by_uri 精确寻址）
+    let augmentedQuery = query;
+    if (options?.uri && this.recallFeatureFlags.uriIndex) {
+      augmentedQuery = `${query} uri:${options.uri}`;
+    }
+
+    // 解析 docStrategy（兼容 includeDocs）
     let docStrategy: DocStrategy;
     if (options?.docStrategy) {
       docStrategy = options.docStrategy;
     } else if (options?.includeDocs === false) {
       docStrategy = 'none';
     } else {
-      docStrategy = 'vector'; // 默认保持向后兼容
+      docStrategy = 'vector';
     }
 
-    // ---- Phase-49: 优先使用记忆树激活引擎 ----
     let memoryResults: ScoredMemory[] = [];
     let activationUsed = false;
+    let fallbackTriggered = false;
+    let lastError: string | undefined;
 
+    try {
     if (useActivation && this.semanticSearchReady && this.synapse) {
       try {
-        memoryResults = this.recallViaActivationEngine(query, limit, minScore, options?.memoryType, now);
+          memoryResults = this.recallViaActivationEngine(
+            augmentedQuery,
+            limit,
+            minScore,
+            options?.memoryType,
+            now,
+          );
         activationUsed = memoryResults.length > 0;
       } catch (e) {
-        console.warn(`[DevPlan] Activation engine recall failed, falling back: ${e instanceof Error ? e.message : String(e)}`);
+          fallbackTriggered = true;
+          lastError = e instanceof Error ? e.message : String(e);
+          console.warn(`[DevPlan] Activation engine recall failed, falling back: ${lastError}`);
       }
     }
 
-    // ---- 回退: 传统向量搜索 + 图谱扩展 ----
+      // 回退到 legacy 召回路径
     if (!activationUsed) {
-      memoryResults = this.recallViaLegacySearch(query, limit, minScore, options?.memoryType, now);
+        memoryResults = this.recallViaLegacySearch(
+          augmentedQuery,
+          limit,
+          minScore,
+          options?.memoryType,
+          now,
+        );
 
-      // Phase-38: 图谱关联扩展（仅旧路径需要，激活引擎已内含图遍历）
       if (graphExpand && memoryResults.length > 0) {
         const graphExpanded = this.expandMemoriesByGraph(memoryResults, options?.memoryType, limit);
         if (graphExpanded.length > 0) {
@@ -3612,32 +3809,34 @@ export class DevPlanGraphStore implements IDevPlanStore {
         }
       }
 
-      // Phase-44: 赫布学习（旧路径 — 逐对 adjustRelationWeight）
       if (memoryResults.length >= 2) {
         this.hebbianStrengthen(memoryResults.filter(m => m.sourceKind === 'memory'));
       }
     }
 
-    // ---- Phase-124: 范围限定过滤（Scope-based Filtering）----
     if (scope) {
       memoryResults = this.filterMemoriesByScope(memoryResults, scope);
     }
 
-    // ---- 2. 文档召回：根据 docStrategy 分流 ----
-
-    // 2a. 不检索文档（none / 指定了 memoryType 过滤时也跳过文档）
     if (docStrategy === 'none' || options?.memoryType) {
       this.enrichMemoriesWithAnchorInfo(memoryResults, depth);
-      return this.rerankSearchResults(query, memoryResults, limit);
+        return this.rerankSearchResults(augmentedQuery, memoryResults, limit);
     }
 
-    // 2b. Phase-125: 记忆驱动文档检索（guided）
     if (docStrategy === 'guided') {
       let guidedDocs = this.findGuidedDocuments(memoryResults, Math.max(3, Math.floor(limit / 2)));
-
-      // Fallback: 图遍历结果为空时，降级到 vector 模式
       if (guidedDocs.length === 0) {
-        guidedDocs = this.vectorSearchDocuments(query, limit, minScore);
+          guidedDocs = this.vectorSearchDocuments(augmentedQuery, limit, minScore);
+      }
+      const treeDocs = this.treeIndexSearchDocuments(
+        augmentedQuery,
+        Math.max(3, Math.floor(limit / 2)),
+        minScore,
+      );
+      if (treeDocs.length > 0) {
+        guidedDocs = guidedDocs.length > 0
+          ? this.rrfMergeResults(guidedDocs, treeDocs, limit)
+          : treeDocs.slice(0, limit);
       }
 
       let finalResults: ScoredMemory[];
@@ -3646,32 +3845,221 @@ export class DevPlanGraphStore implements IDevPlanStore {
       } else if (memoryResults.length === 0) {
         finalResults = guidedDocs.slice(0, limit);
       } else {
-        // 记忆在前，guided 文档追加在后（不做 RRF，因为 guided 已按图关联排序）
         finalResults = [...memoryResults, ...guidedDocs].slice(0, limit);
       }
 
       this.enrichMemoriesWithAnchorInfo(finalResults, depth);
-      return this.rerankSearchResults(query, finalResults, limit);
+        return this.rerankSearchResults(augmentedQuery, finalResults, limit);
     }
 
-    // 2c. 传统向量搜索文档（vector，默认路径）
-    let docResults: ScoredMemory[] = this.vectorSearchDocuments(query, limit, minScore);
-
-    // ---- 3. RRF 融合排序 ----
+      const docResults = this.vectorSearchDocuments(augmentedQuery, limit, minScore);
+    const treeDocResults = this.treeIndexSearchDocuments(
+      augmentedQuery,
+      Math.max(3, Math.floor(limit / 2)),
+      minScore,
+    );
+    const mergedDocResults = treeDocResults.length > 0
+      ? (docResults.length > 0
+        ? this.rrfMergeResults(docResults, treeDocResults, limit)
+        : treeDocResults.slice(0, limit))
+      : docResults;
     let finalResults: ScoredMemory[];
-    if (docResults.length === 0) {
+    if (mergedDocResults.length === 0) {
       finalResults = memoryResults;
     } else if (memoryResults.length === 0) {
-      finalResults = docResults.slice(0, limit);
+      finalResults = mergedDocResults.slice(0, limit);
     } else {
-      finalResults = this.rrfMergeResults(memoryResults, docResults, limit);
+      finalResults = this.rrfMergeResults(memoryResults, mergedDocResults, limit);
     }
 
-    // Phase-57→124: 三维记忆层级下钻（受 depth 控制）
     this.enrichMemoriesWithAnchorInfo(finalResults, depth);
+      return this.rerankSearchResults(augmentedQuery, finalResults, limit);
+    } finally {
+      const elapsed = Date.now() - t0;
+      this.recallObservabilityRaw.totalCalls += 1;
+      this.recallObservabilityRaw.totalLatencyMs += elapsed;
+      this.recallObservabilityRaw.lastLatencyMs = elapsed;
+      if (fallbackTriggered) {
+        this.recallObservabilityRaw.totalFallbacks += 1;
+      }
+      if (lastError) {
+        this.recallObservabilityRaw.lastError = lastError;
+      }
+    }
+  }
 
-    // Phase-54: LLM Reranking 作为最终精排步骤
-    return this.rerankSearchResults(query, finalResults, limit);
+  /**
+   * DEPRECATED: 请使用 recallUnified()
+   */
+  recallMemory(query: string, options?: {
+    memoryType?: MemoryType;
+    limit?: number;
+    minScore?: number;
+    includeDocs?: boolean;
+    graphExpand?: boolean;
+    useActivation?: boolean;
+    depth?: RecallDepth;
+    scope?: RecallScope;
+    docStrategy?: DocStrategy;
+  }): ScoredMemory[] {
+    return this.recallUnified(query, {
+      memoryType: options?.memoryType,
+      limit: options?.limit,
+      minScore: options?.minScore,
+      includeDocs: options?.includeDocs,
+      // 旧参数 graphExpand/useActivation 折叠到 recursive
+      recursive: options?.graphExpand ?? options?.useActivation ?? true,
+      depth: options?.depth,
+      scope: options?.scope,
+      docStrategy: options?.docStrategy,
+    });
+  }
+
+  /** Phase-79: 获取 Unified Recall feature flags */
+  getFeatureFlags(): RecallFeatureFlags {
+    return { ...this.recallFeatureFlags };
+  }
+
+  /** Phase-79: 更新 Unified Recall feature flags */
+  setFeatureFlags(patch: RecallFeatureFlagsPatch): RecallFeatureFlags {
+    this.recallFeatureFlags = {
+      ...this.recallFeatureFlags,
+      ...patch,
+    };
+    return this.getFeatureFlags();
+  }
+
+  /** Phase-79: 获取 Unified Recall 可观测性指标 */
+  getRecallObservability(): RecallObservability {
+    const calls = Math.max(1, this.recallObservabilityRaw.totalCalls);
+    const fallbackRate = this.recallObservabilityRaw.totalFallbacks / calls;
+    const avgLatencyMs = this.recallObservabilityRaw.totalLatencyMs / calls;
+    let alert = false;
+    let alertReason: string | undefined;
+    if (fallbackRate > 0.2) {
+      alert = true;
+      alertReason = `Fallback rate too high: ${(fallbackRate * 100).toFixed(2)}% (>20%)`;
+    } else if (avgLatencyMs > 500) {
+      alert = true;
+      alertReason = `Average recall latency too high: ${avgLatencyMs.toFixed(1)}ms (>500ms)`;
+    }
+    return {
+      totalCalls: this.recallObservabilityRaw.totalCalls,
+      totalFallbacks: this.recallObservabilityRaw.totalFallbacks,
+      fallbackRate,
+      avgLatencyMs,
+      lastLatencyMs: this.recallObservabilityRaw.lastLatencyMs,
+      alert,
+      alertReason,
+      lastError: this.recallObservabilityRaw.lastError,
+    };
+  }
+
+  /** Phase-79: 重置 Unified Recall 可观测性指标 */
+  resetRecallObservability(): RecallObservability {
+    this.recallObservabilityRaw = {
+      totalCalls: 0,
+      totalFallbacks: 0,
+      totalLatencyMs: 0,
+      lastLatencyMs: 0,
+      lastError: undefined,
+    };
+    return this.getRecallObservability();
+  }
+
+  private tokenizeQuery(query: string): string[] {
+    const tokens = (query.toLowerCase().match(/[a-z0-9_\-\u4e00-\u9fa5]+/g) || [])
+      .filter(t => t.length >= 2);
+    return Array.from(new Set(tokens));
+  }
+
+  private treeIndexSearchDocuments(query: string, limit: number, minScore: number): ScoredMemory[] {
+    if (!this.treeIndexRetrievalEnabled) return [];
+    const docs = this.listSections();
+    const tokens = this.tokenizeQuery(query);
+    if (tokens.length === 0) return [];
+
+    const rawCandidates: Array<{
+      id: string;
+      title: string;
+      content: string;
+      score: number;
+      section: string;
+      subSection?: string;
+      pathLabel: string;
+    }> = [];
+
+    for (const doc of docs) {
+      const lines = (doc.content || '').split('\n');
+      let currentHeading = doc.title;
+      let currentDepth = 1;
+      let buffer: string[] = [];
+      let nodeIdx = 0;
+
+      const pushNode = () => {
+        const block = buffer.join('\n').trim();
+        if (!block) return;
+        const titleLower = currentHeading.toLowerCase();
+        const blockLower = block.toLowerCase();
+        let titleHits = 0;
+        let contentHits = 0;
+        for (const tk of tokens) {
+          if (titleLower.includes(tk)) titleHits += 1;
+          if (blockLower.includes(tk)) contentHits += 1;
+        }
+        if (titleHits === 0 && contentHits === 0) return;
+        const base = titleHits * 3 + contentHits;
+        const normalized = Math.min(1, base / Math.max(3, tokens.length * 2));
+        const depthBonus = 1 / (currentDepth + 1);
+        const score = Math.min(1, normalized * 0.85 + depthBonus * 0.15);
+        const docKey = doc.subSection ? `${doc.section}|${doc.subSection}` : doc.section;
+        rawCandidates.push({
+          id: `doc:${docKey}#tree-${nodeIdx}`,
+          title: `${doc.title} / ${currentHeading}`,
+          content: block.slice(0, 1200),
+          score,
+          section: doc.section,
+          subSection: doc.subSection,
+          pathLabel: currentHeading,
+        });
+        nodeIdx += 1;
+      };
+
+      for (const line of lines) {
+        const m = /^(#{1,6})\s+(.+)$/.exec(line.trim());
+        if (m) {
+          pushNode();
+          buffer = [];
+          currentDepth = m[1].length;
+          currentHeading = m[2].trim();
+        } else {
+          buffer.push(line);
+        }
+      }
+      pushNode();
+    }
+
+    const sorted = rawCandidates
+      .filter(c => minScore <= 0 || c.score >= minScore)
+      .sort((a, b) => b.score - a.score)
+      .slice(0, Math.max(limit, this.treeIndexMaxNodes))
+      .map((c): ScoredMemory => ({
+        id: c.id,
+        projectName: this.projectName,
+        memoryType: this.docSectionToMemoryType(c.section),
+        content: `## ${c.title}\n\n${c.content}`,
+        importance: 0.5,
+        tags: ['tree-index', c.section, ...(c.subSection ? [c.subSection] : [])],
+        hitCount: 0,
+        lastAccessedAt: null,
+        createdAt: Date.now(),
+        updatedAt: Date.now(),
+        score: c.score,
+        sourceKind: 'doc',
+        guidedReasons: [`tree-index:${c.pathLabel}`],
+      }));
+
+    return this.rerankSearchResults(query, sorted, limit).slice(0, limit);
   }
 
   /**
@@ -3893,8 +4281,14 @@ export class DevPlanGraphStore implements IDevPlanStore {
       try {
         const embedding = this.synapse.embed(query);
         // hybridSearchTantivy(embedding, textQuery, entityTypeFilter, topK, rrfK)
-        // RRF K=60 是标准值，Rust 层自动执行 vector + BM25 的 RRF 融合
-        const hits = this.graph.hybridSearchTantivy(embedding, query, ET.MEMORY, fetchLimit);
+        // rrfK 从外部配置读取（默认 60）
+        const hits = this.graph.hybridSearchTantivy(
+          embedding,
+          query,
+          ET.MEMORY,
+          fetchLimit,
+          this.recallSearchTuning.rrfK,
+        );
 
         memoryResults = this.processMemorySearchHits(
           hits.map(h => ({ entityId: h.entityId, score: h.score })),
@@ -3926,9 +4320,20 @@ export class DevPlanGraphStore implements IDevPlanStore {
     if (memoryResults.length === 0 && this.textSearchReady) {
       try {
         const hits = this.graph.searchEntitiesByText(query, ET.MEMORY, fetchLimit);
+        const boostedHits = hits
+          .map(h => {
+            const p = h.entity.properties as any;
+            const score = this.applyBm25TermBoost(
+              Number(h.score || 0),
+              query,
+              `${h.snippet || ''}\n${p?.content || ''}\n${(p?.tags || []).join(' ')}`,
+            );
+            return { entityId: h.entityId, score };
+          })
+          .sort((a, b) => b.score - a.score);
 
         memoryResults = this.processMemorySearchHits(
-          hits.map(h => ({ entityId: h.entityId, score: h.score })),
+          boostedHits,
           memoryType, minScore, limit, now,
         );
         if (memoryResults.length > 0) return memoryResults;
@@ -4270,20 +4675,21 @@ export class DevPlanGraphStore implements IDevPlanStore {
     graphResults: ScoredMemory[],
     limit: number,
   ): ScoredMemory[] {
-    const k_vector = 20;  // 向量搜索 RRF 常数（权重更高）
-    const k_graph = 40;   // 图谱扩展 RRF 常数
+    const rrfK = this.recallSearchTuning.rrfK;
+    const vectorWeight = this.recallSearchTuning.vectorWeight;
+    const graphWeight = this.recallSearchTuning.graphWeight;
 
     const scoreMap = new Map<string, { item: ScoredMemory; rrfScore: number }>();
 
     for (let i = 0; i < vectorResults.length; i++) {
       const item = vectorResults[i];
-      const rrfScore = 1.0 / (k_vector + i + 1);
+      const rrfScore = vectorWeight / (rrfK + i + 1);
       scoreMap.set(item.id, { item, rrfScore });
     }
 
     for (let i = 0; i < graphResults.length; i++) {
       const item = graphResults[i];
-      const rrfScore = 1.0 / (k_graph + i + 1);
+      const rrfScore = graphWeight / (rrfK + i + 1);
       const existing = scoreMap.get(item.id);
       if (existing) {
         existing.rrfScore += rrfScore;
@@ -4415,7 +4821,7 @@ export class DevPlanGraphStore implements IDevPlanStore {
     // 2. 相关记忆（统一召回：同时搜索记忆 + 文档）
     let relevantMemories: ScoredMemory[] = [];
     if (query) {
-      relevantMemories = this.recallMemory(query, { limit, includeDocs: true });
+      relevantMemories = this.recallUnified(query, { limit, docStrategy: 'vector' });
     }
 
     // 3. 项目偏好
@@ -4958,6 +5364,27 @@ export class DevPlanGraphStore implements IDevPlanStore {
     let phasesWithMemory = 0;
     let docsWithMemory = 0;
     let skippedWithMemory = 0;
+    const buildSkillInstructions = (
+      sourceType: 'task' | 'document',
+      sourceId: string,
+      sourceTitle: string,
+      memoryType: MemoryType,
+      section?: string,
+    ) => {
+      const subject = sourceType === 'task'
+        ? `任务ID：${sourceId}\n任务标题：${sourceTitle}`
+        : `文档标题：${sourceTitle}\n文档类型：${section || 'custom'}`;
+      const commonRule = `粒度规则：
+- decision/bugfix：L2 必须保留"关键代码片段 + 文件路径 + 决策/根因与修复"（若原文存在）
+- summary：2~3句概要，避免堆叠细节
+- pattern/insight/preference：1~3句核心结论 + 一个最小示例
+- 不要使用旧版 L1/L2/L3 定义，使用当前规则输出`;
+      return {
+        l1Prompt: `请生成 L1 触点摘要（15~30字，仅入口）。\n${commonRule}\n\n建议 memoryType：${memoryType}\n${subject}`,
+        l2Prompt: `请生成 L2 详细记忆。\n${commonRule}\n\n建议 memoryType：${memoryType}\n${subject}`,
+        l3Prompt: `请生成 L3 完整内容（可较长，保留结构与可追溯信息）。\n${commonRule}\n\n建议 memoryType：${memoryType}\n${subject}`,
+      };
+    };
 
     // ========== 任务来源 ==========
     if (source === 'tasks' || source === 'both') {
@@ -5008,11 +5435,7 @@ export class DevPlanGraphStore implements IDevPlanStore {
           suggestedImportance: importanceMap[task.priority] || 0.6,
           suggestedTags: [task.taskId, task.priority],
           hasExistingMemory: false,
-          skillInstructions: {
-            l1Prompt: `请为以下开发任务生成一句话的触点摘要（L1）。要求：极度精简，不超过30字，标识这个任务实现了什么功能。\n\n任务ID：${task.taskId}\n任务标题：${task.title}`,
-            l2Prompt: `请为以下开发任务生成详细记忆内容（L2）。要求：3~5句话，包含关键实现细节、技术方案和完成的子任务摘要。\n\n任务ID：${task.taskId}\n任务标题：${task.title}`,
-            l3Prompt: `请为以下开发任务生成完整记忆（L3）。要求：保留所有子任务信息、完成状态、关键技术决策。\n\n任务ID：${task.taskId}\n任务标题：${task.title}`,
-          },
+          skillInstructions: buildSkillInstructions('task', task.taskId, task.title, 'summary'),
         });
       }
     }
@@ -5126,11 +5549,7 @@ export class DevPlanGraphStore implements IDevPlanStore {
           suggestedImportance: suggestedImportance,
           suggestedTags: tags,
           hasExistingMemory: false,
-          skillInstructions: {
-            l1Prompt: `请为以下文档生成一句话的触点摘要（L1）。要求：极度精简，不超过30字，作为记忆的"入口"标识。\n\n文档标题：${doc.title}\n文档类型：${doc.section}`,
-            l2Prompt: `请为以下文档生成详细记忆内容（L2）。要求：3~5句话，包含关键技术细节、设计决策和核心概念。不要复制原文，用自己的话概括要点。\n\n文档标题：${doc.title}\n文档类型：${doc.section}`,
-            l3Prompt: `请为以下文档生成结构化摘要（L3）。要求：保留所有关键信息、API名称、技术参数，可以使用 Markdown 列表。尽可能完整，但去除重复和冗余内容。\n\n文档标题：${doc.title}\n文档类型：${doc.section}`,
-          },
+          skillInstructions: buildSkillInstructions('document', docKey, doc.title, refinedType, doc.section),
         });
       }
     }
@@ -6476,21 +6895,23 @@ export class DevPlanGraphStore implements IDevPlanStore {
     limit: number,
     minScore: number,
   ): ScoredDevPlanDoc[] {
-    const RRF_K = 60;
+    const rrfK = this.recallSearchTuning.rrfK;
+    const vectorWeight = this.recallSearchTuning.vectorWeight;
+    const bm25Weight = this.recallSearchTuning.bm25Weight;
     const rrfScores = new Map<string, number>();
     const docMap = new Map<string, DevPlanDoc>();
 
     // 通道 1: 语义搜索结果贡献
     for (let i = 0; i < semanticHits.length; i++) {
       const hit = semanticHits[i];
-      const rrf = 1 / (RRF_K + i + 1);
+      const rrf = vectorWeight / (rrfK + i + 1);
       rrfScores.set(hit.entityId, (rrfScores.get(hit.entityId) || 0) + rrf);
     }
 
     // 通道 2: BM25 / literal 搜索结果贡献
     for (let i = 0; i < textResults.length; i++) {
       const r = textResults[i];
-      const rrf = 1 / (RRF_K + i + 1);
+      const rrf = bm25Weight / (rrfK + i + 1);
       rrfScores.set(r.id, (rrfScores.get(r.id) || 0) + rrf);
       if (r.doc) {
         docMap.set(r.id, r.doc);

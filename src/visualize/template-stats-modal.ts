@@ -7,7 +7,132 @@
 export function getStatsModalScript(): string {
   return `
 // ========== Stats Modal ==========
+var _statsMainTaskMoreMenu = null;
+var _statsMainTaskMoreBtn = null;
+
+function closeMainTaskMoreMenu() {
+  if (_statsMainTaskMoreMenu && _statsMainTaskMoreMenu.parentNode) {
+    _statsMainTaskMoreMenu.parentNode.removeChild(_statsMainTaskMoreMenu);
+  }
+  _statsMainTaskMoreMenu = null;
+  _statsMainTaskMoreBtn = null;
+}
+
+function ensureStatsMoreMenuGlobalClose() {
+  if (window.__statsMoreMenuBound) return;
+  window.__statsMoreMenuBound = true;
+  document.addEventListener('click', function() { closeMainTaskMoreMenu(); });
+}
+
+function toggleMainTaskMoreMenu(btn, taskId, nodeId, status) {
+  ensureStatsMoreMenuGlobalClose();
+  if (!btn) return;
+  var sameBtn = _statsMainTaskMoreBtn === btn;
+  closeMainTaskMoreMenu();
+  if (sameBtn) return;
+
+  var safeNodeId = String(nodeId || '').replace(/'/g, "\\\\'");
+  var safeTaskId = String(taskId || '').replace(/'/g, "\\\\'");
+  var menu = document.createElement('div');
+  menu.className = 'stats-modal-more-menu';
+  var menuHtml = '';
+  menuHtml += '<button class="stats-modal-more-item" onclick="event.stopPropagation();refreshSingleMainTask(\\x27' + safeNodeId + '\\x27,\\x27' + safeTaskId + '\\x27,event)">🔄 刷新</button>';
+  if (status === 'pending') {
+    menuHtml += '<button class="stats-modal-more-item" onclick="event.stopPropagation();markMainTaskStatus(\\x27' + safeNodeId + '\\x27,\\x27' + safeTaskId + '\\x27,\\x27completed\\x27,event)">✅ 标记为完成</button>';
+    menuHtml += '<button class="stats-modal-more-item" onclick="event.stopPropagation();markMainTaskStatus(\\x27' + safeNodeId + '\\x27,\\x27' + safeTaskId + '\\x27,\\x27cancelled\\x27,event)">🚫 标记为废弃</button>';
+  }
+  menu.innerHTML = menuHtml;
+  menu.addEventListener('click', function(e) { e.stopPropagation(); });
+  btn.parentNode.appendChild(menu);
+  _statsMainTaskMoreMenu = menu;
+  _statsMainTaskMoreBtn = btn;
+}
+
+function findMainTaskNode(nodeId, taskId) {
+  if (nodeId) {
+    for (var i = 0; i < allNodes.length; i++) {
+      if (allNodes[i].id === nodeId) return allNodes[i];
+    }
+  }
+  if (taskId) {
+    for (var j = 0; j < allNodes.length; j++) {
+      var n = allNodes[j];
+      if (n.type === 'main-task' && (n.properties || {}).taskId === taskId) return n;
+    }
+  }
+  return null;
+}
+
+function refreshSingleMainTask(nodeId, taskId, e) {
+  if (e) e.stopPropagation();
+  closeMainTaskMoreMenu();
+  if (!taskId) return;
+  fetch('/api/main-task?taskId=' + encodeURIComponent(taskId))
+    .then(function(r) {
+      if (!r.ok) throw new Error('HTTP ' + r.status);
+      return r.json();
+    })
+    .then(function(data) {
+      var target = findMainTaskNode(nodeId, taskId);
+      if (!target) return;
+
+      target.label = data.title || target.label;
+      var props = target.properties || {};
+      props.taskId = data.taskId || props.taskId;
+      props.status = data.status || props.status;
+      props.totalSubtasks = data.totalSubtasks != null ? data.totalSubtasks : props.totalSubtasks;
+      props.completedSubtasks = data.completedSubtasks != null ? data.completedSubtasks : props.completedSubtasks;
+      props.completedAt = data.completedAt != null ? data.completedAt : props.completedAt;
+      target.properties = props;
+
+      if (nodesDataSet && typeof nodesDataSet.get === 'function' && nodesDataSet.get(target.id)) {
+        nodesDataSet.update({
+          id: target.id,
+          label: target.label,
+          properties: props,
+          status: props.status,
+        });
+      }
+      if (network && typeof network.redraw === 'function') {
+        network.redraw();
+      }
+
+      showStatsModal('main-task');
+      if (typeof log === 'function') log('主任务已刷新: ' + taskId, true);
+    })
+    .catch(function(err) {
+      if (typeof log === 'function') log('刷新主任务失败: ' + err.message, false);
+    });
+}
+
+function markMainTaskStatus(nodeId, taskId, status, e) {
+  if (e) e.stopPropagation();
+  closeMainTaskMoreMenu();
+  if (!taskId || (status !== 'completed' && status !== 'cancelled')) return;
+  fetch('/api/main-task/status', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ taskId: taskId, status: status })
+  })
+    .then(function(r) {
+      return r.json().then(function(body) {
+        if (!r.ok) throw new Error(body && body.error ? body.error : ('HTTP ' + r.status));
+        return body;
+      });
+    })
+    .then(function() {
+      refreshSingleMainTask(nodeId, taskId, null);
+      if (typeof log === 'function') {
+        log('主任务状态已更新: ' + taskId + ' -> ' + status, true);
+      }
+    })
+    .catch(function(err) {
+      if (typeof log === 'function') log('更新主任务状态失败: ' + err.message, false);
+    });
+}
+
 function showStatsModal(nodeType) {
+  closeMainTaskMoreMenu();
   // 文档类型使用全局文档列表组件
   if (nodeType === 'document') {
     showDocModal();
@@ -39,7 +164,9 @@ function showStatsModal(nodeType) {
     var icon = iconMap[nodeType] || '●';
     html += '<div class="stats-modal-item" onclick="statsModalGoToNode(\\x27' + n.id + '\\x27)">';
     html += '<span class="stats-modal-item-icon">' + icon + '</span>';
+    html += '<span class="stats-modal-item-name-wrap">';
     html += '<span class="stats-modal-item-name" title="' + escHtml(n.label) + '">' + escHtml(n.label) + '</span>';
+    html += '</span>';
     if (nodeType === 'main-task') {
       var subCount = 0; var subDone = 0;
       for (var j = 0; j < allNodes.length; j++) {
@@ -56,6 +183,11 @@ function showStatsModal(nodeType) {
       html += '<span class="stats-modal-item-sub">' + p.mainTaskCount + ' 任务</span>';
     }
     html += '<span class="stats-modal-item-badge ' + st + '">' + statusText(st) + '</span>';
+    if (nodeType === 'main-task' && p.taskId) {
+      html += '<span class="stats-modal-item-actions">';
+      html += '<button class="stats-modal-item-more" title="更多操作" onclick="event.stopPropagation();toggleMainTaskMoreMenu(this,\\x27' + String(p.taskId).replace(/'/g, "\\\\'") + '\\x27,\\x27' + String(n.id).replace(/'/g, "\\\\'") + '\\x27,\\x27' + String(st).replace(/'/g, "\\\\'") + '\\x27)">⋯</button>';
+      html += '</span>';
+    }
     html += '</div>';
   }
   if (items.length === 0) {
@@ -304,6 +436,7 @@ function showCopyFeedback(elId) {
 }
 
 function closeStatsModal() {
+  closeMainTaskMoreMenu();
   document.getElementById('statsModalOverlay').classList.remove('active');
 }
 

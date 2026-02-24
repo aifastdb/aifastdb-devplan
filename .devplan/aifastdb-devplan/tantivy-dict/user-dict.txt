@@ -1,0 +1,8 @@
+WAL
+HNSW
+NAPI
+MCP
+RRF
+BM25
+VibeSynapse
+SocialGraphV2

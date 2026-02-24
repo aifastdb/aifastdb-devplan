@@ -39,6 +39,10 @@ import type {
   RecallDepth,
   RecallScope,
   DocStrategy,
+  UnifiedRecallOptions,
+  RecallFeatureFlags,
+  RecallFeatureFlagsPatch,
+  RecallObservability,
 } from './types';
 
 // ============================================================================
@@ -280,6 +284,8 @@ export interface IDevPlanStore {
   /**
    * 智能召回记忆 — 基于语义向量搜索
    *
+   * DEPRECATED: 推荐使用 `recallUnified()` 统一入口。
+   *
    * 将 query 文本 embed 后，通过 HNSW 向量搜索找到最相关的记忆。
    * 命中的记忆自动 +1 hitCount。
    *
@@ -304,6 +310,31 @@ export interface IDevPlanStore {
     /** Phase-125: 文档检索策略 — 'vector'(默认) | 'guided'(记忆驱动) | 'none'(不检索) */
     docStrategy?: DocStrategy;
   }): ScoredMemory[];
+
+  /**
+   * Unified Recall（Phase-79）— 统一召回入口
+   */
+  recallUnified?(query: string, options?: UnifiedRecallOptions): ScoredMemory[];
+
+  /**
+   * 获取 Recall Feature Flags（Phase-79）
+   */
+  getFeatureFlags?(): RecallFeatureFlags;
+
+  /**
+   * 更新 Recall Feature Flags（Phase-79）
+   */
+  setFeatureFlags?(patch: RecallFeatureFlagsPatch): RecallFeatureFlags;
+
+  /**
+   * 获取 Recall 可观测性指标（Phase-79）
+   */
+  getRecallObservability?(): RecallObservability;
+
+  /**
+   * 重置 Recall 可观测性指标（Phase-79）
+   */
+  resetRecallObservability?(): RecallObservability;
 
   /**
    * 列出记忆（支持过滤）

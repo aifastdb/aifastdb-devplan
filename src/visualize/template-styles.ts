@@ -274,20 +274,25 @@ export function getStyles(): string {
     .memory-filter-btn { background: #1f2937; border: 1px solid #374151; border-radius: 8px; padding: 6px 14px; color: #9ca3af; font-size: 12px; cursor: pointer; transition: all 0.2s; white-space: nowrap; }
     .memory-filter-btn:hover { background: #374151; color: #e5e7eb; }
     .memory-filter-btn.active { background: #312e81; border-color: #6366f1; color: #a5b4fc; }
-    /* Memory View Toggle */
-    .memory-view-toggle { display: flex; gap: 2px; background: #1f2937; border: 1px solid #374151; border-radius: 8px; padding: 2px; margin-right: 12px; }
-    .memory-view-btn { background: transparent; border: none; border-radius: 6px; padding: 5px 12px; color: #9ca3af; font-size: 12px; cursor: pointer; transition: all 0.2s; display: flex; align-items: center; gap: 4px; white-space: nowrap; }
-    .memory-view-btn:hover { color: #e5e7eb; background: #374151; }
-    .memory-view-btn.active { background: #312e81; color: #a5b4fc; }
+    /* [Phase-77: Memory graph styles removed, list-only view] */
     .memory-header-right { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
 
-    /* Memory Graph Container */
-    .memory-graph-container { flex: 1; position: relative; border-radius: 12px; overflow: hidden; background: #0f172a; border: 1px solid #1e293b; min-height: 400px; }
-    .memory-graph-loading { position: absolute; top: 50%; left: 50%; transform: translate(-50%, -50%); text-align: center; color: #6b7280; font-size: 13px; z-index: 10; }
-    .memory-graph-legend { position: absolute; bottom: 16px; left: 16px; background: rgba(15, 23, 42, 0.85); backdrop-filter: blur(8px); border: 1px solid #1e293b; border-radius: 10px; padding: 10px 14px; display: flex; flex-direction: column; gap: 6px; z-index: 10; }
-    .mg-legend-item { display: flex; align-items: center; gap: 6px; font-size: 11px; color: #9ca3af; }
-    .mg-legend-dot { width: 10px; height: 10px; border-radius: 50%; flex-shrink: 0; }
-    .memory-graph-stats { position: absolute; top: 16px; right: 16px; background: rgba(15, 23, 42, 0.85); backdrop-filter: blur(8px); border: 1px solid #1e293b; border-radius: 10px; padding: 8px 14px; font-size: 11px; color: #9ca3af; z-index: 10; }
+    /* Phase-78: 完整性检测按钮 */
+    .memory-verify-btn { background: #1f2937; border: 1px solid #374151; border-radius: 8px; padding: 7px 14px; font-size: 12px; font-weight: 600; color: #9ca3af; cursor: pointer; transition: all 0.2s; white-space: nowrap; }
+    .memory-verify-btn:hover { background: #374151; color: #e5e7eb; border-color: #4b5563; }
+    .memory-verify-btn.verifying { opacity: 0.7; cursor: wait; }
+
+    /* Phase-78: 卡片内检测按钮 */
+    .mem-verify-single-btn { background: transparent; border: 1px solid #374151; border-radius: 4px; padding: 1px 8px; font-size: 10px; color: #6b7280; cursor: pointer; transition: all 0.2s; white-space: nowrap; }
+    .mem-verify-single-btn:hover { background: #374151; color: #e5e7eb; border-color: #4b5563; }
+
+    /* Phase-78: 卡片内检测结果内联展示 */
+    .mem-verify-inline { margin-top: 8px; padding: 6px 10px; border-radius: 6px; font-size: 11px; line-height: 1.5; border: 1px solid; }
+    .mem-verify-inline.pass { background: rgba(34,197,94,0.08); border-color: rgba(34,197,94,0.25); color: #22c55e; }
+    .mem-verify-inline.warning { background: rgba(245,158,11,0.08); border-color: rgba(245,158,11,0.25); color: #f59e0b; }
+    .mem-verify-inline.error { background: rgba(239,68,68,0.08); border-color: rgba(239,68,68,0.25); color: #ef4444; }
+    .mem-verify-inline .verify-metrics { display: flex; gap: 10px; flex-wrap: wrap; margin-top: 4px; font-size: 10px; color: #6b7280; }
+    .mem-verify-inline .verify-issue { margin-top: 2px; }
 
     .memory-list { flex: 1; display: flex; flex-direction: column; gap: 10px; overflow-y: auto; }
     .memory-card { background: #1f2937; border: 1px solid #374151; border-radius: 10px; padding: 16px 20px; transition: all 0.2s; position: relative; overflow: hidden; }
@@ -634,6 +639,14 @@ export function getStyles(): string {
     .stats-modal-item:hover { background: #283344; }
     .stats-modal-item-icon { font-size: 14px; flex-shrink: 0; width: 22px; text-align: center; }
     .stats-modal-item-name { flex: 1; font-size: 13px; color: #e5e7eb; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+    .stats-modal-item-name-wrap { flex: 1; min-width: 0; display: flex; align-items: center; gap: 6px; }
+    .stats-modal-item-more { display: none; align-items: center; justify-content: center; width: 20px; height: 20px; border-radius: 4px; background: transparent; border: none; color: #6b7280; font-size: 14px; cursor: pointer; flex-shrink: 0; padding: 0; line-height: 1; letter-spacing: 1px; }
+    .stats-modal-item:hover .stats-modal-item-more { display: inline-flex; }
+    .stats-modal-item-more:hover { background: rgba(99,102,241,0.25); color: #a5b4fc; }
+    .stats-modal-item-actions { position: relative; flex-shrink: 0; margin-left: 2px; }
+    .stats-modal-more-menu { position: absolute; top: 22px; right: 0; min-width: 120px; background: #111827; border: 1px solid #374151; border-radius: 8px; box-shadow: 0 8px 24px rgba(0,0,0,0.45); overflow: hidden; z-index: 10; }
+    .stats-modal-more-item { width: 100%; text-align: left; background: transparent; border: none; color: #d1d5db; font-size: 12px; padding: 8px 10px; cursor: pointer; }
+    .stats-modal-more-item:hover { background: #1f2937; color: #a5b4fc; }
     .stats-modal-item-badge { font-size: 11px; padding: 2px 8px; border-radius: 9999px; flex-shrink: 0; }
     .stats-modal-item-badge.completed { background: rgba(16,185,129,0.15); color: #6ee7b7; }
     .stats-modal-item-badge.in_progress { background: rgba(59,130,246,0.15); color: #93c5fd; }

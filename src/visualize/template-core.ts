@@ -33,8 +33,37 @@ function updateStatsModalPosition() {
 
 var currentPage = 'graph';
 var pageMap = { graph: 'pageGraph', stats: 'pageStats', docs: 'pageDocs', memory: 'pageMemory', 'md-viewer': 'pageMdViewer', settings: 'pageSettings' };
+var routePages = { '/': 'graph', '/graph': 'graph', '/stats': 'stats', '/docs': 'docs', '/memory': 'memory', '/md-viewer': 'md-viewer', '/settings': 'settings' };
 
-function navTo(page) {
+function getPageFromPath(pathname) {
+  if (!pathname) return 'graph';
+  return routePages[pathname] || 'graph';
+}
+
+function getPathFromPage(page) {
+  if (page === 'graph') return '/graph';
+  if (page === 'stats') return '/stats';
+  if (page === 'docs') return '/docs';
+  if (page === 'memory') return '/memory';
+  if (page === 'md-viewer') return '/md-viewer';
+  if (page === 'settings') return '/settings';
+  return '/graph';
+}
+
+function syncBrowserRoute(page, replace) {
+  try {
+    var targetPath = getPathFromPage(page);
+    if (window.location.pathname === targetPath) return;
+    var st = { page: page };
+    if (replace) history.replaceState(st, '', targetPath);
+    else history.pushState(st, '', targetPath);
+  } catch (e) {}
+}
+
+function navTo(page, options) {
+  options = options || {};
+  var fromRoute = !!options.fromRoute;
+  var replaceRoute = !!options.replaceRoute;
   // 仅支持已实现的页面
   if (!pageMap[page]) return;
   if (page === currentPage) return;
@@ -53,6 +82,9 @@ function navTo(page) {
   }
 
   currentPage = page;
+  if (!fromRoute) {
+    syncBrowserRoute(page, replaceRoute);
+  }
 
   // 离开图谱页面时关闭左侧弹层
   if (page !== 'graph') closeStatsModal();
@@ -66,6 +98,26 @@ function navTo(page) {
     setTimeout(function() { network.redraw(); network.fit(); }, 100);
   }
 }
+
+function initRoutingFromLocation() {
+  var initialPage = getPageFromPath(window.location.pathname);
+  if (!routePages[window.location.pathname]) {
+    syncBrowserRoute(initialPage, true);
+  }
+  if (initialPage !== currentPage) {
+    navTo(initialPage, { fromRoute: true, replaceRoute: true });
+  } else {
+    // 确保首页也统一到 /graph
+    syncBrowserRoute(initialPage, true);
+  }
+}
+
+window.addEventListener('popstate', function() {
+  var page = getPageFromPath(window.location.pathname);
+  if (page !== currentPage) {
+    navTo(page, { fromRoute: true });
+  }
+});
 
 // 恢复 sidebar 偏好
 (function() {

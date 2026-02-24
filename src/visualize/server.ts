@@ -281,6 +281,12 @@ function startServer(projectName: string, basePath: string, port: number): void 
     try {
       switch (url.pathname) {
         case '/':
+        case '/graph':
+        case '/stats':
+        case '/docs':
+        case '/memory':
+        case '/md-viewer':
+        case '/settings':
           res.writeHead(200, { 'Content-Type': 'text/html; charset=utf-8' });
           res.end(htmlContent);
           break;
@@ -353,6 +359,98 @@ function startServer(projectName: string, basePath: string, port: number): void 
           }
           res.writeHead(200, { 'Content-Type': 'application/json; charset=utf-8' });
           res.end(JSON.stringify({ prompts, count: prompts.length }));
+          break;
+        }
+
+        case '/api/main-task': {
+          // 获取单条主任务最新数据（用于主任务弹层行内刷新）
+          const store = createFreshStore(projectName, basePath);
+          const taskId = url.searchParams.get('taskId');
+          if (!taskId) {
+            res.writeHead(400, { 'Content-Type': 'application/json; charset=utf-8' });
+            res.end(JSON.stringify({ error: '缺少 taskId 参数' }));
+            break;
+          }
+
+          const mainTask = store.getMainTask(taskId);
+          if (!mainTask) {
+            res.writeHead(404, { 'Content-Type': 'application/json; charset=utf-8' });
+            res.end(JSON.stringify({ error: `主任务 "${taskId}" 未找到` }));
+            break;
+          }
+
+          const subTasks = store.listSubTasks(taskId).map((s: any) => ({
+            taskId: s.taskId,
+            title: s.title,
+            status: s.status,
+            completedAt: s.completedAt || null,
+          }));
+          const completedSubtasks = subTasks.filter((s: any) => s.status === 'completed').length;
+          const relatedDocs = typeof (store as any).getTaskRelatedDocs === 'function'
+            ? (store as any).getTaskRelatedDocs(taskId).map((d: any) => ({
+              id: d.id,
+              section: d.section,
+              subSection: d.subSection || null,
+              title: d.title,
+            }))
+            : [];
+
+          res.writeHead(200, { 'Content-Type': 'application/json; charset=utf-8' });
+          res.end(JSON.stringify({
+            taskId: mainTask.taskId,
+            title: mainTask.title,
+            status: mainTask.status,
+            totalSubtasks: subTasks.length,
+            completedSubtasks,
+            completedAt: (mainTask as any).completedAt || null,
+            subTasks,
+            relatedDocs,
+          }));
+          break;
+        }
+
+        case '/api/main-task/status': {
+          // 手动更新主任务状态（仅允许 pending -> completed/cancelled）
+          if (req.method !== 'POST') {
+            res.writeHead(405, { 'Content-Type': 'application/json; charset=utf-8' });
+            res.end(JSON.stringify({ error: 'Method Not Allowed. Use POST.' }));
+            break;
+          }
+          const body = await readRequestBody(req);
+          const taskId = body?.taskId;
+          const targetStatus = body?.status;
+          if (!taskId || !targetStatus) {
+            res.writeHead(400, { 'Content-Type': 'application/json; charset=utf-8' });
+            res.end(JSON.stringify({ error: '缺少 taskId 或 status 参数' }));
+            break;
+          }
+          if (targetStatus !== 'completed' && targetStatus !== 'cancelled') {
+            res.writeHead(400, { 'Content-Type': 'application/json; charset=utf-8' });
+            res.end(JSON.stringify({ error: 'status 仅支持 completed 或 cancelled' }));
+            break;
+          }
+
+          const store = createFreshStore(projectName, basePath);
+          const mainTask = store.getMainTask(taskId);
+          if (!mainTask) {
+            res.writeHead(404, { 'Content-Type': 'application/json; charset=utf-8' });
+            res.end(JSON.stringify({ error: `主任务 "${taskId}" 未找到` }));
+            break;
+          }
+          if (mainTask.status !== 'pending') {
+            res.writeHead(409, { 'Content-Type': 'application/json; charset=utf-8' });
+            res.end(JSON.stringify({ error: `仅待开始(pending)任务可手动标记，当前状态为 ${mainTask.status}` }));
+            break;
+          }
+
+          store.updateMainTaskStatus(taskId, targetStatus);
+          const updated = store.getMainTask(taskId);
+          res.writeHead(200, { 'Content-Type': 'application/json; charset=utf-8' });
+          res.end(JSON.stringify({
+            success: true,
+            taskId,
+            status: (updated as any)?.status || targetStatus,
+          }));
           break;
         }
 
@@ -626,74 +724,7 @@ function startServer(projectName: string, basePath: string, port: number): void 
           break;
         }
 
-        case '/api/memories/graph': {
-          // 导出仅记忆相关的图数据（用于记忆页面 3D 可视化）
-          const memGraphStore = createFreshStore(projectName, basePath);
-          if (!memGraphStore.exportGraph) {
-            res.writeHead(400, { 'Content-Type': 'application/json; charset=utf-8' });
-            res.end(JSON.stringify({ error: 'exportGraph not supported (requires graph engine)' }));
-            break;
-          }
-          try {
-            // 导出完整图（含记忆），然后过滤出记忆相关节点和边
-            const fullGraph = memGraphStore.exportGraph({
-              includeDocuments: true,
-              includeModules: true,
-              includeNodeDegree: false,
-              enableBackendDegreeFallback: false,
-              includePrompts: false,
-            });
-            if (!fullGraph) {
-              res.writeHead(500, { 'Content-Type': 'application/json; charset=utf-8' });
-              res.end(JSON.stringify({ error: 'exportGraph returned null' }));
-              break;
-            }
-            // 收集记忆节点 ID
-            const memoryNodeIds = new Set<string>();
-            const memoryNodes: any[] = [];
-            const contextNodes: any[] = [];
-            const contextNodeIds = new Set<string>();
-
-            for (const node of fullGraph.nodes) {
-              if (node.type === 'memory') {
-                memoryNodeIds.add(node.id);
-                memoryNodes.push(node);
-              }
-            }
-
-            // 收集与记忆相关的边和上下文节点（任务、文档、模块）
-            const memEdges: any[] = [];
-            for (const edge of fullGraph.edges) {
-              const fromIsMem = memoryNodeIds.has(edge.from);
-              const toIsMem = memoryNodeIds.has(edge.to);
-              if (fromIsMem || toIsMem) {
-                memEdges.push(edge);
-                // 添加非记忆端的上下文节点
-                const otherId = fromIsMem ? edge.to : edge.from;
-                if (!memoryNodeIds.has(otherId) && !contextNodeIds.has(otherId)) {
-                  contextNodeIds.add(otherId);
-                  const ctxNode = fullGraph.nodes.find((n: any) => n.id === otherId);
-                  if (ctxNode) contextNodes.push(ctxNode);
-                }
-              }
-            }
-
-            res.writeHead(200, { 'Content-Type': 'application/json; charset=utf-8' });
-            res.end(JSON.stringify({
-              nodes: [...memoryNodes, ...contextNodes],
-              edges: memEdges,
-              stats: {
-                memoryCount: memoryNodes.length,
-                contextCount: contextNodes.length,
-                edgeCount: memEdges.length,
-              },
-            }));
-          } catch (e: any) {
-            res.writeHead(500, { 'Content-Type': 'application/json; charset=utf-8' });
-            res.end(JSON.stringify({ error: e.message || String(e) }));
-          }
-          break;
-        }
+        // [Phase-77: /api/memories/graph route removed — memory page now list-only]
 
         case '/api/docs': {
           // 列出所有文档片段（不含内容，用于文档浏览页面左侧列表）
@@ -1512,9 +1543,19 @@ function startServer(projectName: string, basePath: string, port: number): void 
               anchorOverview: batchSaveBody.anchorOverview || undefined,
               changeType: batchSaveBody.changeType || undefined,
             });
+            // Phase-78B: shutdown 确保 HNSW 向量索引持久化到磁盘
+            const batchGraph = (batchSaveStore as any).graph;
+            if (batchGraph && typeof batchGraph.shutdown === 'function') {
+              batchGraph.shutdown();
+            }
             res.writeHead(200, { 'Content-Type': 'application/json; charset=utf-8' });
             res.end(JSON.stringify({ status: 'saved', memory: saved }));
           } catch (e: any) {
+            // 即使出错也尝试 shutdown
+            try {
+              const errGraph = (batchSaveStore as any).graph;
+              if (errGraph && typeof errGraph.shutdown === 'function') errGraph.shutdown();
+            } catch { /* ignore */ }
             res.writeHead(500, { 'Content-Type': 'application/json; charset=utf-8' });
             res.end(JSON.stringify({ error: e.message || String(e) }));
           }
@@ -1522,7 +1563,7 @@ function startServer(projectName: string, basePath: string, port: number): void 
         }
 
         case '/api/batch/verify': {
-          // Phase-69: 批量导入完整性检测端点
+          // Phase-69/78: 记忆完整性检测端点（支持 sourceIds / memoryIds / checkAll）
           if (req.method !== 'POST') {
             res.writeHead(405, { 'Content-Type': 'application/json; charset=utf-8' });
             res.end(JSON.stringify({ error: 'Method Not Allowed. Use POST.' }));
@@ -1531,10 +1572,11 @@ function startServer(projectName: string, basePath: string, port: number): void 
           const verifyBody = await readRequestBody(req);
           const verifySourceIds: string[] = verifyBody.sourceIds || [];
           const verifyMemoryIds: string[] = verifyBody.memoryIds || [];
+          const verifyAll: boolean = verifyBody.checkAll === true;  // Phase-78: 全量检测模式
 
-          if (verifySourceIds.length === 0 && verifyMemoryIds.length === 0) {
+          if (verifySourceIds.length === 0 && verifyMemoryIds.length === 0 && !verifyAll) {
             res.writeHead(400, { 'Content-Type': 'application/json; charset=utf-8' });
-            res.end(JSON.stringify({ error: 'Missing required: sourceIds or memoryIds' }));
+            res.end(JSON.stringify({ error: 'Missing required: sourceIds, memoryIds, or checkAll=true' }));
             break;
           }
 
@@ -1549,6 +1591,50 @@ function startServer(projectName: string, basePath: string, port: number): void 
             // 获取所有记忆
             const allMemories: any[] = (verifyStore as any).listMemories({});
             const g = (verifyStore as any).graph;
+            const synapse = (verifyStore as any).synapse;
+
+            // Phase-78C: 诊断信息收集
+            const vectorCount = (g && typeof g.vectorCount === 'function') ? g.vectorCount() : -1;
+            const vectorDim = (g && typeof g.vectorDimension === 'function') ? g.vectorDimension() : null;
+            const semanticSearchReady = !!(verifyStore as any).semanticSearchReady;
+            const synapseAvailable = !!(synapse && typeof synapse.embed === 'function');
+            const vectorSearchEnabled = !!(g && typeof g.isVectorSearchEnabled === 'function' && g.isVectorSearchEnabled());
+
+            // Phase-78C: 预构建向量索引中已有向量的 entity ID 集合
+            // 修复：probe search 不需要 synapse（probe 向量是手动创建的，不依赖 Ollama）
+            // 只需要 searchEntitiesByVector 可用 + vectorSearch 已启用即可
+            let embeddingCheckMode: 'search' | 'unavailable' = 'unavailable';
+            const indexedEntityIds = new Set<string>();
+
+            if (g && typeof g.searchEntitiesByVector === 'function' && vectorSearchEnabled) {
+              try {
+                if (vectorDim && vectorDim > 0 && vectorCount > 0) {
+                  // 用多个 probe 向量提高覆盖率（HNSW 是近似搜索，单 probe 可能遗漏）
+                  const probeVectors: number[][] = [];
+                  // Probe 1: [1, 0, 0, ...]
+                  const p1 = new Array(vectorDim).fill(0); p1[0] = 1.0;
+                  probeVectors.push(p1);
+                  // Probe 2: [0, 0, ..., 1]
+                  const p2 = new Array(vectorDim).fill(0); p2[vectorDim - 1] = 1.0;
+                  probeVectors.push(p2);
+                  // Probe 3: 均匀向量 [1/√d, 1/√d, ...]（与所有向量都有一定相似度）
+                  const val = 1.0 / Math.sqrt(vectorDim);
+                  const p3 = new Array(vectorDim).fill(val);
+                  probeVectors.push(p3);
+
+                  const fetchK = Math.max(vectorCount * 2, 2000); // 冗余 k 确保覆盖
+                  for (const probe of probeVectors) {
+                    const hits = g.searchEntitiesByVector(probe, fetchK);
+                    for (const hit of hits) {
+                      if (hit.entityId) indexedEntityIds.add(hit.entityId);
+                    }
+                  }
+                  embeddingCheckMode = 'search';
+                }
+              } catch {
+                // 向量搜索不可用
+              }
+            }
 
             // 按 sourceId 和 id 建立索引
             const bySourceId = new Map<string, any>();
@@ -1558,49 +1644,34 @@ function startServer(projectName: string, basePath: string, port: number): void 
               byId.set(mem.id, mem);
             }
 
-            // 检测结果
-            const results: any[] = [];
-            let totalChecked = 0;
-            let totalPassed = 0;
-            let totalWarnings = 0;
-            let totalErrors = 0;
+            // Phase-78C: 分类警告计数
+            let warnEmbedding = 0;
+            let warnAnchor = 0;
+            let warnImportance = 0;
+            let warnContentShort = 0;
+            let errContent = 0;
+            let errMemoryType = 0;
 
-            // 检查 sourceIds
-            for (const sourceId of verifySourceIds) {
-              totalChecked++;
-              const mem = bySourceId.get(sourceId);
+            // Phase-78/78C: 通用完整性检测函数
+            const validTypes = ['decision', 'pattern', 'bugfix', 'insight', 'preference', 'summary'];
+            function verifyOneMemory(mem: any): any {
               const issues: string[] = [];
               const warnings: string[] = [];
-
-              if (!mem) {
-                issues.push('记忆不存在（未找到 sourceId 对应的记忆实体）');
-                results.push({ sourceId, status: 'error', issues, warnings });
-                totalErrors++;
-                continue;
-              }
 
               // 检测 1: 内容非空
               if (!mem.content || mem.content.trim().length === 0) {
                 issues.push('content 字段为空');
+                errContent++;
               }
 
-              // 检测 2: Embedding 向量（通过 searchEntitiesByVector 自检）
+              // 检测 2: Embedding 向量
               let hasEmbedding = false;
-              if (g && typeof g.searchEntitiesByVector === 'function') {
-                try {
-                  // 使用 synapse embed 生成查询向量，搜索自身
-                  const synapse = (verifyStore as any).synapse;
-                  if (synapse && typeof synapse.embed === 'function') {
-                    const queryVec = synapse.embed(mem.content.slice(0, 200));
-                    const hits = g.searchEntitiesByVector(queryVec, 5, 'MEMORY');
-                    hasEmbedding = hits.some((h: any) => h.entityId === mem.id);
-                  }
-                } catch {
-                  // embed 或搜索失败
-                }
+              if (embeddingCheckMode === 'search') {
+                hasEmbedding = indexedEntityIds.has(mem.id);
               }
-              if (!hasEmbedding) {
-                warnings.push('未检测到 Embedding 向量（语义搜索可能无法找到此记忆）');
+              if (embeddingCheckMode === 'search' && !hasEmbedding) {
+                warnings.push('未检测到 Embedding 向量');
+                warnEmbedding++;
               }
 
               // 检测 3: Anchor 关联
@@ -1609,38 +1680,35 @@ function startServer(projectName: string, basePath: string, port: number): void 
                 try {
                   const anchorRels = g.outgoingByType(mem.id, 'anchored_by');
                   hasAnchor = anchorRels && anchorRels.length > 0;
-                } catch {
-                  // 关系查询失败
-                }
+                } catch { /* */ }
               }
               if (!hasAnchor) {
                 warnings.push('无 Anchor 触点关联');
+                warnAnchor++;
               }
 
               // 检测 4: memoryType 合法性
-              const validTypes = ['decision', 'pattern', 'bugfix', 'insight', 'preference', 'summary'];
               if (!validTypes.includes(mem.memoryType)) {
                 issues.push('memoryType 非法: ' + mem.memoryType);
+                errMemoryType++;
               }
 
               // 检测 5: importance 范围
               if (typeof mem.importance !== 'number' || mem.importance < 0 || mem.importance > 1) {
                 warnings.push('importance 值异常: ' + mem.importance);
+                warnImportance++;
               }
 
-              // 检测 6: 内容长度警告（过短可能质量不高）
+              // 检测 6: 内容长度警告
               if (mem.content && mem.content.length < 20) {
-                warnings.push('内容过短（' + mem.content.length + ' 字符），可能质量不足');
+                warnings.push('内容过短（' + mem.content.length + ' 字符）');
+                warnContentShort++;
               }
 
               const status = issues.length > 0 ? 'error' : (warnings.length > 0 ? 'warning' : 'pass');
-              if (status === 'pass') totalPassed++;
-              else if (status === 'warning') totalWarnings++;
-              else totalErrors++;
-
-              results.push({
-                sourceId,
+              return {
                 memoryId: mem.id,
+                sourceId: mem.sourceId || undefined,
                 memoryType: mem.memoryType,
                 contentLength: mem.content?.length || 0,
                 hasEmbedding,
@@ -1649,34 +1717,68 @@ function startServer(projectName: string, basePath: string, port: number): void 
                 status,
                 issues,
                 warnings,
-              });
+              };
             }
 
-            // 检查 memoryIds（直接按 ID 查）
-            for (const memId of verifyMemoryIds) {
-              if (verifySourceIds.length > 0) break; // 如果已按 sourceId 查过，跳过
-              totalChecked++;
-              const mem = byId.get(memId);
-              const issues: string[] = [];
-              const warnings: string[] = [];
+            // 检测结果
+            const results: any[] = [];
+            let totalChecked = 0;
+            let totalPassed = 0;
+            let totalWarnings = 0;
+            let totalErrors = 0;
 
-              if (!mem) {
-                issues.push('记忆不存在（ID 未找到）');
-                results.push({ memoryId: memId, status: 'error', issues, warnings });
-                totalErrors++;
-                continue;
+            // Phase-78: 全量检测模式
+            if (verifyAll) {
+              for (const mem of allMemories) {
+                totalChecked++;
+                const result = verifyOneMemory(mem);
+                if (result.status === 'pass') totalPassed++;
+                else if (result.status === 'warning') totalWarnings++;
+                else totalErrors++;
+                results.push(result);
               }
-
-              if (!mem.content || mem.content.trim().length === 0) {
-                issues.push('content 字段为空');
-              }
-
-              const status = issues.length > 0 ? 'error' : 'pass';
-              if (status === 'pass') totalPassed++;
-              else totalErrors++;
-
-              results.push({ memoryId: memId, status, issues, warnings });
             }
+
+            // 检查 sourceIds
+            if (!verifyAll) {
+              for (const sourceId of verifySourceIds) {
+                totalChecked++;
+                const mem = bySourceId.get(sourceId);
+                if (!mem) {
+                  results.push({ sourceId, status: 'error', issues: ['记忆不存在（未找到 sourceId）'], warnings: [] });
+                  totalErrors++;
+                  continue;
+                }
+                const result = verifyOneMemory(mem);
+                result.sourceId = sourceId;
+                if (result.status === 'pass') totalPassed++;
+                else if (result.status === 'warning') totalWarnings++;
+                else totalErrors++;
+                results.push(result);
+              }
+            }
+
+            // Phase-78: memoryIds 分支
+            if (!verifyAll && verifySourceIds.length === 0) {
+              for (const memId of verifyMemoryIds) {
+                totalChecked++;
+                const mem = byId.get(memId);
+                if (!mem) {
+                  results.push({ memoryId: memId, status: 'error', issues: ['记忆不存在（ID 未找到）'], warnings: [] });
+                  totalErrors++;
+                  continue;
+                }
+                const result = verifyOneMemory(mem);
+                if (result.status === 'pass') totalPassed++;
+                else if (result.status === 'warning') totalWarnings++;
+                else totalErrors++;
+                results.push(result);
+              }
+            }
+
+            // Phase-78C: 关闭 verify store 释放资源（不要 shutdown，只读操作不需要持久化）
+            // 注意：shutdown 会触发 HNSW 持久化写入，verify 是只读操作不应触发写入
+            // 只需让 GC 回收即可
 
             res.writeHead(200, { 'Content-Type': 'application/json; charset=utf-8' });
             res.end(JSON.stringify({
@@ -1686,8 +1788,205 @@ function startServer(projectName: string, basePath: string, port: number): void 
                 passed: totalPassed,
                 warnings: totalWarnings,
                 errors: totalErrors,
+                vectorCount,
+                embeddingCheckMode,
+                indexedMemoryCount: embeddingCheckMode === 'search'
+                  ? [...indexedEntityIds].filter(id => byId.has(id)).length
+                  : undefined,
+                // Phase-78C: 分类警告计数 — 让用户明确看到每种问题的数量
+                warningBreakdown: {
+                  embedding: warnEmbedding,
+                  anchor: warnAnchor,
+                  importance: warnImportance,
+                  contentShort: warnContentShort,
+                },
+                errorBreakdown: {
+                  content: errContent,
+                  memoryType: errMemoryType,
+                },
+              },
+              // Phase-78C: 诊断信息 — 帮助定位修复失败的原因
+              diagnostics: {
+                vectorSearchEnabled,
+                semanticSearchReady,
+                synapseAvailable,
+                vectorCount,
+                vectorDimension: vectorDim,
+                probeHits: indexedEntityIds.size,
+                totalMemories: allMemories.length,
               },
               results,
+            }));
+          } catch (e: any) {
+            res.writeHead(500, { 'Content-Type': 'application/json; charset=utf-8' });
+            res.end(JSON.stringify({ error: e.message || String(e) }));
+          }
+          break;
+        }
+
+        // ======== Phase-78B: 批量修复记忆 ========
+        case '/api/batch/repair': {
+          if (req.method !== 'POST') {
+            res.writeHead(405, { 'Content-Type': 'application/json; charset=utf-8' });
+            res.end(JSON.stringify({ error: 'Method Not Allowed. Use POST.' }));
+            break;
+          }
+          const repairBody = await readRequestBody(req);
+          const fixMemoryTypes: boolean = repairBody.fixMemoryTypes !== false;  // 默认修复
+          const rebuildEmbeddings: boolean = repairBody.rebuildEmbeddings !== false;  // 默认修复
+          const repairMemoryIds: string[] | undefined = repairBody.memoryIds;  // 可选：指定修复哪些记忆
+
+          const repairStore = createFreshStore(projectName, basePath);
+          if (typeof (repairStore as any).listMemories !== 'function') {
+            res.writeHead(400, { 'Content-Type': 'application/json; charset=utf-8' });
+            res.end(JSON.stringify({ error: 'listMemories not supported (requires graph engine)' }));
+            break;
+          }
+
+          try {
+            const allMems: any[] = (repairStore as any).listMemories({});
+            const rg = (repairStore as any).graph;
+            const rSynapse = (repairStore as any).synapse;
+
+            // Phase-78C: 详细诊断信息
+            const rSemanticReady = !!(repairStore as any).semanticSearchReady;
+            const rSynapseAvail = !!(rSynapse && typeof rSynapse.embed === 'function');
+            const rVectorEnabled = !!(rg && typeof rg.isVectorSearchEnabled === 'function' && rg.isVectorSearchEnabled());
+            const rVectorDim = (rg && typeof rg.vectorDimension === 'function') ? rg.vectorDimension() : null;
+            const vectorCountBefore = (rg && typeof rg.vectorCount === 'function') ? rg.vectorCount() : -1;
+
+            // 非法 memoryType → 合法 memoryType 映射表
+            const validMemTypes = ['decision', 'pattern', 'bugfix', 'insight', 'preference', 'summary'];
+            const typeMapping: Record<string, string> = {
+              'feature': 'insight',
+              'architecture': 'decision',
+              'api': 'pattern',
+              'module': 'summary',
+              'concept': 'insight',
+              'library': 'insight',
+              'protocol': 'pattern',
+              'idea': 'insight',
+              'todo': 'insight',
+              'note': 'insight',
+              'reference': 'insight',
+              'example': 'pattern',
+            };
+
+            // 筛选待修复记忆
+            let targetMems = allMems;
+            if (repairMemoryIds && repairMemoryIds.length > 0) {
+              const idSet = new Set(repairMemoryIds);
+              targetMems = allMems.filter(m => idSet.has(m.id));
+            }
+
+            let fixedTypeCount = 0;
+            let rebuiltEmbeddingCount = 0;
+            let failedEmbeddingCount = 0;
+            let skippedEmbeddingCount = 0;
+            const repairResults: any[] = [];
+            let firstEmbedError: string | null = null;
+
+            // Phase-78C: 如果 synapse 不可用但请求了重建 embedding，提前告知
+            if (rebuildEmbeddings && !rSynapseAvail) {
+              skippedEmbeddingCount = targetMems.length;
+              firstEmbedError = 'VibeSynapse 不可用（semanticSearchReady=' + rSemanticReady +
+                ', synapseAvailable=' + rSynapseAvail +
+                '）。请确保 Ollama 正在运行且 qwen3-embedding:8b 模型已加载。';
+            }
+
+            for (const mem of targetMems) {
+              const fixes: string[] = [];
+              let newType: string | null = null;
+
+              // --- 修复 1: memoryType ---
+              if (fixMemoryTypes && !validMemTypes.includes(mem.memoryType)) {
+                newType = typeMapping[mem.memoryType] || 'insight';
+                const entity = rg.getEntity(mem.id);
+                if (entity) {
+                  rg.updateEntity(mem.id, {
+                    properties: {
+                      ...entity.properties,
+                      memoryType: newType,
+                      updatedAt: Date.now(),
+                    },
+                  });
+                  fixes.push('memoryType: ' + mem.memoryType + ' → ' + newType);
+                  fixedTypeCount++;
+                }
+              }
+
+              // --- 修复 2: Embedding 向量 ---
+              if (rebuildEmbeddings && rSynapseAvail && rg) {
+                const content = mem.content || '';
+                if (content.trim().length > 0) {
+                  try {
+                    // 先清除旧向量（indexEntity 是幂等的，已有时不更新）
+                    if (typeof rg.removeEntityVector === 'function') {
+                      try { rg.removeEntityVector(mem.id); } catch { /* 可能没有旧向量 */ }
+                    }
+                    const embedding = rSynapse.embed(content);
+                    rg.indexEntity(mem.id, embedding);
+                    fixes.push('Embedding 已重建 (dim=' + embedding.length + ')');
+                    rebuiltEmbeddingCount++;
+                  } catch (embErr: any) {
+                    const errMsg = embErr.message || String(embErr);
+                    fixes.push('Embedding 重建失败: ' + errMsg);
+                    failedEmbeddingCount++;
+                    if (!firstEmbedError) firstEmbedError = errMsg;
+                  }
+                }
+              }
+
+              if (fixes.length > 0) {
+                repairResults.push({
+                  memoryId: mem.id,
+                  memoryType: newType || mem.memoryType,
+                  fixes,
+                });
+              }
+            }
+
+            // Phase-78C: 持久化 — flush (WAL) + shutdown (HNSW → vector.wal)
+            const vectorCountAfterRepair = (rg && typeof rg.vectorCount === 'function') ? rg.vectorCount() : -1;
+            if (rg) {
+              if (typeof rg.flush === 'function') rg.flush();
+              if (typeof rg.shutdown === 'function') rg.shutdown();
+            }
+
+            // Phase-78C: 获取修复后向量计数（新 store 恢复后验证持久化是否成功）
+            let vectorCountAfterReload = -1;
+            try {
+              const checkStore = createFreshStore(projectName, basePath);
+              const cg = (checkStore as any).graph;
+              if (cg && typeof cg.vectorCount === 'function') {
+                vectorCountAfterReload = cg.vectorCount();
+              }
+              // 不 shutdown，让 GC 回收
+            } catch { /* 检查失败不影响结果 */ }
+
+            res.writeHead(200, { 'Content-Type': 'application/json; charset=utf-8' });
+            res.end(JSON.stringify({
+              status: 'repaired',
+              summary: {
+                totalProcessed: targetMems.length,
+                fixedTypes: fixedTypeCount,
+                rebuiltEmbeddings: rebuiltEmbeddingCount,
+                failedEmbeddings: failedEmbeddingCount,
+                skippedEmbeddings: skippedEmbeddingCount,
+                totalRepaired: repairResults.length,
+                vectorCountBefore,
+                vectorCountAfterRepair,
+                vectorCountAfterReload,
+              },
+              // Phase-78C: 修复诊断 — 帮助理解修复是否真正生效
+              diagnostics: {
+                semanticSearchReady: rSemanticReady,
+                synapseAvailable: rSynapseAvail,
+                vectorSearchEnabled: rVectorEnabled,
+                vectorDimension: rVectorDim,
+                firstEmbedError,
+              },
+              results: repairResults,
             }));
           } catch (e: any) {
             res.writeHead(500, { 'Content-Type': 'application/json; charset=utf-8' });

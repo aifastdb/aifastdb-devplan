@@ -139,6 +139,31 @@ export interface DevPlanConfig {
   enableTextSearch?: boolean;
 
   /**
+   * Phase-52: Recall/BM25 调优配置
+   *
+   * 将 RRF 融合参数和专有名词 BM25 加权策略外部化到 config.json。
+   */
+  recallSearchTuning?: {
+    rrfK?: number;
+    vectorWeight?: number;
+    bm25Weight?: number;
+    graphWeight?: number;
+    bm25TermBoost?: number;
+    bm25DomainTerms?: string[];
+    bm25UserDictPath?: string;
+  };
+
+  /**
+   * Phase-52/T52.5: 启用文档 TreeIndex 补充检索（可选）
+   */
+  enableTreeIndexRetrieval?: boolean;
+
+  /**
+   * TreeIndex 候选节点上限（默认 10）
+   */
+  treeIndexMaxNodes?: number;
+
+  /**
    * Phase-54: 是否启用 LLM Reranking（搜索结果精排）
    *
    * 启用后，搜索结果会经过 LLM 语义重排。
@@ -477,6 +502,13 @@ export function createDevPlan(
   const enableTextSearch = projectConfig?.enableTextSearch
     ?? workspaceConfig?.enableTextSearch
     ?? false;
+  const recallSearchTuning = projectConfig?.recallSearchTuning
+    ?? workspaceConfig?.recallSearchTuning;
+  const enableTreeIndexRetrieval = projectConfig?.enableTreeIndexRetrieval
+    ?? workspaceConfig?.enableTreeIndexRetrieval
+    ?? false;
+  const treeIndexMaxNodes = projectConfig?.treeIndexMaxNodes
+    ?? workspaceConfig?.treeIndexMaxNodes;
 
   // Phase-54: 读取 LLM Reranking 配置
   const enableReranking = projectConfig?.enableReranking
@@ -506,6 +538,9 @@ export function createDevPlan(
       perceptionPreset,
       perceptionConfig,
       enableTextSearch,
+      recallSearchTuning,
+      enableTreeIndexRetrieval,
+      treeIndexMaxNodes,
       enableReranking,
       rerankModel,
       rerankBaseUrl,

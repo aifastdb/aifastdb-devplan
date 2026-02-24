@@ -1491,7 +1491,7 @@ function renderMemoryList(data) {
     var importance = mem.importance || 0.5;
     var pct = Math.round(importance * 100);
 
-    h += '<div class="memory-card type-' + type + '">';
+    h += '<div class="memory-card type-' + type + '" id="memCard_' + mem.id + '">';
 
     // header
     h += '<div class="memory-card-header">';
@@ -1508,12 +1508,14 @@ function renderMemoryList(data) {
     // content
     h += '<div class="memory-card-content">' + escHtml(mem.content || '') + '</div>';
 
-    // footer: tags + meta
+    // footer: tags + meta + Phase-78 verify button
     h += '<div class="memory-card-footer">';
     var tags = mem.tags || [];
     for (var t = 0; t < tags.length; t++) {
       h += '<span class="memory-tag">#' + escHtml(tags[t]) + '</span>';
     }
+    // Phase-78: 逐条完整性检测按钮
+    h += '<button class="mem-verify-single-btn" onclick="checkSingleMemoryIntegrity(\\x27' + mem.id + '\\x27)" title="检测此记忆的完整性">🔍 检测</button>';
     h += '<span class="memory-meta">';
     if (mem.hitCount > 0) {
       h += '<span title="被召回次数">🔍 ' + mem.hitCount + '</span>';
@@ -1523,6 +1525,9 @@ function renderMemoryList(data) {
     }
     h += '</span>';
     h += '</div>';
+
+    // Phase-78: 内联检测结果占位
+    h += '<div id="memVerify_' + mem.id + '"></div>';
 
     h += '</div>';
   }
@@ -1542,423 +1547,8 @@ function formatMemoryTime(ts) {
   } catch(e) { return ''; }
 }
 
-// ========== Memory View Switch (List / 3D Graph) ==========
-var memoryViewMode = 'list';
-var memoryGraph3dInstance = null;
-var memoryGraphLoaded = false;
-var memoryGraphData = null;
-
-function switchMemoryView(mode) {
-  if (mode === memoryViewMode) return;
-  memoryViewMode = mode;
-
-  // Toggle button active state
-  var btns = document.querySelectorAll('.memory-view-btn');
-  for (var i = 0; i < btns.length; i++) {
-    btns[i].classList.remove('active');
-    if (btns[i].getAttribute('data-view') === mode) btns[i].classList.add('active');
-  }
-
-  var listEl = document.getElementById('memoryList');
-  var filtersEl = document.getElementById('memoryFilters');
-  var graphEl = document.getElementById('memoryGraphContainer');
-  var genBtn = document.querySelector('.memory-generate-btn');
-
-  if (mode === 'graph') {
-    if (listEl) listEl.style.display = 'none';
-    if (filtersEl) filtersEl.style.display = 'none';
-    // Phase-71: 使用 flex 而非 block，确保容器正确参与 flex 布局计算高度
-    if (graphEl) { graphEl.style.display = 'flex'; graphEl.style.flexDirection = 'column'; }
-    if (genBtn) genBtn.style.display = 'none';
-    loadMemoryGraph();
-  } else {
-    if (listEl) listEl.style.display = 'flex';
-    if (filtersEl) filtersEl.style.display = 'flex';
-    if (graphEl) graphEl.style.display = 'none';
-    if (genBtn) genBtn.style.display = 'inline-flex';
-    // Destroy 3D graph to free memory
-    if (memoryGraph3dInstance) {
-      try { memoryGraph3dInstance._destructor && memoryGraph3dInstance._destructor(); } catch(e) {}
-      memoryGraph3dInstance = null;
-    }
-    // Phase-71: 移除 resize handler
-    if (window._mgResizeHandler) {
-      window.removeEventListener('resize', window._mgResizeHandler);
-      window._mgResizeHandler = null;
-    }
-  }
-}
-
-function loadMemoryGraph() {
-  var loadingEl = document.getElementById('memoryGraphLoading');
-  var graph3dEl = document.getElementById('memoryGraph3D');
-  var statsEl = document.getElementById('memoryGraphStats');
-
-  if (loadingEl) loadingEl.style.display = 'block';
-  if (graph3dEl) graph3dEl.innerHTML = '';
-
-  fetch('/api/memories/graph').then(function(r) { return r.json(); }).then(function(data) {
-    if (data.error) {
-      if (loadingEl) loadingEl.innerHTML = '<div style="color:#f87171;">加载失败: ' + data.error + '</div>';
-      return;
-    }
-    memoryGraphData = data;
-    memoryGraphLoaded = true;
-
-    if (statsEl) {
-      var s = data.stats || {};
-      statsEl.innerHTML = '🧠 ' + (s.memoryCount || 0) + ' 记忆 · ' + (s.contextCount || 0) + ' 上下文 · ' + (s.edgeCount || 0) + ' 关系';
-    }
-
-    renderMemoryGraph3D(data);
-  }).catch(function(err) {
-    if (loadingEl) loadingEl.innerHTML = '<div style="color:#f87171;">加载失败: ' + (err.message || err) + '<br><span style="cursor:pointer;color:#818cf8;text-decoration:underline;" onclick="loadMemoryGraph();">重试</span></div>';
-  });
-}
-
-function renderMemoryGraph3D(data) {
-  var container = document.getElementById('memoryGraph3D');
-  var loadingEl = document.getElementById('memoryGraphLoading');
-  if (!container) return;
-
-  // Check if ForceGraph3D is available
-  if (typeof ForceGraph3D === 'undefined') {
-    // Fallback message
-    if (loadingEl) loadingEl.innerHTML = '<div style="color:#f59e0b;">3D 引擎未加载（需要 Three.js + 3D Force Graph）<br><span style="font-size:11px;color:#6b7280;">请在设置中切换到 3D 引擎后刷新页面</span></div>';
-    return;
-  }
-
-  if (loadingEl) loadingEl.style.display = 'none';
-
-  // Phase-71: 确保容器有正确的尺寸（父容器可能刚从 display:none 切换为 block）
-  var parentContainer = document.getElementById('memoryGraphContainer');
-  if (parentContainer) {
-    // 强制容器参与 flex 布局计算高度
-    parentContainer.style.display = 'flex';
-    parentContainer.style.flexDirection = 'column';
-  }
-  // 确保 memoryGraph3D 容器填满父容器
-  container.style.flex = '1';
-  container.style.minHeight = '0';
-
-  var rect = container.getBoundingClientRect();
-  // 防御: 如果高度为 0 或过小，使用父容器尺寸或 min-height 兜底
-  var graphWidth = rect.width || (parentContainer ? parentContainer.getBoundingClientRect().width : 800);
-  var graphHeight = rect.height || (parentContainer ? parentContainer.getBoundingClientRect().height : 400);
-  if (graphHeight < 100) graphHeight = Math.max(400, window.innerHeight - 200);
-  if (graphWidth < 100) graphWidth = Math.max(600, window.innerWidth - 200);
-
-  // Node color map
-  var NODE_COLORS = {
-    'memory': '#c026d3',
-    'main-task': '#3b82f6',
-    'sub-task': '#818cf8',
-    'doc': '#60a5fa',
-    'module': '#ff8533',
-    'project': '#6366f1'
-  };
-
-  // Edge color map
-  var EDGE_COLORS = {
-    'memory_relates': '#d946ef',
-    'memory_from_task': '#60a5fa',
-    'memory_from_doc': '#38bdf8',
-    'module_memory': '#fb923c',
-    'has_memory': '#a78bfa',
-    'memory_supersedes': '#f87171'
-  };
-
-  // Phase-71: 根据节点数量自适应参数
-  var nodeCount = data.nodes.length;
-  var isLargeGraph = nodeCount > 200;
-  var isHugeGraph = nodeCount > 500;
-
-  // Build nodes
-  var nodes3d = [];
-  for (var i = 0; i < data.nodes.length; i++) {
-    var n = data.nodes[i];
-    var t = n.type || 'memory';
-    var isMem = (t === 'memory');
-    var memType = (n.properties && n.properties.memoryType) || '';
-    var label = n.label || '';
-    // Memory type colors
-    var memTypeColors = {
-      'decision': '#6366f1', 'bugfix': '#ef4444', 'pattern': '#06b6d4',
-      'insight': '#f59e0b', 'preference': '#8b5cf6', 'summary': '#10b981'
-    };
-    var color = isMem ? (memTypeColors[memType] || NODE_COLORS.memory) : (NODE_COLORS[t] || '#64748b');
-    var val = isMem ? (3 + ((n.properties && n.properties.importance) || 0.5) * 6) : (t === 'project' ? 12 : 5);
-
-    nodes3d.push({
-      id: n.id,
-      label: label,
-      _type: t,
-      _props: n.properties || {},
-      _val: val,
-      _color: color,
-      _isMem: isMem
-    });
-  }
-
-  // Build links
-  var links3d = [];
-  for (var i = 0; i < data.edges.length; i++) {
-    var e = data.edges[i];
-    var edgeLabel = e.label || '';
-    var edgeColor = EDGE_COLORS[edgeLabel] || '#374151';
-    var w = (edgeLabel === 'memory_relates') ? 2 : 1;
-    links3d.push({
-      source: e.from,
-      target: e.to,
-      _label: edgeLabel,
-      _color: edgeColor,
-      _width: w
-    });
-  }
-
-  // Build adjacency for highlighting
-  var _mgNeighbors = {};
-  var _mgLinks = {};
-  for (var i = 0; i < links3d.length; i++) {
-    var l = links3d[i];
-    var sId = typeof l.source === 'object' ? l.source.id : l.source;
-    var tId = typeof l.target === 'object' ? l.target.id : l.target;
-    if (!_mgNeighbors[sId]) _mgNeighbors[sId] = new Set();
-    if (!_mgNeighbors[tId]) _mgNeighbors[tId] = new Set();
-    _mgNeighbors[sId].add(tId);
-    _mgNeighbors[tId].add(sId);
-    if (!_mgLinks[sId]) _mgLinks[sId] = new Set();
-    if (!_mgLinks[tId]) _mgLinks[tId] = new Set();
-    _mgLinks[sId].add(l);
-    _mgLinks[tId].add(l);
-  }
-
-  var _mgSelectedId = null;
-  var _mgHighlightNodes = new Set();
-  var _mgHighlightLinks = new Set();
-
-  function updateMGHighlight(nodeId) {
-    _mgHighlightLinks.clear();
-    _mgHighlightNodes.clear();
-    _mgSelectedId = nodeId;
-    if (nodeId) {
-      _mgHighlightNodes.add(nodeId);
-      var nb = _mgNeighbors[nodeId];
-      if (nb) nb.forEach(function(nId) { _mgHighlightNodes.add(nId); });
-      var lks = _mgLinks[nodeId];
-      if (lks) lks.forEach(function(link) { _mgHighlightLinks.add(link); });
-    }
-  }
-
-  // Destroy previous instance
-  if (memoryGraph3dInstance) {
-    try { memoryGraph3dInstance._destructor && memoryGraph3dInstance._destructor(); } catch(e) {}
-  }
-
-  // Phase-71: 大数据集降低节点分辨率和几何复杂度
-  var nodeResolution = isHugeGraph ? 8 : (isLargeGraph ? 12 : 16);
-  // Phase-71: 大数据集缩小节点尺寸避免堆叠
-  var sizeFactor = isHugeGraph ? 0.5 : (isLargeGraph ? 0.7 : 1.0);
-
-  var graph3d = ForceGraph3D({ controlType: 'orbit' })(container)
-    .width(graphWidth)
-    .height(graphHeight)
-    .backgroundColor('#0f172a')
-    .showNavInfo(false)
-    .nodeLabel(function(n) {
-      var memType = (n._props || {}).memoryType || '';
-      var content = (n._props || {}).content || n.label || '';
-      var importance = (n._props || {}).importance;
-      var isMem = n._isMem;
-      var typeBadge = '';
-      if (isMem && memType) {
-        var typeIcons = { decision:'🏗️', bugfix:'🐛', pattern:'📐', insight:'💡', preference:'⚙️', summary:'📝' };
-        typeBadge = '<span style="font-size:10px;background:rgba(99,102,241,0.3);padding:1px 6px;border-radius:3px;">' + (typeIcons[memType] || '') + ' ' + memType + '</span>';
-      }
-      var impBar = '';
-      if (isMem && importance != null) {
-        var pct = Math.round(importance * 100);
-        impBar = '<div style="margin-top:4px;"><span style="font-size:9px;color:#6b7280;">重要性: </span><span style="display:inline-block;width:50px;height:3px;background:#374151;border-radius:2px;vertical-align:middle;"><span style="display:block;height:100%;width:' + pct + '%;background:linear-gradient(90deg,#6366f1,#a78bfa);border-radius:2px;"></span></span> <span style="font-size:9px;color:#9ca3af;">' + pct + '%</span></div>';
-      }
-      return '<div style="background:rgba(15,23,42,0.92);color:#e2e8f0;padding:8px 12px;border-radius:8px;font-size:12px;border:1px solid rgba(192,38,211,0.3);backdrop-filter:blur(4px);max-width:320px;">'
-        + '<div style="font-weight:600;margin-bottom:3px;">' + (n.label || n.id) + '</div>'
-        + (typeBadge ? '<div style="margin-bottom:3px;">' + typeBadge + '</div>' : '')
-        + (isMem && content ? '<div style="color:#94a3b8;font-size:11px;line-height:1.4;max-height:80px;overflow:hidden;">' + content + '</div>' : '')
-        + impBar
-        + '<div style="color:#4b5563;font-size:9px;margin-top:3px;">' + (n._type || '') + '</div>'
-        + '</div>';
-    })
-    .nodeColor(function(n) { return n._color; })
-    .nodeVal(function(n) { return n._val; })
-    .nodeOpacity(0.92)
-    .nodeResolution(nodeResolution)
-    .nodeThreeObject(function(n) {
-      if (typeof THREE === 'undefined') return false;
-      var color = n._color;
-      var group = new THREE.Group();
-      var coreMesh;
-      var sf = sizeFactor; // Phase-71: 大数据集缩小
-
-      if (n._isMem) {
-        // Memory nodes: dodecahedron (多面体)
-        var size = (1.5 + (n._val || 5) * 0.3) * sf;
-        var geo = new THREE.DodecahedronGeometry(size);
-        var mat = new THREE.MeshLambertMaterial({ color: color, transparent: true, opacity: 0.92, emissive: color, emissiveIntensity: 0.35 });
-        coreMesh = new THREE.Mesh(geo, mat);
-      } else if (n._type === 'project') {
-        var geo = new THREE.OctahedronGeometry(8 * sf);
-        var mat = new THREE.MeshLambertMaterial({ color: color, transparent: true, opacity: 0.92, emissive: color, emissiveIntensity: 0.4 });
-        coreMesh = new THREE.Mesh(geo, mat);
-      } else if (n._type === 'module') {
-        var msize = 5 * sf;
-        var geo = new THREE.BoxGeometry(msize, msize, msize);
-        var mat = new THREE.MeshLambertMaterial({ color: color, transparent: true, opacity: 0.92, emissive: color, emissiveIntensity: 0.3 });
-        coreMesh = new THREE.Mesh(geo, mat);
-      } else {
-        // Tasks, docs: sphere
-        var radius = (2.5 + (n._val || 5) * 0.15) * sf;
-        var geo = new THREE.SphereGeometry(radius, nodeResolution, nodeResolution);
-        var mat = new THREE.MeshLambertMaterial({ color: color, transparent: true, opacity: 0.85, emissive: color, emissiveIntensity: 0.2 });
-        coreMesh = new THREE.Mesh(geo, mat);
-      }
-      group.add(coreMesh);
-
-      // Glow sprite for memory nodes (大数据集关闭辉光减少 overdraw)
-      if (n._isMem && !isHugeGraph) {
-        var spriteMat = new THREE.SpriteMaterial({
-          map: createGlowTexture_mg(color),
-          transparent: true,
-          opacity: isLargeGraph ? 0.2 : 0.4,
-          depthWrite: false,
-          blending: THREE.AdditiveBlending
-        });
-        var sprite = new THREE.Sprite(spriteMat);
-        var spriteSize = (n._val || 5) * 1.5 * sf;
-        sprite.scale.set(spriteSize, spriteSize, 1);
-        group.add(sprite);
-      }
-
-      return group;
-    })
-    .nodeThreeObjectExtend(false)
-    // Link styles
-    .linkColor(function(l) {
-      if (_mgSelectedId && !_mgHighlightLinks.has(l)) return 'rgba(55,65,81,0.15)';
-      return l._color;
-    })
-    .linkWidth(function(l) {
-      return _mgHighlightLinks.has(l) ? l._width * 2 : l._width;
-    })
-    .linkOpacity(isHugeGraph ? 0.4 : 0.7)
-    .linkDirectionalParticles(function(l) {
-      return _mgHighlightLinks.has(l) ? 3 : 0;
-    })
-    .linkDirectionalParticleWidth(2)
-    .linkDirectionalParticleSpeed(0.006)
-    .linkDirectionalParticleColor(function(l) { return l._color; })
-    // Interactions
-    .onNodeClick(function(node) {
-      if (_mgSelectedId === node.id) {
-        updateMGHighlight(null);
-      } else {
-        updateMGHighlight(node.id);
-      }
-      graph3d.nodeColor(graph3d.nodeColor()); // trigger refresh
-
-      // Show detail in panel if available
-      if (typeof showPanel === 'function') {
-        var panelNode = {
-          id: node.id,
-          label: node.label,
-          _type: node._type,
-          _props: node._props
-        };
-        showPanel(panelNode);
-      }
-    })
-    .onBackgroundClick(function() {
-      updateMGHighlight(null);
-      graph3d.nodeColor(graph3d.nodeColor());
-      if (typeof closePanel === 'function') closePanel();
-    });
-
-  // Phase-71 fix: 先配置力参数，再加载数据（关键！graphData() 会立刻启动力模拟，
-  // 如果在 graphData 之后才设 charge.strength，warmupTicks 全在默认弱力下跑完，节点会堆叠在原点）
-  var chargeStrength = isHugeGraph ? -250 : (isLargeGraph ? -180 : -120);
-  var chargeDistMax = isHugeGraph ? 600 : (isLargeGraph ? 450 : 300);
-  graph3d.d3Force('charge').strength(chargeStrength).distanceMax(chargeDistMax);
-  graph3d.d3Force('link').distance(function(l) {
-    var baseDist = l._label === 'memory_relates' ? 40 : 80;
-    return isHugeGraph ? baseDist * 1.5 : (isLargeGraph ? baseDist * 1.2 : baseDist);
-  });
-  // 添加适当的中心力避免节点飘散
-  if (typeof d3 !== 'undefined' && d3.forceCenter) {
-    graph3d.d3Force('center', d3.forceCenter(0, 0, 0).strength(0.05));
-  }
-
-  // Phase-71 fix: 预设节点随机初始位置，避免所有节点从 (0,0,0) 出发
-  var spread = Math.sqrt(nodeCount) * 15;
-  for (var k = 0; k < nodes3d.length; k++) {
-    nodes3d[k].x = (Math.random() - 0.5) * spread;
-    nodes3d[k].y = (Math.random() - 0.5) * spread;
-    nodes3d[k].z = (Math.random() - 0.5) * spread;
-  }
-
-  // 设置预热帧和冷却时间
-  graph3d
-    .warmupTicks(isHugeGraph ? 100 : (isLargeGraph ? 60 : 30))
-    .cooldownTime(isHugeGraph ? 8000 : 15000);
-
-  // 最后加载数据 — 此时力参数已就绪，warmupTicks 将使用正确的强力运行
-  graph3d.graphData({ nodes: nodes3d, links: links3d });
-
-  memoryGraph3dInstance = graph3d;
-
-  // Phase-71: 根据数据量调整 zoom-to-fit 延时
-  var zoomDelay = isHugeGraph ? 3000 : (isLargeGraph ? 2000 : 1500);
-  setTimeout(function() {
-    try { graph3d.zoomToFit(800, 40); } catch(e) {}
-  }, zoomDelay);
-
-  // Phase-71: 监听窗口 resize 自动调整图谱尺寸
-  var _mgResizeHandler = function() {
-    if (!memoryGraph3dInstance) return;
-    var newRect = container.getBoundingClientRect();
-    if (newRect.width > 0 && newRect.height > 0) {
-      memoryGraph3dInstance.width(newRect.width).height(newRect.height);
-    }
-  };
-  // 移除旧的 handler（如果有），再注册新的
-  if (window._mgResizeHandler) {
-    window.removeEventListener('resize', window._mgResizeHandler);
-  }
-  window._mgResizeHandler = _mgResizeHandler;
-  window.addEventListener('resize', _mgResizeHandler);
-}
-
-// Glow texture generator for memory nodes
-function createGlowTexture_mg(colorHex) {
-  if (typeof document === 'undefined') return null;
-  var size = 128;
-  var canvas = document.createElement('canvas');
-  canvas.width = size;
-  canvas.height = size;
-  var ctx = canvas.getContext('2d');
-  if (!ctx) return null;
-  var gradient = ctx.createRadialGradient(size / 2, size / 2, 0, size / 2, size / 2, size / 2);
-  gradient.addColorStop(0, colorHex);
-  gradient.addColorStop(0.3, colorHex + 'aa');
-  gradient.addColorStop(0.7, colorHex + '33');
-  gradient.addColorStop(1, 'transparent');
-  ctx.fillStyle = gradient;
-  ctx.fillRect(0, 0, size, size);
-  var tex = new THREE.CanvasTexture(canvas);
-  return tex;
-}
-
-// ========== Memory Generate (Phase-70: 仅保留 AI 批量生成入口) ==========
-
-
+// [Phase-77: Memory 3D graph removed, list-only view]
+// Memory page now only supports list view — renderMemoryGraph3D and all graph code removed.
 // ========== Phase-60: AI 批量生成（浏览器直连 Ollama） ==========
 var _aiBatchCancelled = false;
 var _aiBatchRunning = false;
@@ -2142,7 +1732,7 @@ function startAiBatchProcess(resumeMode) {
   var source = sourceSelect ? sourceSelect.value : 'both';
 
   // get systemPrompt from config or use default
-  var systemPrompt = (_aiBatchConfig && _aiBatchConfig.systemPrompt) ? _aiBatchConfig.systemPrompt : '你是一个记忆构建助手。请根据以下文档/任务内容生成多级记忆。\\n生成三个层级（必须以 JSON 返回）：\\n- L1（触点摘要）：一句话概括（15~30字）\\n- L2（详细记忆）：3~8句话，包含关键技术细节\\n- L3_summary（结构总结）：列出主要组件、依赖关系\\n- memoryType：从 decision/pattern/bugfix/insight/preference/summary 选择\\n- importance：0~1\\n- suggestedTags：标签数组\\n- anchorName：触点名称\\n- anchorType：触点类型（module/concept/api/architecture/feature/library/protocol）\\n- anchorOverview：触点概览（3~5句话目录索引式摘要，列出关键子项、核心 Flow、主要组件）\\n\\n请严格以 JSON 格式返回：\\n{"L1": "...", "L2": "...", "L3_summary": "...", "memoryType": "...", "importance": 0.7, "suggestedTags": [...], "anchorName": "...", "anchorType": "...", "anchorOverview": "..."}';
+  var systemPrompt = (_aiBatchConfig && _aiBatchConfig.systemPrompt) ? _aiBatchConfig.systemPrompt : '你是一个记忆构建助手。请根据以下文档/任务内容生成多级记忆。\\n生成三个层级（必须以 JSON 返回）：\\n- L1（触点摘要）：一句话概括（15~30字）\\n- L2（详细记忆）：默认 3~8句话，包含关键技术细节\\n- L3_summary（结构总结）：列出主要组件、依赖关系\\n- memoryType：从 decision/pattern/bugfix/insight/preference/summary 选择\\n- importance：0~1\\n- suggestedTags：标签数组\\n- anchorName：触点名称\\n- anchorType：触点类型（module/concept/api/architecture/feature/library/protocol）\\n- anchorOverview：触点概览（3~5句话目录索引式摘要，列出关键子项、核心 Flow、主要组件）\\n\\n粒度策略（必须遵守）：\\n- decision/bugfix：L2 必须保留决策/根因+修复思路+关键代码片段+文件路径（若原文存在）\\n- summary：仅保留 2~3 句概要\\n- pattern/insight/preference：保留 1~3 句结论 + 一个最小示例\\n- 不要沿用旧版 L1/L2/L3 定义\\n\\n请严格以 JSON 格式返回：\\n{"L1": "...", "L2": "...", "L3_summary": "...", "memoryType": "...", "importance": 0.7, "suggestedTags": [...], "anchorName": "...", "anchorType": "...", "anchorOverview": "..."}';
 
   _aiBatchCancelled = false;
   _aiBatchRunning = true;
@@ -2392,8 +1982,34 @@ function startAiBatchProcess(resumeMode) {
           return;
         }
 
-        // Phase B 开始前稍等一下，让用户看到提示
-        setTimeout(function() { processPhaseB(); }, 1500);
+        // Phase-78B: Phase B 开始前，先 unload gemma3 释放 Ollama VRAM
+        // 否则 qwen3-embedding:8b 无法加载，所有 embedding 会失败
+        var unloadUrl = ollamaUrl.replace(/\\/v1\\/?$/, '').replace(/\\/+$/, '') + '/api/chat';
+        if (streamArea) {
+          streamArea.textContent += '\\n\\n⏳ 正在卸载 ' + model + ' 释放 GPU 显存...';
+        }
+        fetch(unloadUrl, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            model: model,
+            messages: [],
+            keep_alive: 0
+          })
+        }).then(function() {
+          if (streamArea) {
+            streamArea.textContent += '\\n✅ ' + model + ' 已卸载，显存已释放';
+            streamArea.textContent += '\\n🔄 等待 Ollama 加载 embedding 模型...';
+          }
+          // 给 Ollama 2 秒时间完成模型卸载
+          setTimeout(function() { processPhaseB(); }, 2000);
+        }).catch(function() {
+          // 卸载失败也继续，可能 Ollama 有足够 VRAM
+          if (streamArea) {
+            streamArea.textContent += '\\n⚠️ 模型卸载失败，继续尝试 Phase B...';
+          }
+          setTimeout(function() { processPhaseB(); }, 1500);
+        });
       }
 
       // 启动 Phase A
@@ -2654,6 +2270,351 @@ function toggleBatchVerifyDetails() {
   }
 }
 
+// ========== Phase-78: 独立完整性检测功能 ==========
+
+/**
+ * Phase-78: 检测单条记忆的完整性
+ * 在卡片内联显示检测结果
+ */
+function checkSingleMemoryIntegrity(memoryId) {
+  var resultEl = document.getElementById('memVerify_' + memoryId);
+  if (!resultEl) return;
+
+  // 显示检测中状态
+  resultEl.innerHTML = '<div class="mem-verify-inline warning" style="border-color:rgba(107,114,128,0.3);color:#9ca3af;"><span class="spinner" style="display:inline-block;width:12px;height:12px;border-width:1.5px;vertical-align:middle;margin-right:6px;"></span>检测中...</div>';
+
+  fetch('/api/batch/verify', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ memoryIds: [memoryId] })
+  }).then(function(r) { return r.json(); }).then(function(data) {
+    if (!data || !data.results || data.results.length === 0) {
+      resultEl.innerHTML = '<div class="mem-verify-inline error">❌ 检测失败：无效响应</div>';
+      return;
+    }
+
+    var r = data.results[0];
+    var statusClass = r.status || 'pass';
+    var statusIcon = r.status === 'error' ? '❌' : (r.status === 'warning' ? '⚠️' : '✅');
+    var statusText = r.status === 'error' ? '有错误' : (r.status === 'warning' ? '有警告' : '完整性通过');
+
+    var html = '<div class="mem-verify-inline ' + statusClass + '">';
+    html += '<strong>' + statusIcon + ' ' + statusText + '</strong>';
+
+    // 显示指标
+    if (r.contentLength !== undefined) {
+      html += '<div class="verify-metrics">';
+      html += '<span title="内容长度">📝 ' + r.contentLength + ' 字</span>';
+      html += '<span title="Embedding">' + (r.hasEmbedding ? '🧬 有向量' : '⬜ 无向量') + '</span>';
+      html += '<span title="Anchor 关联">' + (r.hasAnchor ? '⚓ 有触点' : '⬜ 无触点') + '</span>';
+      html += '<span title="重要性">⭐ ' + ((r.importance || 0) * 100).toFixed(0) + '%</span>';
+      html += '</div>';
+    }
+
+    // 显示问题
+    if (r.issues && r.issues.length > 0) {
+      for (var i = 0; i < r.issues.length; i++) {
+        html += '<div class="verify-issue">❌ ' + r.issues[i] + '</div>';
+      }
+    }
+    if (r.warnings && r.warnings.length > 0) {
+      for (var i = 0; i < r.warnings.length; i++) {
+        html += '<div class="verify-issue">⚠️ ' + r.warnings[i] + '</div>';
+      }
+    }
+
+    html += '<div style="text-align:right;margin-top:4px;"><button onclick="this.parentElement.parentElement.innerHTML=\\x27\\x27" style="background:transparent;border:none;color:#4b5563;font-size:10px;cursor:pointer;">收起 ✕</button></div>';
+    html += '</div>';
+    resultEl.innerHTML = html;
+
+  }).catch(function(err) {
+    resultEl.innerHTML = '<div class="mem-verify-inline error">❌ 请求失败: ' + (err.message || err) + '</div>';
+  });
+}
+
+/**
+ * Phase-78: 全局检测所有记忆的完整性
+ * 在记忆列表上方显示汇总报告
+ */
+function checkAllMemoriesIntegrity() {
+  var btn = document.querySelector('.memory-verify-btn');
+  var resultArea = document.getElementById('memoryVerifyResultArea');
+  if (!resultArea) return;
+
+  // 禁用按钮 + 显示检测中
+  if (btn) { btn.classList.add('verifying'); btn.textContent = '🔍 检测中...'; btn.disabled = true; }
+  resultArea.style.display = 'block';
+  resultArea.innerHTML = '<div style="text-align:center;padding:16px;"><div class="spinner" style="display:inline-block;width:20px;height:20px;border-width:2px;vertical-align:middle;margin-right:8px;"></div><span style="color:#9ca3af;font-size:13px;">正在检测所有记忆的完整性...</span></div>';
+
+  fetch('/api/batch/verify', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ checkAll: true })
+  }).then(function(r) { return r.json(); }).then(function(data) {
+    if (btn) { btn.classList.remove('verifying'); btn.textContent = '🔍 完整性检测'; btn.disabled = false; }
+
+    if (!data || !data.summary) {
+      resultArea.innerHTML = '<div style="color:#f87171;font-size:12px;text-align:center;padding:12px;">❌ 完整性检测失败：无效响应</div>';
+      return;
+    }
+
+    var s = data.summary;
+    var diag = data.diagnostics || {};
+    var results = data.results || [];
+    var wb = s.warningBreakdown || {};
+    var eb = s.errorBreakdown || {};
+
+    // 构建报告
+    var html = '<div class="batch-verify-report">';
+
+    // 摘要栏
+    var passColor = s.passed === s.total ? '#22c55e' : '#6b7280';
+    html += '<div class="batch-verify-summary">';
+    html += '<span style="color:' + passColor + ';">✅ 通过: ' + s.passed + '</span>';
+    if (s.warnings > 0) html += '<span style="color:#f59e0b;">⚠️ 警告: ' + s.warnings + '</span>';
+    if (s.errors > 0) html += '<span style="color:#ef4444;">❌ 错误: ' + s.errors + '</span>';
+    html += '<span style="color:#6b7280;">📊 总计: ' + s.total + '</span>';
+    // Phase-78C: 一键修复按钮（仅在有可修复的问题时显示 — embedding 和 memoryType）
+    var fixableCount = (wb.embedding || 0) + (eb.memoryType || 0);
+    if (fixableCount > 0) {
+      html += '<button id="memoryRepairBtn" onclick="batchRepairMemories()" style="background:#7c3aed;color:#e9d5ff;border:1px solid #8b5cf6;border-radius:6px;padding:3px 12px;font-size:11px;font-weight:600;cursor:pointer;margin-left:8px;transition:all 0.2s;" onmouseover="this.style.background=\\x27#6d28d9\\x27" onmouseout="this.style.background=\\x27#7c3aed\\x27">🔧 一键修复 (' + fixableCount + ')</button>';
+    }
+    html += '<button onclick="document.getElementById(\\x27memoryVerifyResultArea\\x27).style.display=\\x27none\\x27" style="background:transparent;border:1px solid #374151;border-radius:4px;padding:2px 8px;color:#6b7280;font-size:11px;cursor:pointer;margin-left:auto;">收起 ✕</button>';
+    html += '</div>';
+
+    // Phase-78C: 分类警告明细栏
+    if (s.warnings > 0 || s.errors > 0) {
+      html += '<div style="display:flex;flex-wrap:wrap;gap:12px;padding:6px 12px;background:#1a1a2e;border-radius:6px;margin-top:6px;font-size:11px;">';
+      if (wb.embedding > 0) html += '<span style="color:#f59e0b;">🧬 缺 Embedding: <strong>' + wb.embedding + '</strong> <span style="color:#6b7280;">(可修复)</span></span>';
+      if (eb.memoryType > 0) html += '<span style="color:#ef4444;">🏷️ 非法 Type: <strong>' + eb.memoryType + '</strong> <span style="color:#6b7280;">(可修复)</span></span>';
+      if (wb.anchor > 0) html += '<span style="color:#9ca3af;">⚓ 缺 Anchor: <strong>' + wb.anchor + '</strong> <span style="color:#6b7280;">(需手动关联)</span></span>';
+      if (wb.importance > 0) html += '<span style="color:#9ca3af;">⭐ importance 异常: <strong>' + wb.importance + '</strong></span>';
+      if (wb.contentShort > 0) html += '<span style="color:#9ca3af;">📝 内容过短: <strong>' + wb.contentShort + '</strong></span>';
+      if (eb.content > 0) html += '<span style="color:#ef4444;">📝 内容为空: <strong>' + eb.content + '</strong></span>';
+      html += '</div>';
+    }
+
+    // Phase-78C: 诊断信息栏
+    html += '<div style="display:flex;flex-wrap:wrap;gap:10px;padding:4px 12px;font-size:10px;color:#6b7280;margin-top:4px;">';
+    html += '<span>🔢 HNSW向量: ' + (s.vectorCount >= 0 ? s.vectorCount : 'N/A') + '</span>';
+    if (s.indexedMemoryCount !== undefined) {
+      html += '<span>🧬 记忆已索引: ' + s.indexedMemoryCount + '/' + s.total + '</span>';
+    }
+    html += '<span>检测模式: ' + (s.embeddingCheckMode === 'search' ? '✅ 向量搜索' : '⚠ 不可用') + '</span>';
+    if (diag.vectorSearchEnabled !== undefined) {
+      html += '<span>向量引擎: ' + (diag.vectorSearchEnabled ? '✅' : '❌') + '</span>';
+    }
+    if (diag.synapseAvailable !== undefined) {
+      html += '<span>Synapse: ' + (diag.synapseAvailable ? '✅' : '❌ (Ollama?)') + '</span>';
+    }
+    if (diag.probeHits !== undefined) {
+      html += '<span>探针命中: ' + diag.probeHits + '</span>';
+    }
+    html += '</div>';
+
+    // 筛选有问题的条目
+    var problemResults = [];
+    for (var pi = 0; pi < results.length; pi++) {
+      if (results[pi].status !== 'pass') {
+        problemResults.push(results[pi]);
+      }
+    }
+
+    if (problemResults.length > 0) {
+      html += '<div class="batch-verify-details">';
+      html += '<div class="batch-verify-toggle" onclick="toggleGlobalVerifyDetails()">';
+      html += '📋 查看详情 (' + problemResults.length + ' 条有问题) <span id="globalVerifyArrow">▶</span>';
+      html += '</div>';
+      html += '<div id="globalVerifyDetailList" style="display:none;max-height:400px;overflow-y:auto;">';
+
+      for (var qi = 0; qi < problemResults.length; qi++) {
+        var r = problemResults[qi];
+        var statusIcon = r.status === 'error' ? '❌' : '⚠️';
+        var statusClass = r.status === 'error' ? 'verify-error' : 'verify-warning';
+
+        html += '<div class="batch-verify-item ' + statusClass + '">';
+        html += '<div class="batch-verify-item-header">';
+        html += '<span class="batch-verify-icon">' + statusIcon + '</span>';
+        html += '<span class="batch-verify-source">' + (r.memoryId || r.sourceId || 'unknown').substring(0, 12) + '...</span>';
+        if (r.memoryType) {
+          html += '<span class="batch-verify-type">' + r.memoryType + '</span>';
+        }
+        // 跳转到对应卡片
+        if (r.memoryId) {
+          html += '<button onclick="scrollToMemCard(\\x27memCard_' + r.memoryId + '\\x27)" style="background:transparent;border:none;color:#6366f1;font-size:10px;cursor:pointer;margin-left:auto;" title="跳转到此记忆">📍 定位</button>';
+        }
+        html += '</div>';
+
+        // Issues
+        if (r.issues && r.issues.length > 0) {
+          for (var ii = 0; ii < r.issues.length; ii++) {
+            html += '<div class="batch-verify-issue error">❌ ' + r.issues[ii] + '</div>';
+          }
+        }
+        // Warnings
+        if (r.warnings && r.warnings.length > 0) {
+          for (var wi = 0; wi < r.warnings.length; wi++) {
+            html += '<div class="batch-verify-issue warning">⚠️ ' + r.warnings[wi] + '</div>';
+          }
+        }
+
+        // 指标摘要行
+        if (r.contentLength !== undefined) {
+          html += '<div class="batch-verify-metrics">';
+          html += '<span title="内容长度">📝 ' + r.contentLength + ' 字符</span>';
+          html += '<span title="Embedding">' + (r.hasEmbedding ? '🧬 有向量' : '⬜ 无向量') + '</span>';
+          html += '<span title="Anchor 关联">' + (r.hasAnchor ? '⚓ 有触点' : '⬜ 无触点') + '</span>';
+          html += '<span title="重要性">⭐ ' + ((r.importance || 0) * 100).toFixed(0) + '%</span>';
+          html += '</div>';
+        }
+
+        html += '</div>';
+      }
+
+      html += '</div>';
+      html += '</div>';
+    } else if (s.total > 0) {
+      html += '<div style="text-align:center;padding:12px;color:#22c55e;font-size:13px;">🎉 所有 ' + s.total + ' 条记忆完整性检测全部通过！';
+      html += '<button onclick="document.getElementById(\\x27memoryVerifyResultArea\\x27).style.display=\\x27none\\x27" style="background:transparent;border:none;color:#4b5563;font-size:10px;cursor:pointer;margin-left:12px;">收起 ✕</button>';
+      html += '</div>';
+    }
+
+    html += '</div>';
+    resultArea.innerHTML = html;
+
+  }).catch(function(err) {
+    if (btn) { btn.classList.remove('verifying'); btn.textContent = '🔍 完整性检测'; btn.disabled = false; }
+    resultArea.innerHTML = '<div style="color:#f87171;font-size:12px;text-align:center;padding:12px;">❌ 完整性检测请求失败: ' + (err.message || err) + '</div>';
+  });
+}
+
+/** Phase-78: 切换全局检测详情的折叠/展开 */
+function toggleGlobalVerifyDetails() {
+  var list = document.getElementById('globalVerifyDetailList');
+  var arrow = document.getElementById('globalVerifyArrow');
+  if (!list) return;
+  if (list.style.display === 'none') {
+    list.style.display = 'block';
+    if (arrow) arrow.textContent = '▼';
+  } else {
+    list.style.display = 'none';
+    if (arrow) arrow.textContent = '▶';
+  }
+}
+
+/** Phase-78: 滚动到指定记忆卡片并高亮 */
+function scrollToMemCard(cardId) {
+  var card = document.getElementById(cardId);
+  if (!card) return;
+  card.scrollIntoView({ behavior: 'smooth', block: 'center' });
+  card.style.transition = 'box-shadow 0.3s';
+  card.style.boxShadow = '0 0 0 2px #6366f1';
+  setTimeout(function() { card.style.boxShadow = ''; }, 2000);
+}
+
+/**
+ * Phase-78B: 批量修复有问题的记忆
+ * 调用 /api/batch/repair 端点修复非法 memoryType + 重建缺失 Embedding
+ */
+function batchRepairMemories() {
+  var btn = document.getElementById('memoryRepairBtn');
+  var resultArea = document.getElementById('memoryVerifyResultArea');
+  if (!resultArea) return;
+
+  // 禁用按钮 + 显示修复中
+  if (btn) { btn.textContent = '🔧 修复中...'; btn.disabled = true; btn.style.opacity = '0.6'; }
+
+  // 在报告区域底部显示进度
+  var progressEl = document.getElementById('repairProgressArea');
+  if (!progressEl) {
+    progressEl = document.createElement('div');
+    progressEl.id = 'repairProgressArea';
+    progressEl.style.cssText = 'margin-top:12px;padding:12px;background:#1e1b4b;border:1px solid #4338ca;border-radius:8px;';
+    resultArea.querySelector('.batch-verify-report').appendChild(progressEl);
+  }
+  progressEl.innerHTML = '<div style="text-align:center;"><div class="spinner" style="display:inline-block;width:16px;height:16px;border-width:2px;vertical-align:middle;margin-right:8px;"></div><span style="color:#a5b4fc;font-size:12px;">正在修复所有有问题的记忆... 修复非法 memoryType + 重建 Embedding 向量</span></div>';
+
+  fetch('/api/batch/repair', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ fixMemoryTypes: true, rebuildEmbeddings: true })
+  }).then(function(r) { return r.json(); }).then(function(data) {
+    if (btn) { btn.textContent = '✅ 修复完成'; btn.style.background = '#065f46'; btn.style.borderColor = '#059669'; btn.style.color = '#a7f3d0'; }
+
+    if (!data || !data.summary) {
+      progressEl.innerHTML = '<div style="color:#f87171;font-size:12px;">❌ 修复失败：无效响应</div>';
+      return;
+    }
+
+    var sm = data.summary;
+    var rd = data.diagnostics || {};
+    var html = '<div style="color:#e9d5ff;font-size:12px;line-height:1.8;">';
+    html += '<div style="font-weight:600;font-size:13px;margin-bottom:8px;">🔧 修复完成</div>';
+    html += '<div style="display:flex;gap:16px;flex-wrap:wrap;">';
+    html += '<span>📊 处理总数: <strong>' + sm.totalProcessed + '</strong></span>';
+    if (sm.fixedTypes > 0) html += '<span style="color:#a7f3d0;">✅ Type 已修复: <strong>' + sm.fixedTypes + '</strong></span>';
+    if (sm.rebuiltEmbeddings > 0) html += '<span style="color:#93c5fd;">🧬 Embedding 已重建: <strong>' + sm.rebuiltEmbeddings + '</strong></span>';
+    if (sm.failedEmbeddings > 0) html += '<span style="color:#fca5a5;">❌ Embedding 失败: <strong>' + sm.failedEmbeddings + '</strong></span>';
+    if (sm.skippedEmbeddings > 0) html += '<span style="color:#fbbf24;">⏭️ Embedding 跳过: <strong>' + sm.skippedEmbeddings + '</strong></span>';
+    html += '</div>';
+    // Phase-78C: 向量计数 + 持久化验证
+    html += '<div style="margin-top:4px;color:#9ca3af;font-size:11px;">';
+    html += '🔢 HNSW向量: 修复前 <strong>' + sm.vectorCountBefore + '</strong>';
+    html += ' → 修复后 <strong>' + sm.vectorCountAfterRepair + '</strong>';
+    html += ' → 重载验证 <strong>' + sm.vectorCountAfterReload + '</strong>';
+    if (sm.vectorCountAfterRepair > sm.vectorCountBefore) {
+      html += ' <span style="color:#86efac;">(+' + (sm.vectorCountAfterRepair - sm.vectorCountBefore) + ')</span>';
+    }
+    if (sm.vectorCountAfterReload < sm.vectorCountAfterRepair && sm.vectorCountAfterReload >= 0) {
+      html += ' <span style="color:#fca5a5;">⚠ 持久化丢失!</span>';
+    }
+    html += '</div>';
+    // Phase-78C: Synapse 诊断
+    if (rd.synapseAvailable === false) {
+      html += '<div style="margin-top:4px;padding:6px 10px;background:#451a03;border:1px solid #92400e;border-radius:6px;color:#fbbf24;font-size:11px;">';
+      html += '⚠️ <strong>Synapse 不可用</strong> — Embedding 无法生成！';
+      if (rd.firstEmbedError) html += '<br>原因: ' + rd.firstEmbedError;
+      html += '<br>请确保 Ollama 正在运行: <code style="color:#fde68a;">ollama serve</code> 且模型已加载: <code style="color:#fde68a;">ollama pull qwen3-embedding:8b</code>';
+      html += '</div>';
+    } else {
+      html += '<div style="margin-top:2px;font-size:10px;color:#6b7280;">';
+      html += 'Synapse: ✅ | 向量维度: ' + (rd.vectorDimension || 'N/A');
+      if (rd.firstEmbedError) html += ' | 首个错误: ' + rd.firstEmbedError;
+      html += '</div>';
+    }
+
+    // 显示修复详情（可折叠）
+    if (data.results && data.results.length > 0) {
+      html += '<div style="margin-top:8px;">';
+      html += '<div onclick="var dl=document.getElementById(\\x27repairDetailList\\x27);if(dl){dl.style.display=dl.style.display===\\x27none\\x27?\\x27block\\x27:\\x27none\\x27;}" style="cursor:pointer;color:#8b5cf6;font-size:11px;">📋 查看修复详情 (' + data.results.length + ' 条) ▶</div>';
+      html += '<div id="repairDetailList" style="display:none;max-height:300px;overflow-y:auto;margin-top:6px;">';
+      for (var i = 0; i < data.results.length; i++) {
+        var rr = data.results[i];
+        html += '<div style="padding:4px 8px;margin:2px 0;background:#1a1a2e;border-radius:4px;font-size:10px;color:#d1d5db;">';
+        html += '<span style="color:#6b7280;">' + (rr.memoryId || '').substring(0, 10) + '...</span> ';
+        html += '<span style="color:#c4b5fd;">[' + rr.memoryType + ']</span> ';
+        for (var fi = 0; fi < rr.fixes.length; fi++) {
+          html += '<span style="color:#86efac;">• ' + rr.fixes[fi] + '</span> ';
+        }
+        html += '</div>';
+      }
+      html += '</div>';
+      html += '</div>';
+    }
+
+    html += '<div style="margin-top:10px;padding-top:8px;border-top:1px dashed #4338ca;">';
+    html += '<button onclick="checkAllMemoriesIntegrity()" style="background:#312e81;color:#a5b4fc;border:1px solid #6366f1;border-radius:6px;padding:5px 14px;font-size:11px;font-weight:600;cursor:pointer;">🔍 重新检测</button>';
+    html += '<span style="color:#6b7280;font-size:10px;margin-left:12px;">点击重新检测以验证修复效果</span>';
+    html += '</div>';
+    html += '</div>';
+    progressEl.innerHTML = html;
+
+  }).catch(function(err) {
+    if (btn) { btn.textContent = '🔧 一键修复'; btn.disabled = false; btn.style.opacity = '1'; }
+    progressEl.innerHTML = '<div style="color:#f87171;font-size:12px;">❌ 修复请求失败: ' + (err.message || err) + '</div>';
+  });
+}
+
 /** 浏览器端调用 Ollama 原生 /api/chat 流式 API */
 function callOllamaStream(baseUrl, model, systemPrompt, userContent, streamEl, callback) {
   var nativeUrl = baseUrl.replace(/\\/v1\\/?$/, '').replace(/\\/+$/, '') + '/api/chat';
@@ -2668,7 +2629,7 @@ function callOllamaStream(baseUrl, model, systemPrompt, userContent, streamEl, c
         { role: 'user', content: userContent }
       ],
       stream: true,
-      keep_alive: '30m',
+      keep_alive: '5m',  // Phase-78B: 从 30m 减至 5m，减少 VRAM 占用时间
       options: { temperature: 0.3, num_predict: 4096 }
     })
   }).then(function(response) {

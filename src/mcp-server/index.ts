@@ -1008,8 +1008,8 @@ const TOOLS = [
     },
   },
   {
-    name: 'devplan_memory_recall',
-    description: 'Intelligently recall memories relevant to a query using semantic vector search. Automatically updates hit counts for recalled memories. Falls back to literal matching when semantic search is unavailable.\n通过语义向量搜索智能召回与查询相关的记忆。自动更新被召回记忆的命中次数。语义搜索不可用时退化为字面匹配。\n\n**Unified Recall (统一召回)**: By default, also searches document sections and merges results via RRF fusion. Each result includes `sourceKind` ("memory" or "doc") to indicate its origin. Set `includeDocs=false` to search memories only.\n\n**Hierarchical Recall (分层召回, Phase-124)**: Controls information depth returned per result. Default "L1" returns only summaries (Anchor.description + overview). "L2" adds FlowEntry history. "L3" adds Structure Snapshot. Token savings: L1 ~30 tokens/result vs L3 ~500 tokens/result ≈ 16x reduction.\n\n**Scope-based Search (范围限定检索, Phase-124)**: Limits search scope by module, task, or anchor type/name. Multiple scope conditions are AND-combined.',
+    name: 'devplan_recall_unified',
+    description: 'Unified recall API aligned with ai_db phase132~136. Accepts URI/depth/scope/docStrategy/recursive and returns merged memory+doc results.\n统一召回 API（对齐 ai_db phase132~136）。支持 URI/depth/scope/docStrategy/recursive，并返回记忆+文档融合结果。',
     inputSchema: {
       type: 'object' as const,
       properties: {
@@ -1021,61 +1021,115 @@ const TOOLS = [
           type: 'string',
           description: 'Search query text\n搜索查询文本',
         },
+        uri: {
+          type: 'string',
+          description: 'Optional URI hint (e.g., aidb://memory/anchors/concept/socialgraphv2)\n可选 URI 提示',
+        },
         memoryType: {
           type: 'string',
           enum: ['decision', 'pattern', 'bugfix', 'insight', 'preference', 'summary'],
           description: 'Optional: Filter by memory type\n可选：按记忆类型过滤',
         },
-        limit: {
-          type: 'number',
-          description: 'Optional: Maximum results (default: 10)\n可选：最大返回数（默认 10）',
-        },
-        minScore: {
-          type: 'number',
-          description: 'Optional: Minimum relevance score 0~1 (default: 0)\n可选：最低相关性评分（默认 0）',
+        limit: { type: 'number', description: 'Optional: Maximum results (default: 10)\n可选：最大返回数（默认 10）' },
+        minScore: { type: 'number', description: 'Optional: Minimum relevance score (default: 0)\n可选：最低相关性评分（默认 0）' },
+        recursive: {
+          type: 'boolean',
+          description: 'Optional: Enable recursive recall (effective value also depends on feature flag)\n可选：启用递归召回（最终受 feature flag 共同控制）',
         },
         includeDocs: {
           type: 'boolean',
-          description: 'Whether to include document sections in recall results via unified search (default: true). Set to false to search memories only. DEPRECATED: prefer docStrategy instead.\n是否通过统一召回包含文档搜索结果（默认 true）。设为 false 仅搜索记忆。已废弃：推荐使用 docStrategy。',
+          description: 'Deprecated: include docs switch. Prefer docStrategy.\n已废弃：是否包含文档，建议用 docStrategy。',
+        },
+        graphExpand: {
+          type: 'boolean',
+          description: 'Backward-compatible alias for recursive.\n兼容参数，等价于 recursive。',
         },
         docStrategy: {
           type: 'string',
           enum: ['vector', 'guided', 'none'],
-          description: 'Document retrieval strategy (Phase-125, default: "vector"). Controls how documents are discovered.\n文档检索策略（Phase-125，默认 "vector"）。控制文档发现方式。\n\n- "vector" (default): Traditional mode — independent vector search on documents, RRF-fused with memories. Broad coverage but higher token cost.\n  传统模式 — 独立向量搜索文档，与记忆 RRF 融合。覆盖广但 token 多。\n- "guided": Memory-guided mode — discovers documents via graph traversal from recalled memories (MEMORY_FROM_DOC, TASK_HAS_DOC, MODULE_HAS_DOC). Precise, low token. Each doc includes guidedReasons. Falls back to vector if no graph connections found.\n  记忆驱动模式 — 基于图谱关系反向查找文档。精准且省 token，每篇附 guidedReasons。无关联时降级 vector。\n- "none": No document retrieval (same as includeDocs=false).\n  不检索文档。',
-        },
-        graphExpand: {
-          type: 'boolean',
-          description: 'Whether to expand results via MEMORY_RELATES graph traversal (default: true). When enabled, related memories connected through the memory network are also discovered and RRF-fused with vector results.\n是否通过 MEMORY_RELATES 图谱遍历扩展结果（默认 true）。启用时，通过记忆网络关联的记忆也会被发现并与向量结果 RRF 融合。',
+          description: 'Document retrieval strategy\n文档检索策略',
         },
         depth: {
           type: 'string',
           enum: ['L1', 'L2', 'L3'],
-          description: 'Hierarchical recall depth (default: "L1"). Controls how much context is returned per result.\n分层召回深度（默认 "L1"）。控制每条结果返回的上下文层级。\n\n- "L1" (default): Summary — memory content + Anchor.description + Anchor.overview. ~30 tokens/result.\n- "L2": Detail — adds FlowEntry list (summary + detail). ~200 tokens/result.\n- "L3": Full — adds Structure Snapshot (component composition). ~500 tokens/result.\n\nToken savings: 100 results × L1 ≈ 3K tokens vs L3 ≈ 50K tokens.',
+          description: 'Hierarchical recall depth\n分层召回深度',
         },
         scope: {
           type: 'object',
-          description: 'Scope-based search filter (Phase-124). Limits search to specific modules, tasks, or anchor types.\n范围限定检索（Phase-124）。限制搜索范围到特定模块、任务或触点类型。\n\nMultiple conditions are AND-combined.\n多个条件为 AND 关系。',
           properties: {
-            moduleId: {
-              type: 'string',
-              description: 'Filter by module ID (via MODULE_MEMORY relation). e.g., "vector-store"\n按模块 ID 过滤。例如 "vector-store"',
-            },
-            taskId: {
-              type: 'string',
-              description: 'Filter by related task ID (via relatedTaskId property). e.g., "phase-14"\n按关联任务 ID 过滤。例如 "phase-14"',
-            },
-            anchorType: {
-              type: 'string',
-              description: 'Filter by anchor type. Values: module | concept | api | architecture | feature | library | protocol\n按触点类型过滤。',
-            },
-            anchorName: {
-              type: 'string',
-              description: 'Filter by anchor name (exact match). e.g., "SocialGraphV2"\n按触点名称精确匹配。例如 "SocialGraphV2"',
-            },
+            moduleId: { type: 'string' },
+            taskId: { type: 'string' },
+            anchorType: { type: 'string' },
+            anchorName: { type: 'string' },
           },
         },
       },
       required: ['projectName', 'query'],
+    },
+  },
+  {
+    name: 'devplan_get_feature_flags',
+    description: 'Get unified recall feature flags.\n获取统一召回 feature flags。',
+    inputSchema: {
+      type: 'object' as const,
+      properties: {
+        projectName: {
+          type: 'string',
+          description: `Project name (default: "${DEFAULT_PROJECT_NAME}")\n项目名称（默认："${DEFAULT_PROJECT_NAME}"）`,
+        },
+      },
+      required: ['projectName'],
+    },
+  },
+  {
+    name: 'devplan_set_feature_flags',
+    description: 'Patch unified recall feature flags (autoSession/recursiveRecall/uriIndex).\n更新统一召回 feature flags（autoSession/recursiveRecall/uriIndex）。',
+    inputSchema: {
+      type: 'object' as const,
+      properties: {
+        projectName: {
+          type: 'string',
+          description: `Project name (default: "${DEFAULT_PROJECT_NAME}")\n项目名称（默认："${DEFAULT_PROJECT_NAME}"）`,
+        },
+        featureFlags: {
+          type: 'object',
+          properties: {
+            autoSession: { type: 'boolean' },
+            recursiveRecall: { type: 'boolean' },
+            uriIndex: { type: 'boolean' },
+          },
+          description: 'Partial feature flags patch\n部分更新 patch',
+        },
+      },
+      required: ['projectName', 'featureFlags'],
+    },
+  },
+  {
+    name: 'devplan_get_recall_observability',
+    description: 'Get unified recall observability metrics.\n获取统一召回可观测性指标。',
+    inputSchema: {
+      type: 'object' as const,
+      properties: {
+        projectName: {
+          type: 'string',
+          description: `Project name (default: "${DEFAULT_PROJECT_NAME}")\n项目名称（默认："${DEFAULT_PROJECT_NAME}"）`,
+        },
+      },
+      required: ['projectName'],
+    },
+  },
+  {
+    name: 'devplan_reset_recall_observability',
+    description: 'Reset unified recall observability counters.\n重置统一召回可观测性计数器。',
+    inputSchema: {
+      type: 'object' as const,
+      properties: {
+        projectName: {
+          type: 'string',
+          description: `Project name (default: "${DEFAULT_PROJECT_NAME}")\n项目名称（默认："${DEFAULT_PROJECT_NAME}"）`,
+        },
+      },
+      required: ['projectName'],
     },
   },
   {
@@ -1184,7 +1238,7 @@ const TOOLS = [
   },
   {
     name: 'devplan_memory_generate',
-    description: 'Generate memory candidates from existing documents and completed tasks. Returns structured candidates that the AI can review and selectively save as memories via devplan_memory_save. This tool aggregates raw data; the AI provides the intelligence to extract meaningful memories.\n从已有文档和已完成任务中生成记忆候选项。返回结构化候选项供 AI 审查后通过 devplan_memory_save 批量保存为记忆。此工具聚合原始数据，AI 负责提取有意义的记忆。\n\n**Batch AI Workflow (批量 AI 处理工作流)**:\nWhen user says "批量生成记忆" / "全量导入记忆" / "batch generate memories":\n1. Call this tool with limit=5 to get a small batch\n2. For EACH candidate: read its content, extract 1-3 key insights, determine the best memoryType\n3. Call devplan_memory_save for each with AI-refined content (concise, 1-3 sentences), **MUST pass sourceId from candidate.sourceId**\n4. Check stats.remaining — if > 0, repeat from step 1\n5. Continue until remaining === 0\n\n**Memory Tree / suggestedRelations (记忆树 / 建议关联)**:\nEach candidate may include a `suggestedRelations` array with `{ targetSourceId, relationType, weight, reason }` entries.\nThese represent inferred connections between candidates (e.g., task→doc DERIVED_FROM, consecutive phases TEMPORAL_NEXT, same-module RELATES).\n`targetSourceId` references another candidate\'s `sourceId`. After saving all memories, map sourceId→entityId and build relations via the graph.\nThis transforms flat memories into a connected Memory Tree graph.\n\n**CRITICAL — sourceId dedup tracking**: Each candidate has a `sourceId` field (e.g., "phase-7" for tasks, "overview" or "technical_notes|security" for docs). When calling devplan_memory_save, you MUST pass `sourceId: candidate.sourceId` so that subsequent calls to devplan_memory_generate can skip already-processed sources. Without sourceId, the same candidates will keep appearing.\n\nThe stats.remaining field tells how many more eligible candidates exist beyond the current batch.',
+    description: 'Generate memory candidates from existing documents and completed tasks. Returns structured candidates that the AI can review and selectively save as memories via devplan_memory_save. This tool aggregates raw data; the AI provides the intelligence to extract meaningful memories.\n从已有文档和已完成任务中生成记忆候选项。返回结构化候选项供 AI 审查后通过 devplan_memory_save 批量保存为记忆。此工具聚合原始数据，AI 负责提取有意义的记忆。\n\n**Batch AI Workflow (批量 AI 处理工作流)**:\nWhen user says "批量生成记忆" / "全量导入记忆" / "batch generate memories":\n1. Call this tool with limit=5 to get a small batch\n2. For EACH candidate: read its content, extract 1-3 key insights, determine the best memoryType\n3. Call devplan_memory_save for each with AI-refined content (concise, 1-3 sentences), **MUST pass sourceId from candidate.sourceId**\n4. Check stats.remaining — if > 0, repeat from step 1\n5. Continue until remaining === 0\n\n**Granularity Policy (粒度策略, Phase-52/T52.4)**:\n- `decision` / `bugfix`: keep decision/root-cause + fix approach, and preserve key code snippet + file path when available.\n- `summary`: keep only 2~3 sentences of high-level outcome.\n- `pattern` / `insight` / `preference`: keep 1~3 concise sentences plus one minimal example.\n- Use the latest L1/L2/L3 rules; do not reuse old definitions.\n\n**Memory Tree / suggestedRelations (记忆树 / 建议关联)**:\nEach candidate may include a `suggestedRelations` array with `{ targetSourceId, relationType, weight, reason }` entries.\nThese represent inferred connections between candidates (e.g., task→doc DERIVED_FROM, consecutive phases TEMPORAL_NEXT, same-module RELATES).\n`targetSourceId` references another candidate\'s `sourceId`. After saving all memories, map sourceId→entityId and build relations via the graph.\nThis transforms flat memories into a connected Memory Tree graph.\n\n**CRITICAL — sourceId dedup tracking**: Each candidate has a `sourceId` field (e.g., "phase-7" for tasks, "overview" or "technical_notes|security" for docs). When calling devplan_memory_save, you MUST pass `sourceId: candidate.sourceId` so that subsequent calls to devplan_memory_generate can skip already-processed sources. Without sourceId, the same candidates will keep appearing.\n\nThe stats.remaining field tells how many more eligible candidates exist beyond the current batch.',
     inputSchema: {
       type: 'object' as const,
       properties: {
@@ -1466,7 +1520,7 @@ const TOOLS = [
   },
   {
     name: 'devplan_llm_analyze',
-    description: 'Use local Ollama LLM to analyze text and return structured JSON. Supports multiple analysis modes for anchor-driven memory construction.\n使用本地 Ollama LLM 分析文本并返回结构化 JSON。支持多种分析模式用于触点驱动记忆构建。\n\nAnalysis modes:\n- "extract_anchors": Extract anchor candidates from a document/task description\n- "determine_change": Determine change type (created/upgraded/modified) for an anchor based on content\n- "build_structure": Analyze structural composition of a feature/module\n- "generate_memory": Generate multi-level memory content (L1 summary + L2 detail) for an anchor\n- "custom": Free-form analysis with custom prompt\n\nRequires Ollama running locally (default: http://localhost:11434/v1).',
+    description: 'Use local Ollama LLM to analyze text and return structured JSON. Supports multiple analysis modes for anchor-driven memory construction.\n使用本地 Ollama LLM 分析文本并返回结构化 JSON。支持多种分析模式用于触点驱动记忆构建。\n\nAnalysis modes:\n- "extract_anchors": Extract anchor candidates from a document/task description\n- "determine_change": Determine change type (created/upgraded/modified) for an anchor based on content\n- "build_structure": Analyze structural composition of a feature/module\n- "generate_memory": Generate multi-level memory content (L1 summary + L2 detail) for an anchor\n- "skill_l1": Generate L1 touchpoint summary with the latest L1 rule set\n- "skill_l2": Generate L2 detailed memory with the latest L2 rule set\n- "skill_l3": Generate L3 full-content memory with the latest L3 rule set\n- "custom": Free-form analysis with custom prompt\n\nRequires Ollama running locally (default: http://localhost:11434/v1).',
     inputSchema: {
       type: 'object' as const,
       properties: {
@@ -1476,7 +1530,7 @@ const TOOLS = [
         },
         mode: {
           type: 'string',
-          enum: ['extract_anchors', 'determine_change', 'build_structure', 'generate_memory', 'custom'],
+          enum: ['extract_anchors', 'determine_change', 'build_structure', 'generate_memory', 'skill_l1', 'skill_l2', 'skill_l3', 'custom'],
           description: 'Analysis mode\n分析模式',
         },
         content: {
@@ -1657,16 +1711,22 @@ interface ToolArgs {
   source?: string;
   /** devplan_memory_save: 记忆来源 ID（用于批量生成去重追踪） */
   sourceId?: string;
-  /** devplan_memory_recall: 是否包含文档统一召回（已废弃，推荐 docStrategy） */
+  /** devplan_recall_unified: 是否包含文档统一召回（已废弃，推荐 docStrategy） */
   includeDocs?: boolean;
-  /** devplan_memory_recall: 是否启用图谱关联扩展 (Phase-38) */
+  /** devplan_recall_unified: URI 定位提示 */
+  uri?: string;
+  /** devplan_recall_unified: 是否启用图谱关联扩展 (Phase-38) */
   graphExpand?: boolean;
-  /** Phase-125: devplan_memory_recall: 文档检索策略 (vector/guided/none) */
+  /** devplan_recall_unified: 是否启用递归召回（受 feature flag 控制） */
+  recursive?: boolean;
+  /** Phase-125: devplan_recall_unified: 文档检索策略 (vector/guided/none) */
   docStrategy?: string;
-  /** Phase-124: devplan_memory_recall: 分层召回深度 (L1/L2/L3) */
+  /** Phase-124: devplan_recall_unified: 分层召回深度 (L1/L2/L3) */
   depth?: string;
   /** devplan_memory_clear: 确认删除（安全保护） */
   confirm?: boolean;
+  /** devplan_set_feature_flags: 特性开关 Patch */
+  featureFlags?: { autoSession?: boolean; recursiveRecall?: boolean; uriIndex?: boolean };
   /** Phase-47: devplan_memory_save: 记忆分解模式 */
   decompose?: string;
   /** Phase-47: devplan_memory_save: LLM 分解结果 JSON */
@@ -2813,13 +2873,18 @@ async function handleToolCall(name: string, args: ToolArgs): Promise<string> {
 
       try {
         const result = plan.rebuildIndex();
-        const statusIcon = result.failed === 0 ? '[OK]' : '[WARN]';
+        const docStatus = result.failed === 0 ? '[OK]' : '[WARN]';
+        const memStatus = result.memories && result.memories.failed === 0 ? '[OK]' : '[WARN]';
+        const memInfo = result.memories
+          ? ` | Memories: ${memStatus} ${result.memories.indexed}/${result.memories.total} indexed` +
+            (result.memories.failed > 0 ? ` (${result.memories.failed} failed)` : '')
+          : '';
 
         return JSON.stringify({
           success: true,
           ...result,
-          summary: `${statusIcon} Rebuilt index: ${result.indexed}/${result.total} documents indexed in ${result.durationMs}ms.` +
-            (result.failed > 0 ? ` ${result.failed} failed.` : ''),
+          summary: `${docStatus} Docs: ${result.indexed}/${result.total} indexed${memInfo} | ${result.durationMs}ms.` +
+            (result.failed > 0 ? ` ${result.failed} doc(s) failed.` : ''),
         });
       } catch (err) {
         throw new McpError(ErrorCode.InternalError,
@@ -3034,7 +3099,7 @@ async function handleToolCall(name: string, args: ToolArgs): Promise<string> {
       }
     }
 
-    case 'devplan_memory_recall': {
+    case 'devplan_recall_unified': {
       const projectName = args.projectName!;
       const query = args.query;
 
@@ -3043,27 +3108,40 @@ async function handleToolCall(name: string, args: ToolArgs): Promise<string> {
       }
 
       const plan = getDevPlan(projectName);
-      if (typeof (plan as any).recallMemory !== 'function') {
+      if (typeof (plan as any).recallUnified !== 'function' && typeof (plan as any).recallMemory !== 'function') {
         throw new McpError(ErrorCode.InvalidRequest,
           `Memory features require "graph" engine. Project "${projectName}" uses a different engine.`);
       }
 
       const includeDocs = args.includeDocs !== undefined ? args.includeDocs : true;
       const graphExpand = args.graphExpand !== undefined ? args.graphExpand : true;
+      const recursive = args.recursive !== undefined ? args.recursive : graphExpand;
       const depth = args.depth || 'L1'; // Phase-124: 分层召回深度
       const scope = args.scope as { moduleId?: string; taskId?: string; anchorType?: string; anchorName?: string } | undefined;
       const docStrategy = args.docStrategy as 'vector' | 'guided' | 'none' | undefined; // Phase-125
 
-      const memories = (plan as any).recallMemory(query, {
-        memoryType: args.memoryType as any,
-        limit: args.limit,
-        minScore: args.minScore,
-        includeDocs,
-        graphExpand,
-        depth,   // Phase-124: 传递分层召回深度
-        scope,   // Phase-124: 传递范围限定条件
-        docStrategy, // Phase-125: 文档检索策略
-      });
+      const memories = typeof (plan as any).recallUnified === 'function'
+        ? (plan as any).recallUnified(query, {
+          uri: args.uri,
+          memoryType: args.memoryType as any,
+          limit: args.limit,
+          minScore: args.minScore,
+          includeDocs,
+          recursive,
+          depth,
+          scope,
+          docStrategy,
+        })
+        : (plan as any).recallMemory(query, {
+          memoryType: args.memoryType as any,
+          limit: args.limit,
+          minScore: args.minScore,
+          includeDocs,
+          graphExpand: recursive,
+          depth,
+          scope,
+          docStrategy,
+        });
 
       // 统计来源分布
       const memoryCount = memories.filter((m: any) => m.sourceKind === 'memory' || !m.sourceKind).length;
@@ -3081,12 +3159,57 @@ async function handleToolCall(name: string, args: ToolArgs): Promise<string> {
         memoryCount,
         docCount,
         guidedDocCount,  // Phase-125: guided 文档数
+        uri: args.uri || null,
+        recursive,
         unifiedRecall: effectiveDocStrategy !== 'none',
         docStrategy: effectiveDocStrategy, // Phase-125: 实际使用的策略
         depth,   // Phase-124: 返回当前使用的层级
         scope: scope || null,  // Phase-124: 返回当前使用的范围
         memories,
       }, null, 2);
+    }
+
+    case 'devplan_get_feature_flags': {
+      const projectName = args.projectName!;
+      const plan = getDevPlan(projectName);
+      if (typeof (plan as any).getFeatureFlags !== 'function') {
+        throw new McpError(ErrorCode.InvalidRequest, `Feature flags require "graph" engine. Project "${projectName}" uses a different engine.`);
+      }
+      const featureFlags = (plan as any).getFeatureFlags();
+      return JSON.stringify({ projectName, featureFlags }, null, 2);
+    }
+
+    case 'devplan_set_feature_flags': {
+      const projectName = args.projectName!;
+      const plan = getDevPlan(projectName);
+      if (typeof (plan as any).setFeatureFlags !== 'function') {
+        throw new McpError(ErrorCode.InvalidRequest, `Feature flags require "graph" engine. Project "${projectName}" uses a different engine.`);
+      }
+      if (!args.featureFlags || typeof args.featureFlags !== 'object') {
+        throw new McpError(ErrorCode.InvalidParams, 'Missing required: featureFlags');
+      }
+      const featureFlags = (plan as any).setFeatureFlags(args.featureFlags);
+      return JSON.stringify({ status: 'updated', projectName, featureFlags }, null, 2);
+    }
+
+    case 'devplan_get_recall_observability': {
+      const projectName = args.projectName!;
+      const plan = getDevPlan(projectName);
+      if (typeof (plan as any).getRecallObservability !== 'function') {
+        throw new McpError(ErrorCode.InvalidRequest, `Recall observability requires "graph" engine. Project "${projectName}" uses a different engine.`);
+      }
+      const observability = (plan as any).getRecallObservability();
+      return JSON.stringify({ projectName, observability }, null, 2);
+    }
+
+    case 'devplan_reset_recall_observability': {
+      const projectName = args.projectName!;
+      const plan = getDevPlan(projectName);
+      if (typeof (plan as any).resetRecallObservability !== 'function') {
+        throw new McpError(ErrorCode.InvalidRequest, `Recall observability requires "graph" engine. Project "${projectName}" uses a different engine.`);
+      }
+      const observability = (plan as any).resetRecallObservability();
+      return JSON.stringify({ status: 'reset', projectName, observability }, null, 2);
     }
 
     case 'devplan_memory_list': {
@@ -3946,6 +4069,9 @@ async function handleToolCall(name: string, args: ToolArgs): Promise<string> {
             determine_change: 'Cursor should determine the change type (created/upgraded/modified/deprecated/removed) and call devplan_memory_save with changeType.',
             build_structure: 'Cursor should identify components and call devplan_structure_create with the components array.',
             generate_memory: 'Cursor should generate L1 summary + L2 detail and call devplan_memory_save for each level.',
+            skill_l1: 'Cursor should generate only L1 output using the latest L1 rule and return JSON with L1 plus ruleVersion.',
+            skill_l2: 'Cursor should generate only L2 output using the latest L2 rule and return JSON with L2 plus key decisions.',
+            skill_l3: 'Cursor should generate only L3 output using the latest L3 rule and return JSON with L3 plus structure notes.',
           }[mode] || 'Cursor should analyze the content and take appropriate action.',
           switchTo: 'To use LLM instead, set "engine": "ollama" or "engine": "models_online" in .devplan/config.json llmAnalyze section.',
         });
@@ -3995,10 +4121,30 @@ async function handleToolCall(name: string, args: ToolArgs): Promise<string> {
 - L3_summary（结构总结）：列出主要组件及其关系
 请以 JSON 格式返回：{"L1": "...", "L2": "...", "L3_summary": "...", "suggestedTags": ["tag1", "tag2"]}`,
 
+        skill_l1: `你是 L1 触点摘要生成器。请严格按最新 L1 规则输出：
+- 只输出一个极简"触点入口"摘要（15~30字，避免细节堆叠）
+- 必须可用于后续检索导航
+- 不要混入 L2/L3 细节
+返回 JSON：{"L1":"...","ruleVersion":"2026-02-24","notes":"..."}。`,
+
+        skill_l2: `你是 L2 详细记忆生成器。请严格按最新 L2 规则输出：
+- 输出 3~8 句话的技术细节，包含关键决策与约束
+- 明确上下文、原因、取舍，不重复 L1 入口句式
+- 不展开完整原文（那是 L3）
+返回 JSON：{"L2":"...","keyDecisions":["..."],"ruleVersion":"2026-02-24"}。`,
+
+        skill_l3: `你是 L3 完整内容生成器。请严格按最新 L3 规则输出：
+- 提供可追溯的完整内容或核心原文片段（可较长）
+- 保留结构信息（组件、关系、边界）便于深层回溯
+- 不再压缩成摘要（那是 L1/L2）
+返回 JSON：{"L3":"...","structureNotes":["..."],"ruleVersion":"2026-02-24"}。`,
+
         custom: customPrompt || '请分析以下内容并返回 JSON 格式的结果。',
       };
 
       const systemPrompt = systemPrompts[mode] || systemPrompts['custom'];
+      const skillModes = new Set(['skill_l1', 'skill_l2', 'skill_l3']);
+      const useSkillExecutor = skillModes.has(mode);
 
       // ---- 直接 HTTP 调用 OpenAI-Compatible API (Ollama / DeepSeek / OpenAI) ----
       // 绕过 LlmGateway NAPI 层，直接通过 HTTP 调用 LLM 推理接口
@@ -4013,6 +4159,138 @@ async function handleToolCall(name: string, args: ToolArgs): Promise<string> {
           message: `Online provider "${provider}" requires an API key. Set onlineApiKey in .devplan/config.json:\n`
             + `{ "llmAnalyze": { "engine": "models_online", "onlineProvider": "${provider}", "onlineApiKey": "sk-..." } }`,
         });
+      }
+
+      // ---- T58.8: skill_* 模式优先走 ai_db SkillExecutor（参数映射 + 错误语义对齐）----
+      if (useSkillExecutor) {
+        try {
+          const { LlmGateway } = require('aifastdb');
+          if (!LlmGateway) {
+            return JSON.stringify({
+              status: 'error',
+              engine,
+              provider,
+              model,
+              errorType: 'SKILL_EXECUTOR_UNAVAILABLE',
+              message: 'LlmGateway is unavailable in current aifastdb package. Please upgrade to aifastdb@2.9.8+.',
+              switchTo: 'Set "engine": "cursor" to fallback to Cursor analysis.',
+            });
+          }
+
+          const projectBase = resolveBasePathForProject(projectName);
+          const projectRoot = path.dirname(projectBase);
+          const gatewayPath = path.join(projectRoot, '.devplan', projectName, 'llm-gateway-data');
+          fs.mkdirSync(gatewayPath, { recursive: true });
+
+          const gw = new LlmGateway(gatewayPath);
+          const providerId = engine === 'ollama' ? 'ollama-llm-analyze' : `online-${provider}`;
+          const providerName = engine === 'ollama' ? 'Ollama (LLM Analyze)' : `${provider} (LLM Analyze)`;
+          const providerBrand = engine === 'ollama' ? 'ollama' : provider;
+
+          try {
+            gw.registerProvider(
+              providerId,
+              providerName,
+              providerBrand,
+              baseUrl,
+              apiKey,
+              protocol,
+            );
+          } catch {
+            // already exists
+          }
+
+          try {
+            gw.registerModel(
+              model,
+              providerId,
+              model,
+              undefined,
+            );
+          } catch {
+            // already exists
+          }
+
+          const executeSkillInline = (gw as any).executeSkillInline;
+          if (typeof executeSkillInline !== 'function') {
+            return JSON.stringify({
+              status: 'error',
+              engine,
+              provider,
+              model,
+              errorType: 'SKILL_EXECUTOR_UNAVAILABLE',
+              message: 'LlmGateway.executeSkillInline is unavailable. Please ensure aifastdb includes Phase-58 SkillExecutor APIs.',
+              switchTo: 'Set "engine": "cursor" to fallback to Cursor analysis.',
+            });
+          }
+
+          // 参数映射：content → prompt, model → model_name, systemPrompt → system_prompt, expect_json=true
+          const skillOutput = executeSkillInline.call(gw, content, model, systemPrompt, true);
+          const replyContent = skillOutput?.jsonContent || skillOutput?.content || '';
+          const totalTokens = Number(skillOutput?.totalTokens || 0);
+          const durationMs = Number(skillOutput?.durationMs || 0);
+
+          if (!replyContent) {
+            return JSON.stringify({
+              status: 'error',
+              engine,
+              provider,
+              model,
+              errorType: 'SKILL_EMPTY_RESULT',
+              message: 'SkillExecutor returned empty response.',
+              switchTo: 'Set "engine": "cursor" to fallback to Cursor analysis.',
+            });
+          }
+
+          let parsedResult: any = null;
+          let rawContent = replyContent;
+          const jsonMatch = rawContent.match(/```(?:json)?\s*\n?([\s\S]*?)\n?```/);
+          if (jsonMatch) rawContent = jsonMatch[1].trim();
+          try {
+            parsedResult = JSON.parse(rawContent);
+          } catch {
+            parsedResult = null;
+          }
+
+          return JSON.stringify({
+            status: 'ok',
+            projectName,
+            engine,
+            mode,
+            provider,
+            model,
+            baseUrl,
+            executor: 'skill_executor',
+            anchorName: anchorName || undefined,
+            result: parsedResult,
+            rawContent: parsedResult ? undefined : replyContent,
+            tokens: {
+              prompt: 0,
+              completion: 0,
+              total: totalTokens,
+            },
+            durationMs,
+            message: parsedResult
+              ? `SkillExecutor analysis completed (engine: ${engine}, provider: ${provider}, model: ${model}). Parsed JSON result available.`
+              : `SkillExecutor analysis completed (engine: ${engine}, provider: ${provider}, model: ${model}). Raw text returned (JSON parse failed).`,
+          });
+        } catch (e: any) {
+          const isAbort = e?.name === 'AbortError';
+          const hint = isAbort
+            ? `Request timed out. ${engine === 'ollama' ? 'The local model may be loading or too slow.' : 'The API server may be overloaded.'}`
+            : engine === 'ollama'
+              ? `Is Ollama running at ${baseUrl.replace(/\/v1\/?$/, '')}?`
+              : `Check onlineApiKey in .devplan/config.json.`;
+          return JSON.stringify({
+            status: 'error',
+            engine,
+            provider,
+            model,
+            errorType: 'SKILL_EXECUTION_FAILED',
+            message: `SkillExecutor execution failed: ${e instanceof Error ? e.message : String(e)}. ${hint}`,
+            switchTo: 'Set "engine": "cursor" to fallback to Cursor analysis.',
+          });
+        }
       }
 
       try {
@@ -4262,17 +4540,20 @@ async function handleToolCall(name: string, args: ToolArgs): Promise<string> {
       let model: string;
       let baseUrl: string;
       let apiKey: string | undefined;
+      let protocol: string;
 
       if (engine === 'ollama') {
         provider = 'ollama';
         model = llmCfg.ollamaModel || 'gemma3:27b';
         baseUrl = llmCfg.ollamaBaseUrl || 'http://localhost:11434/v1';
         apiKey = undefined;
+        protocol = 'openai_compat';
       } else {
         provider = llmCfg.onlineProvider || 'deepseek';
         model = llmCfg.onlineModel || 'deepseek-chat';
         baseUrl = llmCfg.onlineBaseUrl || 'https://api.deepseek.com/v1';
         apiKey = llmCfg.onlineApiKey || undefined;
+        protocol = llmCfg.onlineProtocol || 'openai_compat';
       }
 
       if (engine === 'models_online' && !apiKey) {
@@ -4280,6 +4561,61 @@ async function handleToolCall(name: string, args: ToolArgs): Promise<string> {
           status: 'error',
           message: `Online provider "${provider}" requires an API key. Set onlineApiKey in .devplan/config.json.`,
         });
+      }
+
+      // ---- T58.9: 优先接入 ai_db MemoryContentGenerator 生成 L1/L2/L3 ----
+      let memoryGenGateway: any = null;
+      let memoryGenReady = false;
+      try {
+        const { LlmGateway } = require('aifastdb');
+        if (LlmGateway) {
+          const projectBase = resolveBasePathForProject(projectName);
+          const projectRoot = path.dirname(projectBase);
+          const gatewayPath = path.join(projectRoot, '.devplan', projectName, 'llm-gateway-data');
+          fs.mkdirSync(gatewayPath, { recursive: true });
+
+          memoryGenGateway = new LlmGateway(gatewayPath);
+          const providerId = engine === 'ollama' ? 'ollama-memory-generator' : `online-memory-generator-${provider}`;
+          const providerName = engine === 'ollama' ? 'Ollama (Memory Generator)' : `${provider} (Memory Generator)`;
+          const providerBrand = engine === 'ollama' ? 'ollama' : provider;
+
+          try {
+            memoryGenGateway.registerProvider(
+              providerId,
+              providerName,
+              providerBrand,
+              baseUrl,
+              apiKey,
+              protocol,
+            );
+          } catch {
+            // already exists
+          }
+          try {
+            memoryGenGateway.registerModel(
+              model,
+              providerId,
+              model,
+              undefined,
+            );
+          } catch {
+            // already exists
+          }
+
+          // 注册内置记忆技能（幂等），失败不阻断流程
+          try {
+            if (typeof memoryGenGateway.ensureMemorySkills === 'function') {
+              memoryGenGateway.ensureMemorySkills();
+            }
+          } catch {
+            // ignore and let generateMemoryContent decide availability
+          }
+
+          memoryGenReady = typeof memoryGenGateway.generateMemoryContent === 'function';
+        }
+      } catch {
+        memoryGenGateway = null;
+        memoryGenReady = false;
       }
 
       // ---- 获取或创建缓存 ----
@@ -4424,10 +4760,67 @@ async function handleToolCall(name: string, args: ToolArgs): Promise<string> {
         try { return JSON.parse(cleaned); } catch { return null; }
       };
 
+      const extractFilePaths = (text: string): string[] => {
+        const rx = /(?:[A-Za-z]:[\\/]|\.{0,2}[\\/])[\w.\-/\\]+?\.(?:ts|tsx|js|jsx|rs|py|go|java|kt|swift|c|cc|cpp|h|hpp|json|yaml|yml|md)\b/g;
+        const hits = text.match(rx) || [];
+        return Array.from(new Set(hits)).slice(0, 6);
+      };
+
+      const extractCodeSnippet = (text: string): string => {
+        const fence = text.match(/```[\w-]*\n([\s\S]*?)```/);
+        if (fence?.[1]) return fence[1].trim().slice(0, 600);
+        const lines = text.split('\n').filter(l =>
+          /(function|class|const |let |var |if\s*\(|return |=>|::|impl |fn |def |public |private )/.test(l),
+        );
+        return lines.slice(0, 12).join('\n').trim().slice(0, 600);
+      };
+
+      const summarizeBySentences = (text: string, maxSentences: number, maxChars: number): string => {
+        const cleaned = String(text || '').replace(/\s+/g, ' ').trim();
+        if (!cleaned) return '';
+        const parts = cleaned.match(/[^。！？.!?]+[。！？.!?]?/g) || [cleaned];
+        const picked = parts.slice(0, maxSentences).join(' ');
+        return picked.slice(0, maxChars);
+      };
+
+      const enforceGranularity = (entry: any, rawContent: string): any => {
+        const mt = String(entry?.memoryType || '').toLowerCase();
+        const next = { ...entry };
+        if (mt === 'decision' || mt === 'bugfix') {
+          const paths = extractFilePaths(rawContent);
+          const code = extractCodeSnippet(rawContent);
+          const suffixParts: string[] = [];
+          if (paths.length > 0) suffixParts.push(`\n\n[Files]\n- ${paths.join('\n- ')}`);
+          if (code) suffixParts.push(`\n\n[Code Snippet]\n\`\`\`\n${code}\n\`\`\``);
+          if (suffixParts.length > 0) {
+            next.contentL2 = `${(next.contentL2 || '').trim()}${suffixParts.join('')}`.trim();
+            next.content = next.contentL2;
+          }
+          return next;
+        }
+        if (mt === 'summary') {
+          const compact = summarizeBySentences(next.contentL2 || next.content || rawContent, 3, 260);
+          if (compact) {
+            next.contentL2 = compact;
+            next.content = compact;
+          }
+          return next;
+        }
+        if (mt === 'pattern' || mt === 'insight' || mt === 'preference') {
+          const compact = summarizeBySentences(next.contentL2 || next.content || rawContent, 3, 420);
+          if (compact) {
+            next.contentL2 = compact;
+            next.content = compact;
+          }
+          return next;
+        }
+        return next;
+      };
+
       const systemPrompt = `你是一个记忆构建助手。请根据以下文档/任务内容生成多级记忆。
 生成三个层级（必须以 JSON 返回）：
 - L1（触点摘要）：一句话概括（15~30字），作为记忆的"入口"或"触点"
-- L2（详细记忆）：3~8句话，包含关键技术细节、设计决策、实现方案。要保留重要的技术名词和架构关系
+- L2（详细记忆）：默认 3~8句话，包含关键技术细节、设计决策、实现方案。要保留重要的技术名词和架构关系
 - L3_summary（结构总结）：列出主要组件、依赖关系及其作用（如果内容是技术文档）。如果是非技术内容，则提供内容的结构化摘要
 - memoryType：从 decision/pattern/bugfix/insight/preference/summary 中选择最合适的类型
 - importance：重要性评分 0~1
@@ -4435,6 +4828,12 @@ async function handleToolCall(name: string, args: ToolArgs): Promise<string> {
 - anchorName：触点名称（该记忆关联的核心概念/模块/功能）
 - anchorType：触点类型（module/concept/api/architecture/feature/library/protocol）
 - anchorOverview：触点概览（3~5句话的目录索引式摘要，列出该触点包含的关键子项、核心 Flow 条目、主要结构组件等。类似文件夹的 README，帮助 Agent 快速判断是否需要深入查看详情）
+
+粒度策略（必须遵守）：
+- decision/bugfix：L2 必须包含“决策或根因+修复思路+关键代码片段+文件路径”（若原文存在）
+- summary：仅保留 2~3 句阶段摘要，不要堆叠实现细节
+- pattern/insight/preference：保留 1~3 句结论 + 最小示例
+- 不要使用旧版 L1/L2/L3 定义，按本策略输出
 
 请严格以 JSON 格式返回：
 {"L1": "...", "L2": "...", "L3_summary": "...", "memoryType": "...", "importance": 0.7, "suggestedTags": [...], "anchorName": "...", "anchorType": "...", "anchorOverview": "..."}`;
@@ -4452,7 +4851,59 @@ async function handleToolCall(name: string, args: ToolArgs): Promise<string> {
           ? rawContent.slice(0, 12000) + '\n\n[... 内容已截断，共 ' + rawContent.length + ' 字符]'
           : rawContent;
 
-        const llmResult = await callLlm(systemPrompt, `标题：${title}\n\n${truncated}`);
+        // 1) 首选：MemoryContentGenerator（统一三层生成规则）
+        if (memoryGenReady && memoryGenGateway) {
+          try {
+            const out = memoryGenGateway.generateMemoryContent(
+              truncated,
+              model,
+              undefined,
+              undefined,
+              title,
+              candidate.sourceType === 'task'
+                ? `sourceId=${candidate.sourceId}; sourceType=task`
+                : `sourceId=${candidate.sourceId}; sourceType=doc`,
+            );
+
+            const l1 = out?.l1Summary ?? out?.l1_summary;
+            const l2 = out?.l2Detail ?? out?.l2_detail;
+            const l3 = out?.l3Content ?? out?.l3_content;
+            const tags = out?.suggestedTags ?? out?.suggested_tags;
+            const anchor = out?.suggestedAnchor ?? out?.suggested_anchor;
+            const anchorType = out?.suggestedAnchorType ?? out?.suggested_anchor_type;
+
+            if (l1 || l2 || l3) {
+              const entry: BatchCacheEntry = {
+                sourceId: candidate.sourceId,
+                sourceType: candidate.sourceType || 'doc',
+                memoryType: candidate.suggestedMemoryType || 'insight',
+                contentL1: l1 || rawContent.slice(0, 100),
+                contentL2: l2 || rawContent.slice(0, 500),
+                contentL3: l3 || rawContent,
+                content: l2 || l1 || rawContent.slice(0, 300),
+                importance: 0.7,
+                tags: Array.isArray(tags) ? tags : (candidate.suggestedTags || []),
+                relatedTaskId: candidate.sourceType === 'task' ? candidate.sourceId : undefined,
+                anchorName: anchor,
+                anchorType,
+                title,
+                preparedAt: Date.now(),
+                committed: false,
+              };
+              const normalized = enforceGranularity(entry, rawContent);
+              appendEntry(cacheRef, normalized);
+              writeBatchCache(cachePath, cacheRef);
+              return { ok: true };
+            }
+          } catch {
+            // fallback to legacy prompt-based generation
+          }
+        }
+
+        const llmResult = await callLlm(
+          systemPrompt,
+          `标题：${title}\n建议类型：${candidate.suggestedMemoryType || 'insight'}\n来源：${candidate.sourceType || 'doc'}\n\n${truncated}`,
+        );
 
         let entry: BatchCacheEntry;
         if (!llmResult) {
@@ -4471,6 +4922,7 @@ async function handleToolCall(name: string, args: ToolArgs): Promise<string> {
             preparedAt: Date.now(),
             committed: false,
           };
+          entry = enforceGranularity(entry, rawContent);
           appendEntry(cacheRef, entry);
           writeBatchCache(cachePath, cacheRef);
           return { ok: false };
@@ -4495,6 +4947,7 @@ async function handleToolCall(name: string, args: ToolArgs): Promise<string> {
           preparedAt: Date.now(),
           committed: false,
         };
+        entry = enforceGranularity(entry, rawContent);
         appendEntry(cacheRef, entry);
         writeBatchCache(cachePath, cacheRef);
         return { ok: true };
