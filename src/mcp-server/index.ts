@@ -2000,9 +2000,6 @@ async function handleToolCall(name: string, args: ToolArgs): Promise<string> {
         });
       }
 
-      const plan = getDevPlan(args.projectName);
-      const engine = getProjectEngine(args.projectName) || 'graph';
-
       // 自动写入/更新工作区级 .devplan/config.json
       const defaultBase = getDefaultBasePath();
       const existingConfig = readDevPlanConfig(defaultBase);
@@ -2015,6 +2012,9 @@ async function handleToolCall(name: string, args: ToolArgs): Promise<string> {
 
       // 多项目工作区：自动注册新项目到工作区 config.json 的 projects 表
       // 当项目名不在 projects 注册表中时，尝试在工作区根目录的同级查找同名目录
+      // ⚠️ Phase-114 Fix: 必须在 getDevPlan() 之前完成注册，
+      //    否则 resolveBasePathForProject 会回退到默认 basePath，
+      //    导致数据被写入错误的项目目录下。
       let autoRegistered = false;
       const workspaceConfig = readDevPlanConfig(defaultBase) || {
         defaultProject: args.projectName,
@@ -2054,6 +2054,15 @@ async function handleToolCall(name: string, args: ToolArgs): Promise<string> {
           console.error(`[devplan] Created project-level config.json at ${projectBase}`);
         }
       }
+
+      // ⚠️ Phase-114 Fix: getDevPlan 必须在自动注册之后调用。
+      //    此前 getDevPlan 在注册前调用，导致 resolveBasePathForProject 找不到
+      //    项目注册信息，回退到 defaultBase（如 ai_db/.devplan），
+      //    新项目的 store 被缓存到错误路径，后续所有操作都写入错误目录。
+      //    同时清除可能残留的旧缓存，确保使用最新的路由信息。
+      devPlanCache.delete(args.projectName);
+      const plan = getDevPlan(args.projectName);
+      const engine = getProjectEngine(args.projectName) || 'graph';
 
       // 自动生成 .cursor/rules/dev-plan-management.mdc 模板
       // 仅当项目根目录可确定、且规则文件不存在时生成

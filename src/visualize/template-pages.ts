@@ -1772,6 +1772,31 @@ function startAiBatchProcess(resumeMode) {
   var phaseASkipped = 0;
   var phaseACached = 0;  // Phase-65: 从缓存恢复的数量
   var startTime = Date.now();
+  var fetchProgressTimer = null;
+  var fetchProgressValue = 0;
+
+  function stopCandidateFetchProgress() {
+    if (fetchProgressTimer) {
+      clearInterval(fetchProgressTimer);
+      fetchProgressTimer = null;
+    }
+  }
+
+  // Phase-112: 第一步“获取候选项”增加可见进度反馈（伪进度，避免静态等待）
+  function startCandidateFetchProgress() {
+    stopCandidateFetchProgress();
+    fetchProgressValue = 2;
+    if (progressEl) progressEl.style.width = fetchProgressValue + '%';
+    if (detailEl) detailEl.textContent = '🔎 正在扫描文档与任务，准备候选项...';
+    fetchProgressTimer = setInterval(function() {
+      if (!_aiBatchRunning) {
+        stopCandidateFetchProgress();
+        return;
+      }
+      fetchProgressValue = Math.min(14, fetchProgressValue + Math.random() * 1.6 + 0.7);
+      if (progressEl) progressEl.style.width = fetchProgressValue.toFixed(1) + '%';
+    }, 220);
+  }
 
   // Phase-64: 分相缓存 — Phase A 的 LLM 结果暂存在 JS 数组中
   var preparedResults = [];
@@ -1808,14 +1833,18 @@ function startAiBatchProcess(resumeMode) {
   }
 
   // Step 1: Get all candidates
+  startCandidateFetchProgress();
   fetch('/api/memories/generate?source=' + encodeURIComponent(source) + '&limit=99999')
     .then(function(r) { return r.json(); })
     .then(function(data) {
+      stopCandidateFetchProgress();
+      if (progressEl) progressEl.style.width = '15%';
       var candidates = data.candidates || [];
       totalSkipped = (data.stats && data.stats.skippedWithMemory) || 0;
 
       if (candidates.length === 0 && preparedResults.length === 0) {
         if (statusEl) statusEl.textContent = '✅ 没有可处理的候选项' + (totalSkipped > 0 ? '（已跳过 ' + totalSkipped + ' 条已有记忆）' : '');
+        if (progressEl) progressEl.style.width = '100%';
         _aiBatchRunning = false;
         _batchCacheClear();
         if (cancelBtn) { cancelBtn.textContent = '关闭'; cancelBtn.onclick = function() { closeAiBatch(); }; }
@@ -1825,6 +1854,7 @@ function startAiBatchProcess(resumeMode) {
       // Phase-65: 如果没有新候选但有缓存 → 直接 Phase B
       if (candidates.length === 0 && preparedResults.length > 0) {
         if (statusEl) statusEl.textContent = '✅ 无新候选项，直接保存 ' + preparedResults.length + ' 条缓存结果';
+        if (progressEl) progressEl.style.width = '60%';
         if (streamArea) {
           streamArea.textContent = '📦 无需 Phase A（全部已缓存: ' + preparedResults.length + ' 条）\\n🔄 切换到 Phase B: 保存记忆 + Embedding ...';
         }
@@ -1853,6 +1883,7 @@ function startAiBatchProcess(resumeMode) {
 
       // 如果没有新候选需要处理 → 直接 Phase B
       if (newCandidates.length === 0) {
+        if (progressEl) progressEl.style.width = '60%';
         if (streamArea) {
           streamArea.textContent = '✅ Phase A: 全部 ' + phaseACached + ' 条已在缓存中，无需重新生成\\n🔄 切换到 Phase B: 保存记忆 + Embedding ...';
         }
@@ -1890,7 +1921,7 @@ function startAiBatchProcess(resumeMode) {
           : rawContent;
 
         var doneCount = phaseACached + idxA;
-        var pct = Math.round(((doneCount + 1) / totalCandidates) * 50);  // Phase A 占 0~50%
+        var pct = 15 + Math.round(((doneCount + 1) / totalCandidates) * 45);  // Phase A 占 15~60%
         if (progressEl) progressEl.style.width = pct + '%';
         if (statusEl) statusEl.textContent = 'Phase A (' + model + '): ' + (doneCount + 1) + '/' + totalCandidates + ' — LLM 生成 L1/L2/L3...' + (phaseACached > 0 ? ' (缓存: ' + phaseACached + ')' : '');
         if (detailEl) {
@@ -1977,6 +2008,7 @@ function startAiBatchProcess(resumeMode) {
         }
 
         var phaseATime = ((Date.now() - startTime) / 1000).toFixed(1);
+        if (progressEl) progressEl.style.width = '60%';
         if (streamArea) {
           streamArea.textContent = '✅ Phase A 完成: ' + preparedResults.length + ' 条 LLM 结果已缓存 (' + phaseATime + 's)'
             + (phaseACached > 0 ? '\\n   （其中 ' + phaseACached + ' 条来自断点续传缓存）' : '')
@@ -2023,6 +2055,7 @@ function startAiBatchProcess(resumeMode) {
       processPhaseA();
     })
     .catch(function(err) {
+      stopCandidateFetchProgress();
       if (statusEl) statusEl.textContent = '❌ 获取候选项失败: ' + (err.message || err);
       _aiBatchRunning = false;
       if (cancelBtn) { cancelBtn.textContent = '关闭'; cancelBtn.onclick = function() { closeAiBatch(); }; }
@@ -2046,7 +2079,7 @@ function startAiBatchProcess(resumeMode) {
     }
 
     var entry = preparedResults[idxB];
-    var pct = 50 + Math.round(((idxB + 1) / preparedResults.length) * 50);  // Phase B 占 50~100%
+    var pct = 60 + Math.round(((idxB + 1) / preparedResults.length) * 40);  // Phase B 占 60~100%
     if (progressEl) progressEl.style.width = pct + '%';
     if (statusEl) statusEl.textContent = 'Phase B (Embedding): ' + (idxB + 1) + '/' + preparedResults.length + ' — 保存记忆 + 向量化...';
     if (detailEl) {
@@ -2383,8 +2416,8 @@ function checkAllMemoriesIntegrity() {
     if (s.warnings > 0) html += '<span style="color:#f59e0b;">⚠️ 警告: ' + s.warnings + '</span>';
     if (s.errors > 0) html += '<span style="color:#ef4444;">❌ 错误: ' + s.errors + '</span>';
     html += '<span style="color:#6b7280;">📊 总计: ' + s.total + '</span>';
-    // Phase-78C: 一键修复按钮（仅在有可修复的问题时显示 — embedding 和 memoryType）
-    var fixableCount = (wb.embedding || 0) + (eb.memoryType || 0);
+    // Phase-111: 一键修复按钮（embedding + memoryType + anchor）
+    var fixableCount = (wb.embedding || 0) + (eb.memoryType || 0) + (wb.anchor || 0);
     if (fixableCount > 0) {
       html += '<button id="memoryRepairBtn" onclick="batchRepairMemories()" style="background:#7c3aed;color:#e9d5ff;border:1px solid #8b5cf6;border-radius:6px;padding:3px 12px;font-size:11px;font-weight:600;cursor:pointer;margin-left:8px;transition:all 0.2s;" onmouseover="this.style.background=\\x27#6d28d9\\x27" onmouseout="this.style.background=\\x27#7c3aed\\x27">🔧 一键修复 (' + fixableCount + ')</button>';
     }
@@ -2396,7 +2429,7 @@ function checkAllMemoriesIntegrity() {
       html += '<div style="display:flex;flex-wrap:wrap;gap:12px;padding:6px 12px;background:#1a1a2e;border-radius:6px;margin-top:6px;font-size:11px;">';
       if (wb.embedding > 0) html += '<span style="color:#f59e0b;">🧬 缺 Embedding: <strong>' + wb.embedding + '</strong> <span style="color:#6b7280;">(可修复)</span></span>';
       if (eb.memoryType > 0) html += '<span style="color:#ef4444;">🏷️ 非法 Type: <strong>' + eb.memoryType + '</strong> <span style="color:#6b7280;">(可修复)</span></span>';
-      if (wb.anchor > 0) html += '<span style="color:#9ca3af;">⚓ 缺 Anchor: <strong>' + wb.anchor + '</strong> <span style="color:#6b7280;">(需手动关联)</span></span>';
+      if (wb.anchor > 0) html += '<span style="color:#fbbf24;">⚓ 缺 Anchor: <strong>' + wb.anchor + '</strong> <span style="color:#6b7280;">(可回填)</span></span>';
       if (wb.importance > 0) html += '<span style="color:#9ca3af;">⭐ importance 异常: <strong>' + wb.importance + '</strong></span>';
       if (wb.contentShort > 0) html += '<span style="color:#9ca3af;">📝 内容过短: <strong>' + wb.contentShort + '</strong></span>';
       if (eb.content > 0) html += '<span style="color:#ef4444;">📝 内容为空: <strong>' + eb.content + '</strong></span>';
@@ -2558,7 +2591,7 @@ function batchRepairMemories() {
     var sm = data.summary;
     var rd = data.diagnostics || {};
     var html = '<div style="color:#e9d5ff;font-size:12px;line-height:1.8;">';
-    html += '<div style="font-weight:600;font-size:13px;margin-bottom:8px;">🔧 修复完成</div>';
+    html += '<div style="font-weight:600;font-size:13px;margin-bottom:8px;">🔧 修复完成（Type + Embedding）</div>';
     html += '<div style="display:flex;gap:16px;flex-wrap:wrap;">';
     html += '<span>📊 处理总数: <strong>' + sm.totalProcessed + '</strong></span>';
     if (sm.fixedTypes > 0) html += '<span style="color:#a7f3d0;">✅ Type 已修复: <strong>' + sm.fixedTypes + '</strong></span>';
@@ -2611,7 +2644,8 @@ function batchRepairMemories() {
       html += '</div>';
     }
 
-    html += '<div style="margin-top:10px;padding-top:8px;border-top:1px dashed #4338ca;">';
+    html += '<div style="margin-top:10px;padding-top:8px;border-top:1px dashed #4338ca;display:flex;gap:8px;flex-wrap:wrap;">';
+    html += '<button onclick="batchRepairAnchors()" style="background:#7c2d12;color:#fed7aa;border:1px solid #c2410c;border-radius:6px;padding:5px 14px;font-size:11px;font-weight:600;cursor:pointer;">⚓ 回填 Anchor</button>';
     html += '<button onclick="checkAllMemoriesIntegrity()" style="background:#312e81;color:#a5b4fc;border:1px solid #6366f1;border-radius:6px;padding:5px 14px;font-size:11px;font-weight:600;cursor:pointer;">🔍 重新检测</button>';
     html += '<span style="color:#6b7280;font-size:10px;margin-left:12px;">点击重新检测以验证修复效果</span>';
     html += '</div>';
@@ -2621,6 +2655,55 @@ function batchRepairMemories() {
   }).catch(function(err) {
     if (btn) { btn.textContent = '🔧 一键修复'; btn.disabled = false; btn.style.opacity = '1'; }
     progressEl.innerHTML = '<div style="color:#f87171;font-size:12px;">❌ 修复请求失败: ' + (err.message || err) + '</div>';
+  });
+}
+
+/**
+ * Phase-111: 批量回填缺失 Anchor
+ * 调用 /api/batch/repair-anchor，对无 Anchor 记忆进行二次抽取并回填 anchored_by 关系
+ */
+function batchRepairAnchors() {
+  var resultArea = document.getElementById('memoryVerifyResultArea');
+  if (!resultArea) return;
+  var progressEl = document.getElementById('repairProgressArea');
+  if (!progressEl) return;
+
+  progressEl.innerHTML = '<div style="text-align:center;"><div class="spinner" style="display:inline-block;width:16px;height:16px;border-width:2px;vertical-align:middle;margin-right:8px;"></div><span style="color:#fdba74;font-size:12px;">正在回填缺失 Anchor 触点...</span></div>';
+
+  fetch('/api/batch/repair-anchor', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({})
+  }).then(function(r) { return r.json(); }).then(function(data) {
+    if (!data || !data.summary) {
+      progressEl.innerHTML = '<div style="color:#f87171;font-size:12px;">❌ Anchor 回填失败：无效响应</div>';
+      return;
+    }
+
+    var sm = data.summary;
+    var dg = data.diagnostics || {};
+    var html = '<div style="color:#ffedd5;font-size:12px;line-height:1.8;">';
+    html += '<div style="font-weight:600;font-size:13px;margin-bottom:8px;">⚓ Anchor 回填完成</div>';
+    html += '<div style="display:flex;gap:16px;flex-wrap:wrap;">';
+    html += '<span>📊 处理总数: <strong>' + sm.totalProcessed + '</strong></span>';
+    html += '<span style="color:#fde68a;">⚠ 缺 Anchor: <strong>' + sm.missingAnchor + '</strong></span>';
+    html += '<span style="color:#86efac;">✅ 已回填: <strong>' + sm.repaired + '</strong></span>';
+    if (sm.failed > 0) html += '<span style="color:#fca5a5;">❌ 失败: <strong>' + sm.failed + '</strong></span>';
+    if (sm.skippedWithAnchor > 0) html += '<span style="color:#9ca3af;">⏭ 已有 Anchor: <strong>' + sm.skippedWithAnchor + '</strong></span>';
+    html += '</div>';
+    html += '<div style="margin-top:4px;font-size:10px;color:#6b7280;">';
+    html += 'anchorUpsert: ' + (dg.hasAnchorUpsert ? '✅' : '❌') + ' | ';
+    html += 'anchorExtract: ' + (dg.hasAnchorExtract ? '✅' : '❌') + ' | ';
+    html += 'flowAppend: ' + (dg.hasFlowAppend ? '✅' : '❌');
+    html += '</div>';
+    html += '<div style="margin-top:10px;padding-top:8px;border-top:1px dashed #4338ca;">';
+    html += '<button onclick="checkAllMemoriesIntegrity()" style="background:#312e81;color:#a5b4fc;border:1px solid #6366f1;border-radius:6px;padding:5px 14px;font-size:11px;font-weight:600;cursor:pointer;">🔍 重新检测</button>';
+    html += '<span style="color:#6b7280;font-size:10px;margin-left:12px;">回填后建议立即重新检测</span>';
+    html += '</div>';
+    html += '</div>';
+    progressEl.innerHTML = html;
+  }).catch(function(err) {
+    progressEl.innerHTML = '<div style="color:#f87171;font-size:12px;">❌ Anchor 回填请求失败: ' + (err.message || err) + '</div>';
   });
 }
 

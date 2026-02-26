@@ -2003,6 +2003,202 @@ function startServer(projectName: string, basePath: string, port: number): void 
           break;
         }
 
+        // ======== Phase-111: 批量回填缺失 Anchor 触点 ========
+        case '/api/batch/repair-anchor': {
+          if (req.method !== 'POST') {
+            res.writeHead(405, { 'Content-Type': 'application/json; charset=utf-8' });
+            res.end(JSON.stringify({ error: 'Method Not Allowed. Use POST.' }));
+            break;
+          }
+
+          const repairBody = await readRequestBody(req);
+          const repairMemoryIds: string[] | undefined = repairBody.memoryIds;
+          const dryRun: boolean = repairBody.dryRun === true;
+
+          const repairStore = createFreshStore(projectName, basePath);
+          if (typeof (repairStore as any).listMemories !== 'function') {
+            res.writeHead(400, { 'Content-Type': 'application/json; charset=utf-8' });
+            res.end(JSON.stringify({ error: 'listMemories not supported (requires graph engine)' }));
+            break;
+          }
+
+          try {
+            const allMems: any[] = (repairStore as any).listMemories({});
+            const rg = (repairStore as any).graph;
+
+            const hasAnchorUpsert = !!(rg && typeof rg.anchorUpsert === 'function');
+            const hasAnchorExtract = !!(rg && typeof rg.anchorExtractFromText === 'function');
+            const hasFlowAppend = !!(rg && typeof rg.flowAppend === 'function');
+            const hasOutgoingByType = !!(rg && typeof rg.outgoingByType === 'function');
+            const hasPutRelation = !!(rg && typeof rg.putRelation === 'function');
+
+            if (!hasAnchorUpsert || !hasOutgoingByType || !hasPutRelation) {
+              res.writeHead(400, { 'Content-Type': 'application/json; charset=utf-8' });
+              res.end(JSON.stringify({
+                error: 'Anchor API unavailable in current runtime. Please align aifastdb native module and restart Cursor.',
+                diagnostics: {
+                  hasAnchorUpsert,
+                  hasAnchorExtract,
+                  hasFlowAppend,
+                  hasOutgoingByType,
+                  hasPutRelation,
+                },
+              }));
+              break;
+            }
+
+            let targetMems = allMems;
+            if (repairMemoryIds && repairMemoryIds.length > 0) {
+              const idSet = new Set(repairMemoryIds);
+              targetMems = allMems.filter(m => idSet.has(m.id));
+            }
+
+            const memoryHasAnchor = (memId: string): boolean => {
+              try {
+                const rels = rg.outgoingByType(memId, 'anchored_by');
+                return !!(rels && rels.length > 0);
+              } catch {
+                return false;
+              }
+            };
+
+            const inferAnchor = (mem: any): { anchorName: string; anchorType: string; strategy: string } => {
+              const content = String(mem.content || '');
+              const contentL3 = String(mem.contentL3 || '');
+              const sourceId = mem.sourceRef?.sourceId ? String(mem.sourceRef.sourceId) : '';
+              const tags = Array.isArray(mem.tags) ? mem.tags : [];
+
+              if (hasAnchorExtract) {
+                try {
+                  const extracted = rg.anchorExtractFromText(contentL3 || content);
+                  if (Array.isArray(extracted) && extracted.length > 0) {
+                    const best = extracted.reduce((a: any, b: any) => (a.confidence || 0) >= (b.confidence || 0) ? a : b);
+                    if (best?.name) {
+                      return {
+                        anchorName: String(best.name),
+                        anchorType: String(best.suggested_type || 'concept'),
+                        strategy: 'native_extract',
+                      };
+                    }
+                  }
+                } catch {
+                  // ignore and fallback to heuristics
+                }
+              }
+
+              if (sourceId) {
+                if (!sourceId.startsWith('phase-') && !sourceId.startsWith('T')) {
+                  const parts = sourceId.split('|').filter(Boolean);
+                  if (parts.length > 0) {
+                    const pick = parts.length > 1 ? parts[parts.length - 1] : parts[0];
+                    return { anchorName: pick, anchorType: 'concept', strategy: 'sourceRef' };
+                  }
+                }
+              }
+
+              const usefulTag = tags.find((t: string) =>
+                typeof t === 'string'
+                && t.length >= 3
+                && !['summary', 'memory', 'docs', 'task', 'tasks'].includes(t.toLowerCase()));
+              if (usefulTag) {
+                return { anchorName: usefulTag, anchorType: 'concept', strategy: 'tag' };
+              }
+
+              const codeName = content.match(/`([A-Za-z_][A-Za-z0-9_:\\/.-]{2,})`/);
+              if (codeName?.[1]) {
+                return { anchorName: codeName[1], anchorType: 'api', strategy: 'code_token' };
+              }
+
+              const fallback = (sourceId || `memory-${String(mem.id || '').slice(0, 8)}`).slice(0, 60);
+              return { anchorName: fallback, anchorType: 'concept', strategy: 'fallback' };
+            };
+
+            const missingAnchorMems = targetMems.filter((m) => !memoryHasAnchor(m.id));
+            const results: any[] = [];
+            let repaired = 0;
+            let failed = 0;
+
+            for (const mem of missingAnchorMems) {
+              const inferred = inferAnchor(mem);
+              const anchorDesc = String(mem.contentL1 || mem.content || inferred.anchorName).replace(/\s+/g, ' ').slice(0, 120);
+              if (dryRun) {
+                results.push({
+                  memoryId: mem.id,
+                  sourceRef: mem.sourceRef?.sourceId || undefined,
+                  anchorName: inferred.anchorName,
+                  anchorType: inferred.anchorType,
+                  strategy: inferred.strategy,
+                  status: 'would_repair',
+                });
+                continue;
+              }
+
+              try {
+                const anchor = rg.anchorUpsert(inferred.anchorName, inferred.anchorType, anchorDesc, undefined);
+                rg.putRelation(mem.id, anchor.id, 'anchored_by');
+
+                if (hasFlowAppend) {
+                  try {
+                    const flowSummary = String(mem.contentL1 || mem.content || inferred.anchorName).replace(/\s+/g, ' ').slice(0, 80);
+                    const flowDetail = String(mem.contentL2 || mem.contentL3 || mem.content || '');
+                    rg.flowAppend(anchor.id, 'modified', flowSummary, flowDetail, mem.relatedTaskId || null);
+                  } catch {
+                    // flow append is best-effort
+                  }
+                }
+
+                repaired++;
+                results.push({
+                  memoryId: mem.id,
+                  sourceRef: mem.sourceRef?.sourceId || undefined,
+                  anchorId: anchor.id,
+                  anchorName: anchor.name,
+                  anchorType: anchor.anchor_type,
+                  strategy: inferred.strategy,
+                  status: 'repaired',
+                });
+              } catch (e: any) {
+                failed++;
+                results.push({
+                  memoryId: mem.id,
+                  sourceRef: mem.sourceRef?.sourceId || undefined,
+                  anchorName: inferred.anchorName,
+                  anchorType: inferred.anchorType,
+                  strategy: inferred.strategy,
+                  status: 'failed',
+                  error: e?.message || String(e),
+                });
+              }
+            }
+
+            if (!dryRun && rg && typeof rg.flush === 'function') {
+              rg.flush();
+            }
+
+            res.writeHead(200, { 'Content-Type': 'application/json; charset=utf-8' });
+            res.end(JSON.stringify({
+              status: dryRun ? 'dry_run' : 'repaired',
+              summary: {
+                totalProcessed: targetMems.length,
+                missingAnchor: missingAnchorMems.length,
+                repaired,
+                failed,
+                skippedWithAnchor: targetMems.length - missingAnchorMems.length,
+              },
+              diagnostics: {
+                hasAnchorUpsert,
+                hasAnchorExtract,
+                hasFlowAppend,
+              },
+              results,
+            }));
+          } catch (e: any) {
+            res.writeHead(500, { 'Content-Type': 'application/json; charset=utf-8' });
+            res.end(JSON.stringify({ error: e.message || String(e) }));
+          }
+          break;
+        }
+
         case '/favicon.ico':
           res.writeHead(204);
           res.end();
