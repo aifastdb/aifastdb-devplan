@@ -15,8 +15,22 @@ import * as path from 'path';
 // ============================================================================
 
 export interface BatchCacheEntry {
-  /** 候选项的 sourceId (用于去重) */
-  sourceId: string;
+  /** 统一来源标识（写入 ai_db source_ref） */
+  sourceRef: {
+    sourceId: string;
+    variant?: string;
+  };
+  /** 统一证据追溯（写入 ai_db provenance） */
+  provenance?: {
+    origin?: string;
+    note?: string;
+    evidences: Array<{
+      kind: string;
+      refId?: string;
+      locator?: string;
+      excerpt?: string;
+    }>;
+  };
   /** 候选项来源类型 */
   sourceType: 'task' | 'doc';
   /** AI 提炼的记忆类型 */
@@ -57,7 +71,10 @@ export interface BatchCacheEntry {
 
 /** 精简版候选项（只保存必要字段，避免每次调用 generateMemoryCandidates） */
 export interface CachedCandidate {
-  sourceId: string;
+  sourceRef: {
+    sourceId: string;
+    variant?: string;
+  };
   sourceType: 'task' | 'doc';
   title: string;
   content: string;
@@ -171,8 +188,9 @@ export function createBatchCache(
  * 追加条目到缓存
  */
 export function appendEntry(cache: BatchCacheFile, entry: BatchCacheEntry): void {
-  // 去重：同一 sourceId 不重复添加
-  const existing = cache.entries.findIndex(e => e.sourceId === entry.sourceId);
+  // 去重：同一 sourceRef.sourceId 不重复添加
+  const sourceKey = entry.sourceRef.sourceId;
+  const existing = cache.entries.findIndex(e => e.sourceRef.sourceId === sourceKey);
   if (existing >= 0) {
     cache.entries[existing] = entry; // 更新
   } else {

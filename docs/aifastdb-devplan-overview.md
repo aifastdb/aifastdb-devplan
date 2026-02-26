@@ -18,7 +18,7 @@ v1.0.0  16 个 MCP 工具，从 ai_db 独立拆分
   ↓
 v2.0.0  双引擎架构 — Graph (SocialGraphV2) + Document (JSONL)
   ↓
-v3.0.0  图谱可视化服务 — vis-network 交互式图谱 + 统计仪表盘
+v3.0.0  项目图谱服务 — vis-network 交互式图谱 + 统计仪表盘
   ↓
 v4.0.0  任务排序 + 语义搜索 — order 字段、VibeSynapse MiniLM 集成
   ↓
@@ -30,7 +30,7 @@ v5.0.0  (规划) 多项目路由 + Autopilot 模块 — cursor_auto 融合
 **当前状态：**
 - ✅ 双引擎存储（Graph + Document）+ 数据迁移
 - ✅ 23 个 MCP 工具（文档/任务/模块/可视化/搜索）
-- ✅ 图谱可视化 + 统计仪表盘 HTTP 服务
+- ✅ 项目图谱 + 统计仪表盘 HTTP 服务
 - ✅ 语义搜索（VibeSynapse Candle MiniLM + HNSW）
 - ✅ 多项目路由（项目注册表 + 自动发现）
 - ⬜ Autopilot 模块（cursor_auto 融合，HTTP API + Python Executor）
@@ -159,7 +159,7 @@ aifastdb-devplan
 | | `devplan_get_module` | 模块详情（含关联任务/文档） |
 | | `devplan_update_module` | 更新模块信息 |
 | **引擎** | `devplan_migrate_engine` | 双向数据迁移 (graph ↔ document) |
-| **可视化** | `devplan_start_visual` | 启动图谱可视化 HTTP 服务 |
+| **可视化** | `devplan_start_visual` | 启动项目图谱 HTTP 服务 |
 | | `devplan_export_graph` | 导出图结构（vis-network 兼容） |
 
 ---
@@ -169,7 +169,7 @@ aifastdb-devplan
 ### 5.1 可视化服务 (已实现)
 
 ```
-GET  /                    # 图谱可视化页面 (vis-network)
+GET  /                    # 项目图谱页面 (vis-network)
 GET  /dashboard           # 统计仪表盘页面
 GET  /api/graph           # 图谱数据（节点+边）
 GET  /api/progress        # 项目进度 JSON

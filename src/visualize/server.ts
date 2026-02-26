@@ -111,7 +111,7 @@ function createStore(project: string, basePath: string): IDevPlanStore {
  * 如果复用启动时创建的 store，内存中的数据不会自动同步磁盘变化，
  * 导致 /api/graph 和 /api/progress 返回过时数据。
  *
- * 由于可视化页面的 API 调用频率很低（仅刷新/加载时），
+ * 由于项目图谱页面的 API 调用频率很低（仅刷新/加载时），
  * 每次重新创建 store 的性能开销完全可以接受。
  */
 function createFreshStore(projectName: string, basePath: string): IDevPlanStore {
@@ -298,9 +298,9 @@ function startServer(projectName: string, basePath: string, port: number): void 
           const includeModules = url.searchParams.get('includeModules') !== 'false';
           const includeNodeDegree = url.searchParams.get('includeNodeDegree') !== 'false';
           const enableBackendDegreeFallback = url.searchParams.get('enableBackendDegreeFallback') !== 'false';
-          // 可视化页面默认不渲染 Prompt 节点（通过顶部统计栏点击查看 Prompt 列表）
+          // 项目图谱页面默认不渲染 Prompt 节点（通过顶部统计栏点击查看 Prompt 列表）
           const includePrompts = url.searchParams.get('includePrompts') === 'true';
-          // Phase-68: 可视化页面默认不加载记忆节点，勾选记忆复选框后才加载
+          // Phase-68: 项目图谱页面默认不加载记忆节点，勾选记忆复选框后才加载
           const includeMemories = url.searchParams.get('includeMemories') !== 'false';
 
           if (store.exportGraph) {
@@ -628,7 +628,8 @@ function startServer(projectName: string, basePath: string, port: number): void 
               content: saveBody.content || '',
               tags: saveBody.tags || [],
               relatedTaskId: saveBody.relatedTaskId || undefined,
-              sourceId: saveBody.sourceId || undefined,
+              sourceRef: saveBody.sourceRef || undefined,
+              provenance: saveBody.provenance || undefined,
               importance: saveBody.importance ?? 0.5,
             });
             res.writeHead(200, { 'Content-Type': 'application/json; charset=utf-8' });
@@ -1497,7 +1498,7 @@ function startServer(projectName: string, basePath: string, port: number): void 
 生成三个层级（必须以 JSON 返回）：
 - L1（触点摘要）：一句话概括（15~30字），作为记忆的"入口"或"触点"
 - L2（详细记忆）：3~8句话，包含关键技术细节、设计决策、实现方案。要保留重要的技术名词和架构关系
-- L3_summary（结构总结）：列出主要组件、依赖关系及其作用（如果内容是技术文档）。如果是非技术内容，则提供内容的结构化摘要
+- L3_index（结构索引）：列出主要组件、依赖关系及其作用（如果内容是技术文档）。如果是非技术内容，则提供内容的结构化摘要；若存在原始材料入口（commit/diff/log），请保留这些线索
 - memoryType：从 decision/pattern/bugfix/insight/preference/summary 中选择最合适的类型
 - importance：重要性评分 0~1
 - suggestedTags：建议标签数组
@@ -1506,7 +1507,7 @@ function startServer(projectName: string, basePath: string, port: number): void 
 - anchorOverview：触点概览（3~5句话的目录索引式摘要，列出该触点包含的关键子项、核心 Flow 条目、主要结构组件等。类似文件夹的 README，帮助 Agent 快速判断是否需要深入查看详情）
 
 请严格以 JSON 格式返回：
-{"L1": "...", "L2": "...", "L3_summary": "...", "memoryType": "...", "importance": 0.7, "suggestedTags": [...], "anchorName": "...", "anchorType": "...", "anchorOverview": "..."}`,
+{"L1": "...", "L2": "...", "L3_index": "...", "memoryType": "...", "importance": 0.7, "suggestedTags": [...], "anchorName": "...", "anchorType": "...", "anchorOverview": "..."}`,
           }));
           break;
         }
@@ -1532,7 +1533,8 @@ function startServer(projectName: string, basePath: string, port: number): void 
               content: batchSaveBody.content || '',
               tags: batchSaveBody.tags || [],
               relatedTaskId: batchSaveBody.relatedTaskId || undefined,
-              sourceId: batchSaveBody.sourceId || undefined,
+              sourceRef: batchSaveBody.sourceRef || undefined,
+              provenance: batchSaveBody.provenance || undefined,
               importance: batchSaveBody.importance ?? 0.5,
               source: 'batch_import_ui',
               contentL1: batchSaveBody.contentL1 || undefined,
@@ -1563,20 +1565,20 @@ function startServer(projectName: string, basePath: string, port: number): void 
         }
 
         case '/api/batch/verify': {
-          // Phase-69/78: 记忆完整性检测端点（支持 sourceIds / memoryIds / checkAll）
+          // Phase-69/78/100: 记忆完整性检测端点（支持 sourceRefs / memoryIds / checkAll）
           if (req.method !== 'POST') {
             res.writeHead(405, { 'Content-Type': 'application/json; charset=utf-8' });
             res.end(JSON.stringify({ error: 'Method Not Allowed. Use POST.' }));
             break;
           }
           const verifyBody = await readRequestBody(req);
-          const verifySourceIds: string[] = verifyBody.sourceIds || [];
+          const verifySourceRefs: string[] = verifyBody.sourceRefs || [];
           const verifyMemoryIds: string[] = verifyBody.memoryIds || [];
           const verifyAll: boolean = verifyBody.checkAll === true;  // Phase-78: 全量检测模式
 
-          if (verifySourceIds.length === 0 && verifyMemoryIds.length === 0 && !verifyAll) {
+          if (verifySourceRefs.length === 0 && verifyMemoryIds.length === 0 && !verifyAll) {
             res.writeHead(400, { 'Content-Type': 'application/json; charset=utf-8' });
-            res.end(JSON.stringify({ error: 'Missing required: sourceIds, memoryIds, or checkAll=true' }));
+            res.end(JSON.stringify({ error: 'Missing required: sourceRefs, memoryIds, or checkAll=true' }));
             break;
           }
 
@@ -1636,11 +1638,15 @@ function startServer(projectName: string, basePath: string, port: number): void 
               }
             }
 
-            // 按 sourceId 和 id 建立索引
-            const bySourceId = new Map<string, any>();
+            // 按 sourceRef.sourceId 和 id 建立索引（同源可多条）
+            const bySourceRef = new Map<string, any[]>();
             const byId = new Map<string, any>();
             for (const mem of allMemories) {
-              if (mem.sourceId) bySourceId.set(mem.sourceId, mem);
+              const sid = mem.sourceRef?.sourceId;
+              if (sid) {
+                if (!bySourceRef.has(sid)) bySourceRef.set(sid, []);
+                bySourceRef.get(sid)!.push(mem);
+              }
               byId.set(mem.id, mem);
             }
 
@@ -1708,7 +1714,7 @@ function startServer(projectName: string, basePath: string, port: number): void 
               const status = issues.length > 0 ? 'error' : (warnings.length > 0 ? 'warning' : 'pass');
               return {
                 memoryId: mem.id,
-                sourceId: mem.sourceId || undefined,
+                sourceRef: mem.sourceRef?.sourceId || undefined,
                 memoryType: mem.memoryType,
                 contentLength: mem.content?.length || 0,
                 hasEmbedding,
@@ -1739,27 +1745,29 @@ function startServer(projectName: string, basePath: string, port: number): void 
               }
             }
 
-            // 检查 sourceIds
+            // 检查 sourceRefs
             if (!verifyAll) {
-              for (const sourceId of verifySourceIds) {
+              for (const sourceRef of verifySourceRefs) {
                 totalChecked++;
-                const mem = bySourceId.get(sourceId);
-                if (!mem) {
-                  results.push({ sourceId, status: 'error', issues: ['记忆不存在（未找到 sourceId）'], warnings: [] });
+                const mems = bySourceRef.get(sourceRef);
+                if (!mems || mems.length === 0) {
+                  results.push({ sourceRef, status: 'error', issues: ['记忆不存在（未找到 sourceRef）'], warnings: [] });
                   totalErrors++;
                   continue;
                 }
-                const result = verifyOneMemory(mem);
-                result.sourceId = sourceId;
-                if (result.status === 'pass') totalPassed++;
-                else if (result.status === 'warning') totalWarnings++;
-                else totalErrors++;
-                results.push(result);
+                for (const mem of mems) {
+                  const result = verifyOneMemory(mem);
+                  result.sourceRef = sourceRef;
+                  if (result.status === 'pass') totalPassed++;
+                  else if (result.status === 'warning') totalWarnings++;
+                  else totalErrors++;
+                  results.push(result);
+                }
               }
             }
 
             // Phase-78: memoryIds 分支
-            if (!verifyAll && verifySourceIds.length === 0) {
+            if (!verifyAll && verifySourceRefs.length === 0) {
               for (const memId of verifyMemoryIds) {
                 totalChecked++;
                 const mem = byId.get(memId);
@@ -2015,13 +2023,13 @@ function startServer(projectName: string, basePath: string, port: number): void 
     const url = `http://localhost:${port}`;
     console.log('');
     console.log('╔══════════════════════════════════════════════════════════╗');
-    console.log('║         DevPlan 图谱可视化服务器已启动                  ║');
+    console.log('║         DevPlan 项目图谱服务器已启动                    ║');
     console.log('╠══════════════════════════════════════════════════════════╣');
     console.log(`║  项目:  ${projectName.padEnd(47)}║`);
     console.log(`║  地址:  ${url.padEnd(47)}║`);
     console.log('╠══════════════════════════════════════════════════════════╣');
     console.log('║  API 端点:                                              ║');
-    console.log(`║    GET  /                      可视化页面               ║`);
+    console.log(`║    GET  /                      项目图谱页面             ║`);
     console.log(`║    GET  /api/graph             图谱数据 (JSON)          ║`);
     console.log(`║    GET  /api/progress          项目进度 (JSON)          ║`);
     console.log(`║    GET  /api/auto/next-action  下一步动作               ║`);

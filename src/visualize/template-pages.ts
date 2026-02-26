@@ -1562,7 +1562,7 @@ function _batchCacheLoad() {
     if (!raw) return null;
     var cache = JSON.parse(raw);
     if (!cache || !Array.isArray(cache.results)) return null;
-    return cache; // { timestamp, model, source, results: [{sourceId, ...saveBody}] }
+    return cache; // { timestamp, model, source, results: [{sourceRef, ...saveBody}] }
   } catch(e) { return null; }
 }
 
@@ -1588,7 +1588,8 @@ function _batchCacheSourceIds(cache) {
   var set = {};
   if (cache && cache.results) {
     for (var i = 0; i < cache.results.length; i++) {
-      if (cache.results[i].sourceId) set[cache.results[i].sourceId] = true;
+      var sid = cache.results[i].sourceRef && cache.results[i].sourceRef.sourceId;
+      if (sid) set[sid] = true;
     }
   }
   return set;
@@ -1732,7 +1733,7 @@ function startAiBatchProcess(resumeMode) {
   var source = sourceSelect ? sourceSelect.value : 'both';
 
   // get systemPrompt from config or use default
-  var systemPrompt = (_aiBatchConfig && _aiBatchConfig.systemPrompt) ? _aiBatchConfig.systemPrompt : '你是一个记忆构建助手。请根据以下文档/任务内容生成多级记忆。\\n生成三个层级（必须以 JSON 返回）：\\n- L1（触点摘要）：一句话概括（15~30字）\\n- L2（详细记忆）：默认 3~8句话，包含关键技术细节\\n- L3_summary（结构总结）：列出主要组件、依赖关系\\n- memoryType：从 decision/pattern/bugfix/insight/preference/summary 选择\\n- importance：0~1\\n- suggestedTags：标签数组\\n- anchorName：触点名称\\n- anchorType：触点类型（module/concept/api/architecture/feature/library/protocol）\\n- anchorOverview：触点概览（3~5句话目录索引式摘要，列出关键子项、核心 Flow、主要组件）\\n\\n粒度策略（必须遵守）：\\n- decision/bugfix：L2 必须保留决策/根因+修复思路+关键代码片段+文件路径（若原文存在）\\n- summary：仅保留 2~3 句概要\\n- pattern/insight/preference：保留 1~3 句结论 + 一个最小示例\\n- 不要沿用旧版 L1/L2/L3 定义\\n\\n请严格以 JSON 格式返回：\\n{"L1": "...", "L2": "...", "L3_summary": "...", "memoryType": "...", "importance": 0.7, "suggestedTags": [...], "anchorName": "...", "anchorType": "...", "anchorOverview": "..."}';
+  var systemPrompt = (_aiBatchConfig && _aiBatchConfig.systemPrompt) ? _aiBatchConfig.systemPrompt : '你是一个记忆构建助手。请根据以下文档/任务内容生成多级记忆。\\n生成三个层级（必须以 JSON 返回）：\\n- L1（触点摘要）：一句话概括（15~30字）\\n- L2（详细记忆）：默认 3~8句话，包含关键技术细节\\n- L3_index（结构索引）：列出主要组件、依赖关系\\n- memoryType：从 decision/pattern/bugfix/insight/preference/summary 选择\\n- importance：0~1\\n- suggestedTags：标签数组\\n- anchorName：触点名称\\n- anchorType：触点类型（module/concept/api/architecture/feature/library/protocol）\\n- anchorOverview：触点概览（3~5句话目录索引式摘要，列出关键子项、核心 Flow、主要组件）\\n\\n粒度策略（必须遵守）：\\n- decision/bugfix：L2 必须保留决策/根因+修复思路+关键代码片段+文件路径（若原文存在）\\n- summary：仅保留 2~3 句概要\\n- pattern/insight/preference：保留 1~3 句结论 + 一个最小示例\\n- 若输入包含原始材料入口（commit/diff/log），L2 与 L3_index 必须保留这些追溯线索\\n- 不要沿用旧版 L1/L2/L3 定义\\n\\n请严格以 JSON 格式返回：\\n{"L1": "...", "L2": "...", "L3_index": "...", "memoryType": "...", "importance": 0.7, "suggestedTags": [...], "anchorName": "...", "anchorType": "...", "anchorOverview": "..."}';
 
   _aiBatchCancelled = false;
   _aiBatchRunning = true;
@@ -1835,7 +1836,8 @@ function startAiBatchProcess(resumeMode) {
       var newCandidates = [];
       var cacheHits = 0;
       for (var ci = 0; ci < candidates.length; ci++) {
-        if (cachedSourceIds[candidates[ci].sourceId]) {
+        var candidateSourceId = candidates[ci].sourceRef && candidates[ci].sourceRef.sourceId;
+        if (candidateSourceId && cachedSourceIds[candidateSourceId]) {
           cacheHits++;
         } else {
           newCandidates.push(candidates[ci]);
@@ -1871,7 +1873,8 @@ function startAiBatchProcess(resumeMode) {
 
         var c = newCandidates[idxA];
         var rawContent = c.contentL3 || c.content || '';
-        var candidateTitle = c.sourceTitle || c.title || c.sourceId || 'unknown';
+        var candidateSourceId = (c.sourceRef && c.sourceRef.sourceId) || c.sourceId;
+        var candidateTitle = c.sourceTitle || c.title || candidateSourceId || 'unknown';
 
         // Skip very short content
         if (!rawContent || rawContent.length < 50) {
@@ -1917,7 +1920,7 @@ function startAiBatchProcess(resumeMode) {
 
           if (parsed) {
             memContentL1 = parsed.L1 || rawContent.slice(0, 100);
-            memContentL2 = parsed.L2 || rawContent.slice(0, 500);
+            memContentL2 = parsed.L2 || parsed.L3_index || parsed.L3_summary || rawContent.slice(0, 500);
             memContent = parsed.L2 || parsed.L1 || rawContent.slice(0, 500);
             memType = parsed.memoryType || memType;
             memImportance = parsed.importance || memImportance;
@@ -1937,8 +1940,12 @@ function startAiBatchProcess(resumeMode) {
             memoryType: memType,
             content: memContent,
             tags: memTags,
-            relatedTaskId: c.sourceType === 'task' ? c.sourceId : undefined,
-            sourceId: c.sourceId,
+            relatedTaskId: c.sourceType === 'task' ? candidateSourceId : undefined,
+            sourceRef: c.sourceRef || (candidateSourceId ? { sourceId: candidateSourceId } : undefined),
+            provenance: {
+              origin: 'batch_import_ui',
+              evidences: []
+            },
             importance: memImportance,
             contentL1: memContentL1,
             contentL2: memContentL2,
@@ -2045,7 +2052,7 @@ function startAiBatchProcess(resumeMode) {
     if (detailEl) {
       var elapsed = ((Date.now() - phaseBStart) / 1000).toFixed(0);
       var speed = idxB > 0 ? ((Date.now() - phaseBStart) / idxB / 1000).toFixed(1) + 's/条' : '';
-      detailEl.textContent = '💾 ' + (entry._title || entry.sourceId) + ' · 已保存: ' + totalSaved + '/' + preparedResults.length + ' · Phase B 用时: ' + elapsed + 's' + (speed ? ' · ' + speed : '');
+      detailEl.textContent = '💾 ' + (entry._title || (entry.sourceRef && entry.sourceRef.sourceId) || 'unknown') + ' · 已保存: ' + totalSaved + '/' + preparedResults.length + ' · Phase B 用时: ' + elapsed + 's' + (speed ? ' · ' + speed : '');
     }
 
     var saveBody = {
@@ -2053,7 +2060,8 @@ function startAiBatchProcess(resumeMode) {
       content: entry.content,
       tags: entry.tags,
       relatedTaskId: entry.relatedTaskId,
-      sourceId: entry.sourceId,
+      sourceRef: entry.sourceRef,
+      provenance: entry.provenance,
       importance: entry.importance,
       contentL1: entry.contentL1,
       contentL2: entry.contentL2,
@@ -2132,15 +2140,16 @@ function startAiBatchProcess(resumeMode) {
  * 调用 /api/batch/verify 验证每条记忆的保存状态
  */
 function runBatchIntegrityCheck(preparedResults, summaryEl) {
-  // 收集所有 sourceIds
-  var sourceIds = [];
+  // 收集所有 sourceRef.sourceId
+  var sourceRefs = [];
   for (var i = 0; i < preparedResults.length; i++) {
-    if (preparedResults[i].sourceId) {
-      sourceIds.push(preparedResults[i].sourceId);
+    var sid = preparedResults[i].sourceRef && preparedResults[i].sourceRef.sourceId;
+    if (sid) {
+      sourceRefs.push(sid);
     }
   }
 
-  if (sourceIds.length === 0) return;
+  if (sourceRefs.length === 0) return;
 
   // 在 summaryEl 下方添加检测状态
   var verifyEl = document.getElementById('aiBatchVerifyArea');
@@ -2149,12 +2158,12 @@ function runBatchIntegrityCheck(preparedResults, summaryEl) {
   verifyEl.innerHTML = '<div style="text-align:center;padding:12px;"><div class="spinner" style="display:inline-block;width:18px;height:18px;border-width:2px;vertical-align:middle;margin-right:8px;"></div><span style="color:#6b7280;font-size:12px;">正在检测导入完整性...</span></div>';
 
   var statusEl = document.getElementById('aiBatchStatus');
-  if (statusEl) statusEl.textContent = '🔍 正在执行完整性检测 (' + sourceIds.length + ' 条记忆)...';
+  if (statusEl) statusEl.textContent = '🔍 正在执行完整性检测 (' + sourceRefs.length + ' 条记忆)...';
 
   fetch('/api/batch/verify', {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ sourceIds: sourceIds })
+    body: JSON.stringify({ sourceRefs: sourceRefs })
   }).then(function(r) { return r.json(); }).then(function(data) {
     if (!data || !data.summary) {
       verifyEl.innerHTML = '<div style="color:#f87171;font-size:12px;text-align:center;padding:8px;">❌ 完整性检测失败：无效响应</div>';
@@ -2210,7 +2219,7 @@ function runBatchIntegrityCheck(preparedResults, summaryEl) {
         html += '<div class="batch-verify-item ' + statusClass + '">';
         html += '<div class="batch-verify-item-header">';
         html += '<span class="batch-verify-icon">' + statusIcon + '</span>';
-        html += '<span class="batch-verify-source">' + (r.sourceId || r.memoryId || 'unknown') + '</span>';
+        html += '<span class="batch-verify-source">' + (r.sourceRef || r.memoryId || 'unknown') + '</span>';
         if (r.memoryType) {
           html += '<span class="batch-verify-type">' + r.memoryType + '</span>';
         }
@@ -2435,7 +2444,7 @@ function checkAllMemoriesIntegrity() {
         html += '<div class="batch-verify-item ' + statusClass + '">';
         html += '<div class="batch-verify-item-header">';
         html += '<span class="batch-verify-icon">' + statusIcon + '</span>';
-        html += '<span class="batch-verify-source">' + (r.memoryId || r.sourceId || 'unknown').substring(0, 12) + '...</span>';
+        html += '<span class="batch-verify-source">' + (r.memoryId || r.sourceRef || 'unknown').substring(0, 12) + '...</span>';
         if (r.memoryType) {
           html += '<span class="batch-verify-type">' + r.memoryType + '</span>';
         }

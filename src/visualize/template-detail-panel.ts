@@ -258,7 +258,10 @@ function showPanel(nodeId) {
       html += row('标签', p.tags.map(function(t) { return '<span style="background:#334155;padding:1px 6px;border-radius:4px;font-size:11px;margin-right:4px;">' + escHtml(t) + '</span>'; }).join(''));
     }
     if (p.relatedTaskId) { html += row('关联任务', p.relatedTaskId); }
-    if (p.sourceId) { html += row('来源ID', p.sourceId); }
+    if (p.sourceRef && p.sourceRef.sourceId) {
+      html += row('来源ID', p.sourceRef.sourceId);
+      if (p.sourceRef.variant) html += row('来源变体', p.sourceRef.variant);
+    }
     html += '<div class="doc-section" style="margin-top:8px;">';
     html += '<div class="doc-section-title"><span>记忆内容</span></div>';
     html += '<div style="padding:8px;background:#0f172a;border-radius:8px;font-size:12px;line-height:1.6;color:#cbd5e1;white-space:pre-wrap;">' + escHtml(p.content || '') + '</div>';

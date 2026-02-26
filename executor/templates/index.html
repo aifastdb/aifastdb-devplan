@@ -255,6 +255,13 @@
             display: flex; gap: 8px; flex-wrap: wrap; align-items: center;
             margin-bottom: 10px;
         }
+        .toggle-wrap {
+            display: inline-flex; align-items: center; gap: 8px;
+            padding: 6px 10px; border-radius: 8px;
+            border: 1px solid rgba(255,255,255,0.12);
+            background: rgba(255,255,255,0.03);
+        }
+        .toggle-note { color:#888; font-size:0.78em; }
         .ctrl-label { color: #777; font-size: 0.85em; min-width: 60px; }
         .ctrl-input {
             flex: 1; min-width: 160px; padding: 8px 12px;
@@ -320,9 +327,14 @@
         </div>
         <div class="ctrl-row">
             <span class="ctrl-label">截图间隔</span>
-            <input class="ctrl-input ctrl-input-sm" type="number" id="intervalInput" value="1.5" min="0.5" max="10" step="0.5">
+            <input class="ctrl-input ctrl-input-sm" type="number" id="intervalInput" value="3" min="0.5" max="10" step="0.5">
             <span style="color:#666;font-size:0.85em">秒</span>
             <button class="btn btn-ghost" onclick="applyInterval()">应用</button>
+            <span class="toggle-wrap" title="启用后需要本机安装并运行 Ollama，且存在 gemma3:27b 模型">
+                <label for="visionEnabled" style="font-size:0.85em;color:#aaa;">启用截图分析</label>
+                <input type="checkbox" id="visionEnabled" onchange="applyVisionEnabled(this.checked)">
+            </span>
+            <span class="toggle-note">(需要安装 ollama，并安装 gemma3:27b)</span>
             <span style="flex:1"></span>
             <span class="ctrl-label">启动阶段</span>
             <input class="ctrl-input ctrl-input-sm" style="width:100px" id="phaseInput" placeholder="phase-X">
@@ -373,6 +385,14 @@
                     <span class="status-value" id="screenChange">--</span>
                 </div>
                 <div class="status-row">
+                    <span class="status-label">右上变化</span>
+                    <span class="status-value" id="trChanged">--</span>
+                </div>
+                <div class="status-row">
+                    <span class="status-label">右下变化</span>
+                    <span class="status-value" id="brChanged">--</span>
+                </div>
+                <div class="status-row">
                     <span class="status-label">重试计数</span>
                     <span class="status-value" id="retryCount">0</span>
                 </div>
@@ -406,7 +426,7 @@
                     <div class="screenshot-time" id="ssTime1">--:--:--</div>
                 </div>
                 <div class="screenshot-item">
-                    <div class="screenshot-label" id="ss2Label">截图 2（T+1.5s）</div>
+                    <div class="screenshot-label" id="ss2Label">截图 2（T+3s）</div>
                     <div class="screenshot-box" id="ssBox2"><span class="screenshot-placeholder">等待截图...</span></div>
                     <div class="screenshot-time" id="ssTime2">--:--:--</div>
                 </div>
@@ -513,6 +533,11 @@ function updateUI(d) {
     usEl.textContent = STATUS_NAMES[d.ui_status] || d.ui_status || '--';
     usEl.className = 'status-value s-' + (d.ui_status || '');
     document.getElementById('screenChange').textContent = d.screen_changing ? '有变化 🟢' : '无变化 ⚪';
+    const trChanged = d.top_right_changed;
+    const brChanged = d.bottom_right_changed;
+    document.getElementById('trChanged').textContent = (trChanged === true) ? '是 🟢' : (trChanged === false ? '否 ⚪' : '--');
+    document.getElementById('brChanged').textContent = (brChanged === true) ? '是 🟢' : (brChanged === false ? '否 ⚪' : '--');
+    document.getElementById('visionEnabled').checked = !!d.vision_enabled;
     document.getElementById('retryCount').textContent = d.continue_retries || 0;
     document.getElementById('rawResponse').textContent = d.raw_response || '等待分析...';
 
@@ -685,12 +710,28 @@ function sendText() {
 }
 function quickSend(t) { document.getElementById('sendText').value = t; sendText(); }
 function applyInterval() {
-    const v = parseFloat(document.getElementById('intervalInput').value) || 1.5;
+    const v = parseFloat(document.getElementById('intervalInput').value) || 3;
     fetch('/api/set_interval', {
         method:'POST', headers:{'Content-Type':'application/json'},
         body: JSON.stringify({interval: v})
     }).then(r=>r.json()).then(d => {
         if (d.success) document.getElementById('ss2Label').textContent = '截图 2（T+' + d.interval + 's）';
+    });
+}
+function applyVisionEnabled(enabled) {
+    fetch('/api/set_vision', {
+        method:'POST', headers:{'Content-Type':'application/json'},
+        body: JSON.stringify({enabled: !!enabled})
+    }).then(r=>r.json()).then(d => {
+        if (!d.success) {
+            alert('切换失败: ' + (d.message || 'unknown'));
+            return;
+        }
+        if (d.message) {
+            console.log('[vision]', d.message);
+        }
+    }).catch(() => {
+        alert('切换截图分析开关失败');
     });
 }
 function startPhase() {

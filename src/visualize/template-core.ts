@@ -86,7 +86,7 @@ function navTo(page, options) {
     syncBrowserRoute(page, replaceRoute);
   }
 
-  // 离开图谱页面时关闭左侧弹层
+  // 离开项目图谱页面时关闭左侧弹层
   if (page !== 'graph') closeStatsModal();
 
   // 按需加载页面数据
@@ -224,7 +224,7 @@ function updateGraphSetting(key, value) {
   if (typeof GRAPH_SETTINGS_DEFAULTS[key] === 'boolean') value = !!value;
   settings[key] = value;
   saveGraphSettings(settings);
-  showSettingsToast('✅ 显示设置已保存，刷新图谱页面生效');
+  showSettingsToast('✅ 显示设置已保存，刷新项目图谱页面生效');
 }
 
 // Initialize general graph settings UI
@@ -304,7 +304,7 @@ function updateNodeColor(nodeType, colorValue) {
     var dot = input.parentElement.querySelector('.s3d-dot');
     if (dot) dot.style.background = colorValue;
   }
-  showSettingsToast('✅ 节点颜色已保存 (适用于所有渲染引擎)，刷新图谱页面生效');
+  showSettingsToast('✅ 节点颜色已保存 (适用于所有渲染引擎)，刷新项目图谱页面生效');
 }
 
 /** 获取统一节点样式配置 — 所有渲染引擎共享 */
@@ -366,7 +366,7 @@ function initNodeColorsUI() {
 function resetNodeColors() {
   try { localStorage.removeItem(NODE_COLORS_KEY); } catch(e) {}
   initNodeColorsUI();
-  showSettingsToast('↩ 已恢复默认节点颜色，刷新图谱页面生效');
+  showSettingsToast('↩ 已恢复默认节点颜色，刷新项目图谱页面生效');
 }
 
 initNodeColorsUI();
@@ -438,7 +438,7 @@ function update3DSetting(key, value) {
     if (typeof value === 'number') valEl.textContent = value.toFixed ? (Number.isInteger(value) ? value : value.toFixed(key === 'alphaDecay' ? 3 : 2)) : value;
     else valEl.textContent = value;
   }
-  showSettingsToast('✅ 3D 参数已保存，刷新图谱页面生效');
+  showSettingsToast('✅ 3D 参数已保存，刷新项目图谱页面生效');
 }
 
 // 兼容旧调用: 重定向到统一颜色管理
@@ -465,7 +465,7 @@ function updateLayoutMode(mode) {
 function reset3DSettings() {
   try { localStorage.removeItem(S3D_KEY); } catch(e) {}
   init3DSettingsUI();
-  showSettingsToast('↩ 已恢复 3D 默认设置，刷新图谱页面生效');
+  showSettingsToast('↩ 已恢复 3D 默认设置，刷新项目图谱页面生效');
 }
 
 function toggle3DPanel(panelId) {

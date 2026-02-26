@@ -983,15 +983,34 @@ export interface MemoryInput {
   /** 重要性 (0~1，默认 0.5) */
   importance?: number;
   /**
-   * 记忆来源 ID（可选）— 用于批量生成记忆时追踪已处理的候选项
-   *
-   * 格式约定：
-   * - 任务来源: taskId (如 "phase-7")
-   * - 文档来源: "section" 或 "section|subSection" (如 "overview", "technical_notes|security")
-   *
-   * generateMemoryCandidates 通过此字段去重，确保同一来源不会重复生成候选项。
+   * 统一来源标识（可选）— ai_db 底层 source_ref 规范
    */
-  sourceId?: string;
+  sourceRef?: {
+    /** 逻辑来源 ID（如 taskId / section|subSection / conversationId） */
+    sourceId: string;
+    /** 同源变体（如 "1"、"round-9"） */
+    variant?: string;
+  };
+  /**
+   * 统一追溯证据（可选）— ai_db 底层 provenance/evidence 规范
+   */
+  provenance?: {
+    /** 产生来源（如 cursor / batch_import / devplan_ui） */
+    origin?: string;
+    /** 追溯备注 */
+    note?: string;
+    /** 证据列表 */
+    evidences: Array<{
+      /** 证据类型：commit/diff/log/chat_turn/doc/task/... */
+      kind: string;
+      /** 证据引用 ID（可选） */
+      refId?: string;
+      /** 定位信息（可选）：URL/命令/路径 */
+      locator?: string;
+      /** 摘要片段（可选） */
+      excerpt?: string;
+    }>;
+  };
   /**
    * 关联的模块 ID（可选）— Phase-37 新增
    *
@@ -1142,12 +1161,22 @@ export interface Memory {
   createdAt: number;
   /** 更新时间 */
   updatedAt: number;
-  /**
-   * 记忆来源 ID — 追踪该记忆由哪个文档/任务生成
-   *
-   * 格式：taskId (如 "phase-7") 或 "section|subSection" (如 "overview", "technical_notes|security")
-   */
-  sourceId?: string;
+  /** 统一来源标识（ai_db source_ref） */
+  sourceRef?: {
+    sourceId: string;
+    variant?: string;
+  };
+  /** 统一追溯证据（ai_db provenance/evidence） */
+  provenance?: {
+    origin?: string;
+    note?: string;
+    evidences: Array<{
+      kind: string;
+      refId?: string;
+      locator?: string;
+      excerpt?: string;
+    }>;
+  };
 
   /**
    * Phase-47: 分解结果摘要（当使用 decompose 模式时返回）
@@ -1582,8 +1611,13 @@ export interface MemoryContext {
 export interface MemoryCandidate {
   /** 来源类型 */
   sourceType: 'task' | 'document';
-  /** 来源 ID (taskId 或 section|subSection) */
-  sourceId: string;
+  /** 统一来源标识（候选层主键） */
+  sourceRef: {
+    /** 逻辑来源 ID (taskId 或 section|subSection) */
+    sourceId: string;
+    /** 同源变体（可选） */
+    variant?: string;
+  };
   /** 来源标题 */
   sourceTitle: string;
   /** 聚合的内容（任务: phase 标题+子任务列表; 文档: 标题+内容摘要） */
@@ -1597,18 +1631,33 @@ export interface MemoryCandidate {
   /** 此来源是否已有关联记忆 */
   hasExistingMemory: boolean;
 
+  /**
+   * 原始材料入口（可选）
+   *
+   * 为任务类候选提供可追溯证据入口（commit/diff/log 等）。
+   * AI 可将其中线索保留到 L2/L3，避免只基于摘要生成记忆。
+   */
+  rawEvidence?: {
+    /** 关联提交列表（如有） */
+    commitIds?: string[];
+    /** 建议执行的命令（用于追溯原始材料） */
+    commandHints?: string[];
+    /** 其他证据说明 */
+    notes?: string[];
+  };
+
   // ---- Phase-44: Memory Tree 子图建议 ----
   /**
    * 建议的关系列表 — 引导 AI 在生成记忆时同时建立子图结构
    *
    * AI 可在 devplan_memory_save 后使用 applyMutations 批量创建这些关系。
-   * 每条建议包含 relationType（如 memory_relates）和 targetSourceId（目标候选项的 sourceId）。
+   * 每条建议包含 relationType（如 memory_relates）和 targetSourceRef（目标候选项的 sourceRef.sourceId）。
    */
   suggestedRelations?: Array<{
     /** 关系类型 */
     relationType: string;
-    /** 目标候选项的 sourceId（AI 保存后需替换为实际 entity ID） */
-    targetSourceId: string;
+    /** 目标候选项的 sourceRef.sourceId（AI 保存后需替换为实际 entity ID） */
+    targetSourceRef: string;
     /** 建议的关系权重 */
     weight?: number;
     /** 关系说明 */

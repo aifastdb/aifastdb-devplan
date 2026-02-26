@@ -18,6 +18,9 @@ import type {
   ExecutorHeartbeat,
 } from './types';
 import { DEFAULT_AUTOPILOT_CONFIG } from './types';
+import * as fs from 'fs';
+import * as path from 'path';
+import { resolveBasePathForProject } from './dev-plan-factory';
 
 // ============================================================================
 // In-memory State (per-project)
@@ -32,10 +35,47 @@ interface AutopilotRuntime {
 
 const runtimeMap = new Map<string, AutopilotRuntime>();
 
+function getAutopilotConfigFile(projectName: string): string {
+  const basePath = resolveBasePathForProject(projectName);
+  return path.join(basePath, projectName, 'autopilot-config.json');
+}
+
+function getAutopilotDeadLetterFile(projectName: string): string {
+  const basePath = resolveBasePathForProject(projectName);
+  return path.join(basePath, projectName, 'autopilot-dead-letters.jsonl');
+}
+
+function readPersistedAutopilotConfig(projectName: string): Partial<AutopilotConfig> {
+  try {
+    const file = getAutopilotConfigFile(projectName);
+    if (!fs.existsSync(file)) return {};
+    const raw = fs.readFileSync(file, 'utf-8');
+    const parsed = JSON.parse(raw);
+    if (!parsed || typeof parsed !== 'object') return {};
+    return parsed as Partial<AutopilotConfig>;
+  } catch {
+    return {};
+  }
+}
+
+function writePersistedAutopilotConfig(projectName: string, config: AutopilotConfig): void {
+  try {
+    const file = getAutopilotConfigFile(projectName);
+    const dir = path.dirname(file);
+    if (!fs.existsSync(dir)) {
+      fs.mkdirSync(dir, { recursive: true });
+    }
+    fs.writeFileSync(file, JSON.stringify(config, null, 2) + '\n', 'utf-8');
+  } catch {
+    // 配置持久化失败不应中断主流程（保留内存态）
+  }
+}
+
 function getRuntime(projectName: string): AutopilotRuntime {
   if (!runtimeMap.has(projectName)) {
+    const persisted = readPersistedAutopilotConfig(projectName);
     runtimeMap.set(projectName, {
-      config: { ...DEFAULT_AUTOPILOT_CONFIG },
+      config: { ...DEFAULT_AUTOPILOT_CONFIG, ...persisted },
       lastHeartbeat: null,
       lastHeartbeatTime: 0,
     });
@@ -260,6 +300,7 @@ export function updateAutopilotConfig(
 ): AutopilotConfig {
   const runtime = getRuntime(projectName);
   runtime.config = { ...runtime.config, ...updates };
+  writePersistedAutopilotConfig(projectName, runtime.config);
   return { ...runtime.config };
 }
 
@@ -294,4 +335,94 @@ export function getLastHeartbeat(projectName: string): {
     receivedAt: runtime.lastHeartbeatTime,
     isAlive,
   };
+}
+
+// ============================================================================
+// Dead-letter Management
+// ============================================================================
+
+export interface AutopilotDeadLetterEntry {
+  id: string;
+  projectName: string;
+  source: 'executor' | 'server' | 'manual';
+  reason: string;
+  message: string;
+  phaseId?: string;
+  taskId?: string;
+  retryAfterSeconds?: number;
+  metadata?: Record<string, unknown>;
+  createdAt: number;
+}
+
+/**
+ * 追加一条 dead-letter 记录到项目 JSONL（持久化）。
+ */
+export function appendAutopilotDeadLetter(
+  projectName: string,
+  input: Omit<AutopilotDeadLetterEntry, 'id' | 'projectName' | 'createdAt'> & Partial<Pick<AutopilotDeadLetterEntry, 'id' | 'createdAt'>>
+): AutopilotDeadLetterEntry {
+  const file = getAutopilotDeadLetterFile(projectName);
+  const dir = path.dirname(file);
+  if (!fs.existsSync(dir)) {
+    fs.mkdirSync(dir, { recursive: true });
+  }
+
+  const now = Date.now();
+  const entry: AutopilotDeadLetterEntry = {
+    id: input.id || `dl-${now}-${Math.random().toString(36).slice(2, 8)}`,
+    projectName,
+    source: input.source || 'executor',
+    reason: input.reason || 'UNKNOWN',
+    message: input.message || '',
+    phaseId: input.phaseId,
+    taskId: input.taskId,
+    retryAfterSeconds: input.retryAfterSeconds,
+    metadata: input.metadata,
+    createdAt: input.createdAt || now,
+  };
+
+  fs.appendFileSync(file, JSON.stringify(entry) + '\n', 'utf-8');
+  return entry;
+}
+
+/**
+ * 查询 dead-letter 列表（按 createdAt 降序）。
+ */
+export function listAutopilotDeadLetters(
+  projectName: string,
+  options?: {
+    limit?: number;
+    reason?: string;
+    phaseId?: string;
+    taskId?: string;
+  }
+): AutopilotDeadLetterEntry[] {
+  const file = getAutopilotDeadLetterFile(projectName);
+  if (!fs.existsSync(file)) return [];
+
+  const raw = fs.readFileSync(file, 'utf-8');
+  const lines = raw.split('\n').map(l => l.trim()).filter(Boolean);
+  const entries: AutopilotDeadLetterEntry[] = [];
+  for (const line of lines) {
+    try {
+      const parsed = JSON.parse(line) as AutopilotDeadLetterEntry;
+      if (parsed && typeof parsed === 'object') {
+        entries.push(parsed);
+      }
+    } catch {
+      // skip bad line
+    }
+  }
+
+  const filtered = entries.filter((e) => {
+    if (options?.reason && e.reason !== options.reason) return false;
+    if (options?.phaseId && e.phaseId !== options.phaseId) return false;
+    if (options?.taskId && e.taskId !== options.taskId) return false;
+    return true;
+  }).sort((a, b) => (b.createdAt || 0) - (a.createdAt || 0));
+
+  const limit = options?.limit && Number.isFinite(options.limit)
+    ? Math.max(1, Math.min(options.limit, 200))
+    : 50;
+  return filtered.slice(0, limit);
 }

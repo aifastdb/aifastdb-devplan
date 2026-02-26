@@ -111,7 +111,7 @@ class ExecutorConfig(BaseSettings):
         description="视觉模型调用超时（秒）",
     )
     screenshot_interval: float = Field(
-        default=1.5,
+        default=3.0,
         description="连续截图间隔（秒），用于屏幕变化检测",
     )
     stall_threshold: int = Field(
@@ -129,6 +129,10 @@ class ExecutorConfig(BaseSettings):
     split_quadrant: bool = Field(
         default=True,
         description="截图四象限分割模式：全屏截图后裁剪为右上+右下两块分别发给视觉模型，跳过左侧边栏",
+    )
+    disable_vision: bool = Field(
+        default=False,
+        description="显式禁用截图+视觉分析分支（无 Ollama 机器建议开启）",
     )
     quadrant_left_ratio: float = Field(
         default=0.35,
@@ -162,6 +166,34 @@ class ExecutorConfig(BaseSettings):
         default=3,
         description="RESPONSE_STALL 连续发送'请继续'多少次无效后，升级为 CONTEXT_OVERFLOW 策略（开新对话）",
     )
+    network_backoff_base: int = Field(
+        default=5,
+        description="网络中断恢复的指数退避基线秒数（attempt=1 时的基础等待）",
+    )
+    network_backoff_max: int = Field(
+        default=120,
+        description="网络中断恢复的指数退避最大秒数",
+    )
+    network_backoff_jitter_ratio: float = Field(
+        default=0.25,
+        description="网络中断恢复退避抖动比例（0~1），用于错峰重试",
+    )
+    circuit_breaker_failure_threshold: int = Field(
+        default=4,
+        description="circuit breaker 失败阈值：连续网络失败达到该值后进入 open",
+    )
+    circuit_breaker_open_seconds: int = Field(
+        default=90,
+        description="circuit breaker open 状态持续秒数（到期后进入 half-open）",
+    )
+    network_recovery_window_seconds: int = Field(
+        default=900,
+        description="网络恢复最大窗口（秒）：超过后不再继续重试，进入保护性恢复流程",
+    )
+    network_recovery_window_cooldown: int = Field(
+        default=300,
+        description="网络恢复超窗后的保护冷却时长（秒）",
+    )
 
     # ── Executor 标识 ────────────────────────────────────────
     executor_id: str = Field(
@@ -177,6 +209,10 @@ class ExecutorConfig(BaseSettings):
     continue_command: str = Field(
         default="请继续",
         description="发送给 Cursor 的继续指令文本",
+    )
+    keep_alive_on_all_done: bool = Field(
+        default=False,
+        description="调试开关：收到 all_done 时保持 executor 运行（默认 false，自动停机）",
     )
 
     # ── Web UI ───────────────────────────────────────────────

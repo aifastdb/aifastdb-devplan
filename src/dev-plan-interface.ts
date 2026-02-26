@@ -337,6 +337,15 @@ export interface IDevPlanStore {
   resetRecallObservability?(): RecallObservability;
 
   /**
+   * 获取底层 Native 能力探测结果（用于 ABI/版本对齐诊断）
+   */
+  getNativeCapabilities?(): {
+    memoryTreeSearch: boolean;
+    anchorExtractFromText: boolean;
+    applyMutations: boolean;
+  };
+
+  /**
    * 列出记忆（支持过滤）
    */
   listMemories?(filter?: {

@@ -20,12 +20,28 @@ export function getHTML(projectName: string): string {
     </div>
     <div class="sidebar-nav">
       <div class="nav-item active" data-page="graph" onclick="navTo('graph')">
-        <span class="nav-item-icon">🔗</span>
-        <span class="nav-item-text">图谱可视化</span>
-        <span class="nav-tooltip">图谱可视化</span>
+        <span class="nav-item-icon">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+            <circle cx="6" cy="6.5" r="2"></circle>
+            <circle cx="18" cy="6.5" r="2"></circle>
+            <circle cx="12" cy="17.5" r="2"></circle>
+            <path d="M7.8 7.6L10.2 15.7"></path>
+            <path d="M16.2 7.6L13.8 15.7"></path>
+            <path d="M8.1 6.5H15.9"></path>
+          </svg>
+        </span>
+        <span class="nav-item-text">项目图谱</span>
+        <span class="nav-tooltip">项目图谱</span>
       </div>
       <div class="nav-item" data-page="docs" onclick="navTo('docs')">
-        <span class="nav-item-icon">📄</span>
+        <span class="nav-item-icon">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+            <path d="M8 3.5h7l4 4V20a1.5 1.5 0 0 1-1.5 1.5h-9A1.5 1.5 0 0 1 7 20V5A1.5 1.5 0 0 1 8.5 3.5z"></path>
+            <path d="M15 3.5V8h4"></path>
+            <path d="M10 12h6"></path>
+            <path d="M10 15.5h6"></path>
+          </svg>
+        </span>
         <span class="nav-item-text">文档库</span>
         <span class="nav-tooltip">文档库</span>
       </div>
@@ -35,19 +51,39 @@ export function getHTML(projectName: string): string {
         <span class="nav-tooltip">长期记忆</span>
       </div>
       <div class="nav-item" data-page="md-viewer" onclick="navTo('md-viewer')">
-        <span class="nav-item-icon">📝</span>
+        <span class="nav-item-icon">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+            <path d="M8 3.5h7l4 4V20a1.5 1.5 0 0 1-1.5 1.5h-9A1.5 1.5 0 0 1 7 20V5A1.5 1.5 0 0 1 8.5 3.5z"></path>
+            <path d="M15 3.5V8h4"></path>
+            <path d="M10 12h6"></path>
+            <path d="M10 15.5h6"></path>
+          </svg>
+        </span>
         <span class="nav-item-text">MD 预览</span>
         <span class="nav-tooltip">Markdown 预览</span>
       </div>
       <div class="nav-item" data-page="stats" onclick="navTo('stats')">
-        <span class="nav-item-icon">📊</span>
+        <span class="nav-item-icon">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+            <path d="M4 20h16"></path>
+            <path d="M7 20V12"></path>
+            <path d="M12 20V9"></path>
+            <path d="M17 20V6"></path>
+            <path d="M6.2 10.8l5-3 5.1-2.2"></path>
+          </svg>
+        </span>
         <span class="nav-item-text">统计仪表盘</span>
         <span class="nav-tooltip">统计仪表盘</span>
       </div>
     </div>
     <div class="sidebar-footer">
       <div class="nav-item" data-page="settings" onclick="navTo('settings')">
-        <span class="nav-item-icon">⚙️</span>
+        <span class="nav-item-icon">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+            <circle cx="12" cy="12" r="3.2"></circle>
+            <path d="M19.4 15a1 1 0 0 0 .2 1.1l.1.1a1.3 1.3 0 0 1 0 1.8l-.7.7a1.3 1.3 0 0 1-1.8 0l-.1-.1a1 1 0 0 0-1.1-.2 1 1 0 0 0-.6.9V20a1.3 1.3 0 0 1-1.3 1.3h-1a1.3 1.3 0 0 1-1.3-1.3v-.2a1 1 0 0 0-.6-.9 1 1 0 0 0-1.1.2l-.1.1a1.3 1.3 0 0 1-1.8 0l-.7-.7a1.3 1.3 0 0 1 0-1.8l.1-.1a1 1 0 0 0 .2-1.1 1 1 0 0 0-.9-.6H4a1.3 1.3 0 0 1-1.3-1.3v-1A1.3 1.3 0 0 1 4 11.3h.2a1 1 0 0 0 .9-.6 1 1 0 0 0-.2-1.1l-.1-.1a1.3 1.3 0 0 1 0-1.8l.7-.7a1.3 1.3 0 0 1 1.8 0l.1.1a1 1 0 0 0 1.1.2 1 1 0 0 0 .6-.9V4A1.3 1.3 0 0 1 10.4 2.7h1A1.3 1.3 0 0 1 12.7 4v.2a1 1 0 0 0 .6.9 1 1 0 0 0 1.1-.2l.1-.1a1.3 1.3 0 0 1 1.8 0l.7.7a1.3 1.3 0 0 1 0 1.8l-.1.1a1 1 0 0 0-.2 1.1 1 1 0 0 0 .9.6H20a1.3 1.3 0 0 1 1.3 1.3v1A1.3 1.3 0 0 1 20 14h-.2a1 1 0 0 0-.4 1z"></path>
+          </svg>
+        </span>
         <span class="nav-item-text">项目设置</span>
         <span class="nav-tooltip">项目设置</span>
       </div>
@@ -61,7 +97,7 @@ export function getHTML(projectName: string): string {
     <div class="page-view page-graph active" id="pageGraph">
       <!-- Header -->
       <div class="header">
-        <h1><span class="icon">🔗</span> DevPlan 图谱 <span class="project-name">${projectName}</span></h1>
+        <h1><span class="project-name">${projectName}</span> 项目图谱</h1>
         <div class="stats-bar" id="statsBar">
           <div class="stat"><span>加载中...</span></div>
         </div>

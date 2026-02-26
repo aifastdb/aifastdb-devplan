@@ -94,6 +94,30 @@ Always reply: IDLE
 
 Reply with ONLY one word: IDLE"""
 
+PROMPT_SEND_QUEUED_CHECK = """Analyze this screenshot (this is the **bottom-right** area of Cursor IDE chat panel, near the input box).
+
+Determine whether the just-sent command has entered queued/waiting state.
+
+Reply with ONLY one word:
+- QUEUED: if you can see hints like "Queued", "to send now", waiting indicator near input area.
+- NOT_QUEUED: if there is no clear queued/waiting indicator.
+"""
+
+PROMPT_CHANGE_COMPARE = """You are given ONE merged image:
+- Upper part: screenshot A (before)
+- Lower part: screenshot B (after)
+- A thick RED separator line is between them.
+
+Question:
+Did the content change from upper image to lower image?
+
+Rules:
+- Ignore tiny compression noise.
+- Focus on visible UI/content changes.
+- Reply with ONLY one word:
+  CHANGED or UNCHANGED
+"""
+
 ANALYSIS_PROMPT = """Analyze this screenshot of Cursor IDE chat panel.
 
 Determine the current state:
@@ -130,6 +154,7 @@ class VisionAnalyzer:
         self._stall_no_change_count: int = 0  # 连续无变化计数（用于 RESPONSE_STALL 判定）
         self._last_br_change_time: float = time.time()  # 右下角截图最后变化时间
         self._prev_br_pixels = None  # 上一次右下角截图的像素数据（用于时间兜底对比）
+        self._prev_tr_pixels = None  # 上一次右上角截图的像素数据（用于时间兜底对比）
         self._init_deps()
 
     def _init_deps(self) -> None:
@@ -151,6 +176,8 @@ class VisionAnalyzer:
         # 各象限最近判断结果（供 Web UI 展示）
         self.last_quad_top_right_status: str = ""
         self.last_quad_bottom_right_status: str = ""
+        self.last_top_right_changed: Optional[bool] = None
+        self.last_bottom_right_changed: Optional[bool] = None
 
         # 截图时间戳（供 Web UI 展示）
         self.screenshot_time_1: str = ""
@@ -221,29 +248,37 @@ class VisionAnalyzer:
         if not self._ensure_model_ready():
             return UIStatus.IDLE, False, "视觉模型不可用"
 
-        # ── 截图 1 ──
-        ss1 = self._take_screenshot(self._snapshot_1_path)
-        if ss1 is None:
-            return UIStatus.IDLE, False, "截图失败"
-        from datetime import datetime
-        self.screenshot_time_1 = datetime.now().strftime("%H:%M:%S")
-
-        # ── 等待间隔 ──
-        time.sleep(self.config.screenshot_interval)
-
-        # ── 截图 2 ──
-        ss2 = self._take_screenshot(self._snapshot_2_path)
-        if ss2 is None:
-            return UIStatus.IDLE, False, "第二次截图失败"
-        self.screenshot_time_2 = datetime.now().strftime("%H:%M:%S")
-
-        # ── 对比截图 ──
-        screen_changing = self._compare_screenshots(ss1, ss2)
-
-        # ── 视觉 AI 分析 ──
+        # split_quadrant 模式：右上与右下分开采样，每个象限独立 3s+3s 对比
         if self.config.split_quadrant:
-            ui_status, raw_response = self._analyze_quadrants(ss2)
+            tr_changed, _ = self._sample_quadrant_change("tr")
+            br_changed, br_latest_ss = self._sample_quadrant_change("br")
+            self.last_top_right_changed = tr_changed
+            self.last_bottom_right_changed = br_changed
+            screen_changing = tr_changed or br_changed
+
+            if br_latest_ss is None:
+                return UIStatus.IDLE, screen_changing, "右下象限采样失败"
+
+            ui_status, raw_response = self._analyze_quadrants(br_latest_ss)
+            raw_response = (
+                f"{raw_response} | [CHANGE] TR={tr_changed} BR={br_changed} "
+                f"(interval={self.config.screenshot_interval}s, per-quadrant=2 shots)"
+            )
         else:
+            self.last_top_right_changed = None
+            self.last_bottom_right_changed = None
+            # 全屏模式保留原有两帧对比
+            ss1 = self._take_screenshot(self._snapshot_1_path)
+            if ss1 is None:
+                return UIStatus.IDLE, False, "截图失败"
+            from datetime import datetime
+            self.screenshot_time_1 = datetime.now().strftime("%H:%M:%S")
+            time.sleep(self.config.screenshot_interval)
+            ss2 = self._take_screenshot(self._snapshot_2_path)
+            if ss2 is None:
+                return UIStatus.IDLE, False, "第二次截图失败"
+            self.screenshot_time_2 = datetime.now().strftime("%H:%M:%S")
+            screen_changing = self._compare_screenshots(ss1, ss2)
             ui_status, raw_response = self._analyze_fullscreen(ss2)
 
         # ── 响应中断检测（累积型判断） ──
@@ -276,14 +311,41 @@ class VisionAnalyzer:
 
         return ui_status, screen_changing, raw_response
 
+    def check_send_queued_after_delay(self, delay_seconds: float = 1.0) -> tuple[bool, str]:
+        """
+        发送命令后快速确认（默认 1 秒）：仅截图右下象限判断是否进入 queued/waiting。
+        Returns:
+            (is_queued, detail)
+        """
+        if not self._available:
+            return False, "视觉分析器不可用"
+        if not self._ensure_model_ready():
+            return False, "视觉模型不可用"
+
+        try:
+            time.sleep(max(0.0, delay_seconds))
+            ss = self._take_screenshot(str(self._log_dir / "send_check_full.png"))
+            if ss is None:
+                return False, "发送后截图失败"
+            self._split_into_quadrants(ss, suffix="_send_check")
+            br_path = str(self._log_dir / "quad_bottom_right_send_check.png")
+            status, raw = self._call_vision_model(br_path, prompt=PROMPT_SEND_QUEUED_CHECK)
+            raw_upper = (raw or "").upper()
+            queued = ("QUEUED" in raw_upper) and ("NOT_QUEUED" not in raw_upper)
+            detail = f"[send-check] status={status.value} raw={(raw or '[empty]')[:120]}"
+            return queued, detail
+        except Exception as e:
+            logger.error("发送后 queued 检测失败: %s", e)
+            return False, f"发送后 queued 检测异常: {e}"
+
     # ── 四象限分析 ───────────────────────────────────────────
 
     def _analyze_quadrants(self, screenshot) -> tuple[UIStatus, str]:
         """四象限模式：分割截图 → 右上+右下分别分析 → 合并结果"""
         self._split_into_quadrants(screenshot)
 
-        # ── 追踪右下角截图变化时间（3 分钟兜底策略） ──
-        self._track_br_change()
+        # ── 追踪工作区（右上+右下）变化时间（3 分钟兜底策略） ──
+        self._track_working_area_change()
 
         # 先分析右下（最重要：聊天输入框+弹窗+最新回复）
         br_status, br_raw = self._call_vision_model(
@@ -291,7 +353,7 @@ class VisionAnalyzer:
             prompt=PROMPT_BOTTOM_RIGHT,
         )
         self.last_quad_bottom_right_status = br_status.value
-        logger.info("[右下] %s | %s", br_status.value, br_raw[:50])
+        logger.info("[右下] %s | %s", br_status.value, (br_raw or "[empty]")[:80])
 
         # 再分析右上（辅助：代码编辑区）
         tr_status, tr_raw = self._call_vision_model(
@@ -299,7 +361,7 @@ class VisionAnalyzer:
             prompt=PROMPT_TOP_RIGHT,
         )
         self.last_quad_top_right_status = tr_status.value
-        logger.info("[右上] %s | %s", tr_status.value, tr_raw[:50])
+        logger.info("[右上] %s | %s", tr_status.value, (tr_raw or "[empty]")[:80])
 
         # ── 合并规则（CONNECTION_ERROR 和 PROVIDER_ERROR 仅从右下象限识别） ──
         # 右上区域是代码编辑器，其中可能出现 "Provider"、"Connection" 等正常文字，
@@ -326,47 +388,59 @@ class VisionAnalyzer:
 
         # 其他情况 → IDLE（是否在工作由 screen_changing 截图对比决定）
         final = UIStatus.IDLE
-        raw = f"[合并] 右下={br_status.value} 右上={tr_status.value} → {final.value}"
+        raw = f"[合并] 右下={br_status.value} 右上={tr_status.value} → {final.value} | BR={(br_raw or '[empty]')[:40]} | TR={(tr_raw or '[empty]')[:40]}"
         return final, raw
 
-    def _track_br_change(self) -> None:
-        """追踪右下角截图的像素变化时间（用于 3 分钟兜底策略）"""
+    def _track_working_area_change(self) -> None:
+        """追踪工作区（右上+右下）像素变化时间（用于兜底策略）"""
         if not self._numpy or not self._pil_image:
             return
 
         try:
             br_path = Path(self._quadrant_br_path)
-            if not br_path.exists():
+            tr_path = Path(self._quadrant_tr_path)
+            if not br_path.exists() or not tr_path.exists():
                 return
 
-            current_img = self._pil_image.open(str(br_path))
-            current_pixels = self._numpy.array(current_img)
+            br_img = self._pil_image.open(str(br_path))
+            current_br = self._numpy.array(br_img)
+            br_img.close()
+            tr_img = self._pil_image.open(str(tr_path))
+            current_tr = self._numpy.array(tr_img)
+            tr_img.close()
 
-            if self._prev_br_pixels is not None:
-                # 对比当前右下角与上一次的右下角
-                if current_pixels.shape == self._prev_br_pixels.shape:
-                    diff = self._numpy.mean(
-                        self._numpy.abs(current_pixels.astype(float) - self._prev_br_pixels.astype(float))
-                    )
-                    if diff > 2.0:  # 像素均值差异阈值
-                        self._last_br_change_time = time.time()
-                        logger.debug("右下角截图有变化 (diff=%.2f)，更新变化时间", diff)
-                    else:
-                        elapsed = time.time() - self._last_br_change_time
-                        logger.debug(
-                            "右下角截图无变化 (diff=%.2f)，已持续 %.0f 秒",
-                            diff, elapsed,
-                        )
+            changed = False
+            br_diff = 0.0
+            tr_diff = 0.0
+
+            if self._prev_br_pixels is not None and self._prev_tr_pixels is not None:
+                if current_br.shape != self._prev_br_pixels.shape or current_tr.shape != self._prev_tr_pixels.shape:
+                    changed = True
                 else:
-                    # 尺寸不同 = 有变化
-                    self._last_br_change_time = time.time()
+                    br_diff = float(self._numpy.mean(
+                        self._numpy.abs(current_br.astype(float) - self._prev_br_pixels.astype(float))
+                    ))
+                    tr_diff = float(self._numpy.mean(
+                        self._numpy.abs(current_tr.astype(float) - self._prev_tr_pixels.astype(float))
+                    ))
+                    changed = (br_diff > 2.0) or (tr_diff > 2.0)
             else:
-                # 首次运行，设为当前时间
-                self._last_br_change_time = time.time()
+                changed = True
 
-            self._prev_br_pixels = current_pixels
+            if changed:
+                self._last_br_change_time = time.time()
+                logger.debug("工作区有变化 (TR=%.2f BR=%.2f)，更新变化时间", tr_diff, br_diff)
+            else:
+                elapsed = time.time() - self._last_br_change_time
+                logger.debug(
+                    "工作区无变化 (TR=%.2f BR=%.2f)，已持续 %.0f 秒",
+                    tr_diff, br_diff, elapsed,
+                )
+
+            self._prev_br_pixels = current_br
+            self._prev_tr_pixels = current_tr
         except Exception as e:
-            logger.error("追踪右下角变化失败: %s", e)
+            logger.error("追踪工作区变化失败: %s", e)
 
     def _analyze_fullscreen(self, screenshot) -> tuple[UIStatus, str]:
         """全屏模式：整张截图发给视觉模型"""
@@ -380,7 +454,7 @@ class VisionAnalyzer:
         )
         return status, raw
 
-    def _split_into_quadrants(self, screenshot) -> None:
+    def _split_into_quadrants(self, screenshot, suffix: str = "") -> None:
         """将全屏截图按比例分割为四个象限并保存"""
         if not self._pil_image:
             return
@@ -395,10 +469,172 @@ class VisionAnalyzer:
         bl = screenshot.crop((0, mid_y, left_cut, h))
         br = screenshot.crop((left_cut, mid_y, w, h))
 
-        tl.save(self._quadrant_tl_path)
-        tr.save(self._quadrant_tr_path)
-        bl.save(self._quadrant_bl_path)
-        br.save(self._quadrant_br_path)
+        if suffix:
+            tl.save(str(self._log_dir / f"quad_top_left{suffix}.png"))
+            tr.save(str(self._log_dir / f"quad_top_right{suffix}.png"))
+            bl.save(str(self._log_dir / f"quad_bottom_left{suffix}.png"))
+            br.save(str(self._log_dir / f"quad_bottom_right{suffix}.png"))
+        else:
+            tl.save(self._quadrant_tl_path)
+            tr.save(self._quadrant_tr_path)
+            bl.save(self._quadrant_bl_path)
+            br.save(self._quadrant_br_path)
+
+        # 释放裁剪图片句柄
+        tl.close()
+        tr.close()
+        bl.close()
+        br.close()
+
+    def _sample_quadrant_change(self, quadrant: str) -> tuple[bool, object | None]:
+        """
+        对指定象限做双帧采样并比较变化（间隔=配置 screenshot_interval）。
+        quadrant: "tr" | "br"
+        Returns:
+            (changed, latest_full_screenshot)
+        """
+        if quadrant not in ("tr", "br"):
+            return False, None
+
+        full_1 = str(self._log_dir / f"snapshot_{quadrant}_1.png")
+        full_2 = str(self._log_dir / f"snapshot_{quadrant}_2.png")
+        ss1 = self._take_screenshot(full_1)
+        if ss1 is None:
+            return False, None
+        from datetime import datetime
+        if quadrant == "tr":
+            self.screenshot_time_1 = datetime.now().strftime("%H:%M:%S")
+        time.sleep(self.config.screenshot_interval)
+        ss2 = self._take_screenshot(full_2)
+        if ss2 is None:
+            return False, None
+        if quadrant == "br":
+            self.screenshot_time_2 = datetime.now().strftime("%H:%M:%S")
+            # UI 展示默认使用右下这组双帧
+            ss1.save(self._snapshot_1_path)
+            ss2.save(self._snapshot_2_path)
+
+        self._split_into_quadrants(ss1, suffix=f"_{quadrant}_1")
+        self._split_into_quadrants(ss2, suffix=f"_{quadrant}_2")
+        changed = self._compare_quadrant_pair(quadrant)
+        return changed, ss2
+
+    def _compare_quadrant_pair(self, quadrant: str) -> bool:
+        """比较指定象限的两帧截图（_1 vs _2）"""
+        if quadrant == "tr":
+            p1 = self._log_dir / "quad_top_right_tr_1.png"
+            p2 = self._log_dir / "quad_top_right_tr_2.png"
+        elif quadrant == "br":
+            p1 = self._log_dir / "quad_bottom_right_br_1.png"
+            p2 = self._log_dir / "quad_bottom_right_br_2.png"
+        else:
+            return False
+        if not (p1.exists() and p2.exists()):
+            return False
+        # 优先使用“拼接图单次视觉比较”方案（避免多轮比较依赖模型记忆）
+        if self._ollama and self._pil_image and self._ensure_model_ready():
+            composite = self._log_dir / f"quad_{quadrant}_compare_merged.png"
+            if self._build_change_compare_image(str(p1), str(p2), str(composite)):
+                _, raw = self._call_vision_model(str(composite), prompt=PROMPT_CHANGE_COMPARE)
+                verdict = self._parse_change_verdict(raw)
+                if verdict is not None:
+                    logger.info("[变化检测:%s] vision verdict=%s | %s", quadrant, verdict, (raw or "[empty]")[:80])
+                    return verdict
+                logger.warning("[变化检测:%s] 视觉结果不明确，回退像素对比: %s", quadrant, (raw or "[empty]")[:80])
+        # 回退：像素差分
+        return self._image_changed(str(p1), str(p2))
+
+    def _build_change_compare_image(
+        self,
+        image_top_path: str,
+        image_bottom_path: str,
+        output_path: str,
+        separator_height: int = 24,
+    ) -> bool:
+        """
+        将两张截图上下拼接，并在中间加入粗红分隔线。
+        """
+        if not self._pil_image:
+            return False
+        try:
+            top_raw = self._pil_image.open(image_top_path)
+            top = top_raw.convert("RGB")
+            if top_raw is not top:
+                top_raw.close()
+            bottom_raw = self._pil_image.open(image_bottom_path)
+            bottom = bottom_raw.convert("RGB")
+            if bottom_raw is not bottom:
+                bottom_raw.close()
+            width = max(top.width, bottom.width)
+            height = top.height + separator_height + bottom.height
+            canvas = self._pil_image.new("RGB", (width, height), (0, 0, 0))
+            canvas.paste(top, (0, 0))
+            red_bar = self._pil_image.new("RGB", (width, separator_height), (255, 0, 0))
+            canvas.paste(red_bar, (0, top.height))
+            canvas.paste(bottom, (0, top.height + separator_height))
+            canvas.save(output_path)
+            top.close()
+            bottom.close()
+            canvas.close()
+            red_bar.close()
+            return True
+        except Exception as e:
+            logger.error("拼接变化比较图失败: %s", e)
+            return False
+
+    @staticmethod
+    def _parse_change_verdict(raw_text: str) -> Optional[bool]:
+        """
+        解析模型变化判定结果：
+        - True: CHANGED
+        - False: UNCHANGED
+        - None: 无法判定
+        """
+        if not raw_text:
+            return None
+        text = raw_text.upper()
+        # 必须先判断 UNCHANGED，避免被 CHANGED 子串误判
+        if "UNCHANGED" in text or "NO_CHANGE" in text or "NO CHANGE" in text or "无变化" in raw_text:
+            return False
+        if "CHANGED" in text or "HAS_CHANGE" in text or "DIFFERENT" in text or "有变化" in raw_text or "变化" in raw_text:
+            return True
+        return None
+
+    def _compare_working_quadrants(self) -> bool:
+        """
+        比较两帧中的右上+右下象限是否变化。
+        两个工作区任一变化都视为 screen_changing=True。
+        """
+        if not self._numpy or not self._pil_image:
+            return False
+
+        tr1 = self._log_dir / "quad_top_right_1.png"
+        tr2 = self._log_dir / "quad_top_right_2.png"
+        br1 = self._log_dir / "quad_bottom_right_1.png"
+        br2 = self._log_dir / "quad_bottom_right_2.png"
+        if not (tr1.exists() and tr2.exists() and br1.exists() and br2.exists()):
+            return False
+
+        try:
+            tr_changed = self._image_changed(str(tr1), str(tr2))
+            br_changed = self._image_changed(str(br1), str(br2))
+            return tr_changed or br_changed
+        except Exception as e:
+            logger.error("工作区象限对比失败: %s", e)
+            return False
+
+    def _image_changed(self, p1: str, p2: str, threshold: float = 2.0) -> bool:
+        """比较两张图片是否发生像素变化"""
+        img1 = self._pil_image.open(p1)
+        arr1 = self._numpy.array(img1)
+        img1.close()
+        img2 = self._pil_image.open(p2)
+        arr2 = self._numpy.array(img2)
+        img2.close()
+        if arr1.shape != arr2.shape:
+            return True
+        diff = self._numpy.mean(self._numpy.abs(arr1.astype(float) - arr2.astype(float)))
+        return diff > threshold
 
     # ── 视觉模型调用 ─────────────────────────────────────────
 
@@ -436,7 +672,9 @@ class VisionAnalyzer:
                 options={"timeout": self.config.model_timeout},
             )
             # 兼容新版 ollama SDK（返回 Pydantic 对象）和旧版（返回 dict）
-            raw_text = self._extract_chat_content(response)
+            raw_text = self._extract_chat_content(response).strip()
+            if not raw_text:
+                return UIStatus.UNKNOWN, "模型返回空响应（empty content）"
             status = self._parse_status(raw_text)
             return status, raw_text
         except Exception as e:

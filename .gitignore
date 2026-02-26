@@ -6,3 +6,4 @@ dist/
 *.gwal
 DEVPLAN.md
 /executor/.venv
+/executor/logs

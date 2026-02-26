@@ -246,11 +246,39 @@ function clearDocModalSearch() {
   clearDocsSearch('docModalSearch', 'docModalSearchClear', 'docModalGroupList', 'globalDocSelect');
 }
 
-/** 从图谱页文档弹层选中文档：关闭弹层 → 跳转文档浏览页 → 打开该文档 */
+/** 按文档 key 在当前图谱节点中查找对应 document 节点 ID */
+function findGraphDocNodeIdByKey(docKey) {
+  var parts = String(docKey || '').split('|');
+  var section = parts[0] || '';
+  var subSection = parts[1] || '';
+  if (!section) return null;
+  for (var i = 0; i < allNodes.length; i++) {
+    var n = allNodes[i];
+    if (!n || n.type !== 'document') continue;
+    var p = n.properties || {};
+    var s = p.section || '';
+    var ss = p.subSection || '';
+    if (s === section && ss === subSection) return n.id;
+  }
+  return null;
+}
+
+/** 从共享文档弹层选中文档：图谱页走右侧详情面板；文档页走完整文档详情 */
 function globalDocSelect(docKey) {
+  // 图谱页上下文：直接复用右侧共享详情面板显示文档（与任务详情一致）
+  if (currentPage === 'graph') {
+    var docNodeId = findGraphDocNodeIdByKey(docKey);
+    if (docNodeId) {
+      panelHistory = [];
+      currentPanelNodeId = null;
+      statsModalGoToNode(docNodeId);
+      return;
+    }
+  }
+
+  // 非图谱页（或图谱未命中节点）回退到文档库完整详情页
   closeStatsModal();
   navTo('docs');
-  // 确保文档浏览页数据已加载后再选中对应文档
   loadDocsData(function() {
     renderDocsList(docsData);   // 确保文档浏览页左侧列表已渲染
     setTimeout(function() { selectDoc(docKey); }, 50);

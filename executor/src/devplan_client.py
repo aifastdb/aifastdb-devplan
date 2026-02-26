@@ -30,6 +30,8 @@ class DevPlanClient:
       POST /api/auto/complete-task   → 标记子任务完成
       POST /api/auto/start-phase     → 启动新阶段
       POST /api/auto/heartbeat       → 心跳上报
+      POST /api/auto/dead-letter     → 记录 dead-letter
+      GET  /api/auto/dead-letters    → 查询 dead-letter
       GET  /api/progress             → 获取项目进度概览
     """
 
@@ -208,6 +210,93 @@ class DevPlanClient:
         if last_screen_state:
             payload["lastScreenState"] = last_screen_state
         return self._post("/api/auto/heartbeat", payload)
+
+    def save_dead_letter(
+        self,
+        reason: str,
+        message: str,
+        phase_id: Optional[str] = None,
+        task_id: Optional[str] = None,
+        retry_after_seconds: Optional[int] = None,
+        metadata: Optional[dict[str, Any]] = None,
+    ) -> Optional[dict]:
+        """
+        写入一条 dead-letter 记录。
+        """
+        payload: dict[str, Any] = {
+            "source": "executor",
+            "reason": reason,
+            "message": message,
+        }
+        if phase_id:
+            payload["phaseId"] = phase_id
+        if task_id:
+            payload["taskId"] = task_id
+        if retry_after_seconds is not None:
+            payload["retryAfterSeconds"] = retry_after_seconds
+        if metadata:
+            payload["metadata"] = metadata
+        return self._post("/api/auto/dead-letter", payload)
+
+    def list_dead_letters(
+        self,
+        limit: int = 50,
+        reason: Optional[str] = None,
+        phase_id: Optional[str] = None,
+        task_id: Optional[str] = None,
+    ) -> Optional[dict]:
+        """
+        查询 dead-letter 列表。
+        """
+        params: dict[str, Any] = {
+            "limit": max(1, min(limit, 200)),
+        }
+        if reason:
+            params["reason"] = reason
+        if phase_id:
+            params["phaseId"] = phase_id
+        if task_id:
+            params["taskId"] = task_id
+        return self._get("/api/auto/dead-letters", params=params)
+
+    def save_memory(
+        self,
+        content: str,
+        memory_type: str = "summary",
+        related_task_id: Optional[str] = None,
+        tags: Optional[list[str]] = None,
+        importance: float = 0.7,
+    ) -> Optional[dict]:
+        """
+        写入一条长期记忆（通过 visualize server /api/memories/save）。
+        """
+        payload: dict[str, Any] = {
+            "content": content,
+            "memoryType": memory_type,
+            "importance": importance,
+            "tags": tags or [],
+        }
+        if related_task_id:
+            payload["relatedTaskId"] = related_task_id
+        return self._post("/api/memories/save", payload)
+
+    def recall_unified(
+        self,
+        query: str,
+        limit: int = 5,
+        depth: str = "L1",
+        min_score: float = 0.0,
+    ) -> Optional[dict]:
+        """
+        统一召回（通过 visualize server /api/memories/recall-unified）。
+        """
+        params = {
+            "query": query,
+            "limit": max(1, min(limit, 20)),
+            "depth": depth,
+            "minScore": min_score,
+        }
+        return self._get("/api/memories/recall-unified", params=params)
 
     def is_reachable(self) -> bool:
         """检查 DevPlan 服务是否可达"""

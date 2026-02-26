@@ -253,6 +253,22 @@ class TestFlaskRoutes(unittest.TestCase):
         self.assertTrue(data["success"])
         mock_client.start_phase.assert_called_once_with("phase-6")
 
+    def test_set_vision_with_mock_executor(self):
+        """POST /api/set_vision 应调用 executor.set_vision_enabled"""
+        mock_exec = MagicMock()
+        mock_exec.set_vision_enabled.return_value = (True, "ok")
+        set_executor_refs(executor=mock_exec)
+
+        resp = self.client.post(
+            "/api/set_vision",
+            json={"enabled": False},
+            content_type="application/json",
+        )
+        data = resp.get_json()
+        self.assertTrue(data["success"])
+        self.assertFalse(data["enabled"])
+        mock_exec.set_vision_enabled.assert_called_once_with(False)
+
     def test_complete_task_missing_param(self):
         """POST /api/complete_task 缺少 taskId 应报错"""
         resp = self.client.post("/api/complete_task",

@@ -25,6 +25,8 @@ DevPlan Executor — 三通道决策引擎
 from __future__ import annotations
 
 import logging
+import math
+import random
 import time
 from dataclasses import dataclass, field
 from enum import Enum
@@ -83,6 +85,18 @@ class StateTracker:
     last_ui_status: str = ""
     # RESPONSE_STALL 连续无效 continue 发送次数（用于升级到 CONTEXT_OVERFLOW）
     stall_continue_count: int = 0
+    # 网络恢复指数退避：当前尝试次数
+    network_backoff_attempts: int = 0
+    # 网络恢复指数退避：冷却截止时间戳（epoch 秒）
+    network_backoff_until: float = 0.0
+    # Circuit Breaker 状态：closed | open | half_open
+    circuit_state: str = "closed"
+    # Circuit Breaker 失败计数（closed 状态下累计）
+    circuit_failures: int = 0
+    # Circuit Breaker open 截止时间（epoch 秒）
+    circuit_open_until: float = 0.0
+    # 网络恢复窗口起点（epoch 秒），用于限制持续恢复时长
+    recovery_window_start: float = 0.0
 
     def increment_status(self, status: str) -> int:
         """
@@ -104,6 +118,99 @@ class StateTracker:
         self.status_counts.clear()
         self.continue_retries = 0
         self.terminal_start_time = 0.0
+        self.clear_network_resilience()
+
+    def clear_network_backoff(self) -> None:
+        """清空网络退避状态（检测到 AI 恢复活动时调用）"""
+        self.network_backoff_attempts = 0
+        self.network_backoff_until = 0.0
+
+    def clear_circuit_breaker(self) -> None:
+        """重置 circuit breaker 到 closed"""
+        self.circuit_state = "closed"
+        self.circuit_failures = 0
+        self.circuit_open_until = 0.0
+
+    def clear_network_resilience(self) -> None:
+        """统一清空网络弹性状态（backoff + circuit breaker）"""
+        self.clear_network_backoff()
+        self.clear_circuit_breaker()
+        self.recovery_window_start = 0.0
+
+    def get_network_backoff_remaining(self) -> float:
+        """获取当前网络退避剩余秒数"""
+        return max(0.0, self.network_backoff_until - time.time())
+
+    def schedule_network_backoff(self, base_seconds: int, max_seconds: int, jitter_ratio: float) -> int:
+        """
+        安排下一次网络退避冷却（指数退避 + jitter）。
+
+        delay = min(max_seconds, base_seconds * 2^(attempt-1)) + random(0, delay*jitter_ratio)
+        """
+        self.network_backoff_attempts = min(self.network_backoff_attempts + 1, 12)
+        raw_delay = min(max_seconds, base_seconds * (2 ** (self.network_backoff_attempts - 1)))
+        jitter = random.uniform(0.0, raw_delay * max(0.0, jitter_ratio))
+        delay = max(1, int(round(raw_delay + jitter)))
+        self.network_backoff_until = time.time() + delay
+        return delay
+
+    def resolve_circuit_state(self) -> str:
+        """
+        解析当前 circuit breaker 状态。
+        open 超时后自动转 half_open。
+        """
+        if self.circuit_state == "open" and time.time() >= self.circuit_open_until:
+            self.circuit_state = "half_open"
+            self.circuit_failures = 0
+        return self.circuit_state
+
+    def get_circuit_open_remaining(self) -> float:
+        """获取 open 状态剩余秒数"""
+        if self.resolve_circuit_state() != "open":
+            return 0.0
+        return max(0.0, self.circuit_open_until - time.time())
+
+    def record_network_failure(self, threshold: int, open_seconds: int) -> None:
+        """
+        记录一次网络失败，并驱动 circuit breaker 状态转移。
+        """
+        threshold = max(1, threshold)
+        open_seconds = max(1, open_seconds)
+        state = self.resolve_circuit_state()
+        now = time.time()
+        if self.recovery_window_start <= 0.0:
+            self.recovery_window_start = now
+
+        if state == "open":
+            return
+
+        if state == "half_open":
+            # half-open 探测失败，立即重新开路
+            self.circuit_state = "open"
+            self.circuit_failures = threshold
+            self.circuit_open_until = now + open_seconds
+            return
+
+        # closed: 累计失败
+        self.circuit_failures += 1
+        if self.circuit_failures >= threshold:
+            self.circuit_state = "open"
+            self.circuit_open_until = now + open_seconds
+
+    def record_network_success(self) -> None:
+        """
+        记录网络恢复成功：close breaker 并清空失败计数。
+        """
+        self.circuit_state = "closed"
+        self.circuit_failures = 0
+        self.circuit_open_until = 0.0
+        self.recovery_window_start = 0.0
+
+    def get_recovery_window_elapsed(self) -> float:
+        """获取当前恢复窗口已持续时长（秒）"""
+        if self.recovery_window_start <= 0.0:
+            return 0.0
+        return max(0.0, time.time() - self.recovery_window_start)
 
     def can_send(self, min_interval: float) -> bool:
         """
@@ -146,6 +253,13 @@ class DualChannelEngine:
         api_timeout_wait: int = 5,
         context_overflow_wait: int = 3,
         stall_escalate_threshold: int = 3,
+        network_backoff_base: int = 5,
+        network_backoff_max: int = 120,
+        network_backoff_jitter_ratio: float = 0.25,
+        circuit_breaker_failure_threshold: int = 4,
+        circuit_breaker_open_seconds: int = 90,
+        network_recovery_window_seconds: int = 900,
+        network_recovery_window_cooldown: int = 300,
     ):
         self.threshold = status_trigger_threshold
         self.min_send_interval = min_send_interval
@@ -156,6 +270,13 @@ class DualChannelEngine:
         self.api_timeout_wait = api_timeout_wait
         self.context_overflow_wait = context_overflow_wait
         self.stall_escalate_threshold = stall_escalate_threshold
+        self.network_backoff_base = network_backoff_base
+        self.network_backoff_max = network_backoff_max
+        self.network_backoff_jitter_ratio = network_backoff_jitter_ratio
+        self.circuit_breaker_failure_threshold = circuit_breaker_failure_threshold
+        self.circuit_breaker_open_seconds = circuit_breaker_open_seconds
+        self.network_recovery_window_seconds = network_recovery_window_seconds
+        self.network_recovery_window_cooldown = network_recovery_window_cooldown
         self.tracker = StateTracker()
 
     def decide(
@@ -272,13 +393,13 @@ class DualChannelEngine:
 
         # 连接错误 → 尝试恢复
         if ui_status == UIStatus.CONNECTION_ERROR:
-            return self._maybe_send_continue(
+            return self._handle_network_recovery(
                 f"DevPlan 有待发任务 {task_id}，但 UI 检测到连接错误，尝试恢复"
             )
 
         # Provider 错误 → 尝试恢复
         if ui_status == UIStatus.PROVIDER_ERROR:
-            return self._maybe_send_continue(
+            return self._handle_network_recovery(
                 f"DevPlan 有待发任务 {task_id}，但 UI 检测到 Provider Error，尝试恢复"
             )
 
@@ -288,16 +409,14 @@ class DualChannelEngine:
 
         # 限流 → 等待冷却
         if ui_status == UIStatus.RATE_LIMIT:
-            return Decision(
-                action=Action.WAIT_COOLDOWN,
-                message=f"DevPlan 有待发任务 {task_id}，但检测到限流，等待 {self.rate_limit_wait} 秒",
-                cooldown_seconds=self.rate_limit_wait,
+            return self._handle_rate_limit_with_backoff(
+                f"DevPlan 有待发任务 {task_id}，检测到限流"
             )
 
         # API 超时 → 即时重试
         if ui_status == UIStatus.API_TIMEOUT:
-            return self._maybe_send_continue(
-                f"DevPlan 有待发任务 {task_id}，API 超时，即时重试"
+            return self._handle_network_recovery(
+                f"DevPlan 有待发任务 {task_id}，API 超时，尝试恢复"
             )
 
         # 响应被中断 → 发送"请继续"
@@ -359,13 +478,13 @@ class DualChannelEngine:
 
         # 连接错误 → 尝试恢复
         if ui_status == UIStatus.CONNECTION_ERROR:
-            return self._maybe_send_continue(
+            return self._handle_network_recovery(
                 f"{task_id} 执行中但 UI 检测到连接错误，尝试恢复"
             )
 
         # Provider 错误 → 尝试恢复
         if ui_status == UIStatus.PROVIDER_ERROR:
-            return self._maybe_send_continue(
+            return self._handle_network_recovery(
                 f"{task_id} 执行中但 UI 检测到 Provider Error，尝试恢复"
             )
 
@@ -375,16 +494,14 @@ class DualChannelEngine:
 
         # 限流 → 等待冷却
         if ui_status == UIStatus.RATE_LIMIT:
-            return Decision(
-                action=Action.WAIT_COOLDOWN,
-                message=f"{task_id} 执行中但检测到限流，等待 {self.rate_limit_wait} 秒",
-                cooldown_seconds=self.rate_limit_wait,
+            return self._handle_rate_limit_with_backoff(
+                f"{task_id} 执行中检测到限流"
             )
 
         # API 超时 → 即时重试
         if ui_status == UIStatus.API_TIMEOUT:
-            return self._maybe_send_continue(
-                f"{task_id} 执行中，API 超时，即时重试"
+            return self._handle_network_recovery(
+                f"{task_id} 执行中，API 超时，尝试恢复"
             )
 
         # 响应被中断 → 发送"请继续"
@@ -499,6 +616,112 @@ class DualChannelEngine:
             cooldown_seconds=self.context_overflow_wait,
         )
 
+    def _handle_rate_limit_with_backoff(self, message: str) -> Decision:
+        """
+        处理限流：使用指数退避 + jitter 冷却，不立即发送 continue。
+        """
+        self.tracker.record_network_failure(
+            threshold=self.circuit_breaker_failure_threshold,
+            open_seconds=self.circuit_breaker_open_seconds,
+        )
+        over_window = self._check_recovery_window_exceeded(message)
+        if over_window is not None:
+            return over_window
+
+        circuit_state = self.tracker.resolve_circuit_state()
+        if circuit_state == "open":
+            sec = max(1, int(math.ceil(self.tracker.get_circuit_open_remaining())))
+            return Decision(
+                action=Action.WAIT_COOLDOWN,
+                message=f"{message}，circuit breaker=open，等待 {sec}s",
+                cooldown_seconds=sec,
+            )
+
+        remaining = self.tracker.get_network_backoff_remaining()
+        if remaining > 0:
+            sec = max(1, int(math.ceil(remaining)))
+            return Decision(
+                action=Action.WAIT_COOLDOWN,
+                message=f"{message}，退避冷却中 {sec}s",
+                cooldown_seconds=sec,
+            )
+
+        delay = self.tracker.schedule_network_backoff(
+            base_seconds=max(1, self.rate_limit_wait),
+            max_seconds=self.network_backoff_max,
+            jitter_ratio=self.network_backoff_jitter_ratio,
+        )
+        return Decision(
+            action=Action.WAIT_COOLDOWN,
+            message=f"{message}，进入指数退避冷却 {delay}s（attempt={self.tracker.network_backoff_attempts}）",
+            cooldown_seconds=delay,
+        )
+
+    def _handle_network_recovery(self, message: str) -> Decision:
+        """
+        网络错误恢复：先检查退避窗口，窗口外才尝试 send_continue。
+        """
+        self.tracker.record_network_failure(
+            threshold=self.circuit_breaker_failure_threshold,
+            open_seconds=self.circuit_breaker_open_seconds,
+        )
+        over_window = self._check_recovery_window_exceeded(message)
+        if over_window is not None:
+            return over_window
+
+        circuit_state = self.tracker.resolve_circuit_state()
+        if circuit_state == "open":
+            sec = max(1, int(math.ceil(self.tracker.get_circuit_open_remaining())))
+            return Decision(
+                action=Action.WAIT_COOLDOWN,
+                message=f"{message}，circuit breaker=open，等待 {sec}s",
+                cooldown_seconds=sec,
+            )
+
+        remaining = self.tracker.get_network_backoff_remaining()
+        if remaining > 0:
+            sec = max(1, int(math.ceil(remaining)))
+            return Decision(
+                action=Action.WAIT_COOLDOWN,
+                message=f"{message}，退避冷却中 {sec}s",
+                cooldown_seconds=sec,
+            )
+
+        decision = self._maybe_send_continue(message)
+        if decision.action == Action.SEND_CONTINUE:
+            delay = self.tracker.schedule_network_backoff(
+                base_seconds=self.network_backoff_base,
+                max_seconds=self.network_backoff_max,
+                jitter_ratio=self.network_backoff_jitter_ratio,
+            )
+            if circuit_state == "half_open":
+                self.tracker.record_network_success()
+            decision.message = (
+                f"{message}（已发送继续；指数退避 {delay}s，attempt={self.tracker.network_backoff_attempts}，circuit={self.tracker.circuit_state}）"
+            )
+        return decision
+
+    def _check_recovery_window_exceeded(self, message: str) -> Optional[Decision]:
+        """
+        检查网络恢复窗口是否超时；超窗时进入 ERROR_RECOVERY 保护状态。
+        """
+        max_window = max(30, int(self.network_recovery_window_seconds))
+        elapsed = self.tracker.get_recovery_window_elapsed()
+        if elapsed <= max_window:
+            return None
+
+        cooldown = max(30, int(self.network_recovery_window_cooldown))
+        self.tracker.circuit_state = "open"
+        self.tracker.circuit_open_until = time.time() + cooldown
+        return Decision(
+            action=Action.ERROR_RECOVERY,
+            message=(
+                f"{message}，网络恢复窗口已超时（elapsed={int(elapsed)}s > {max_window}s），"
+                f"进入保护等待 {cooldown}s"
+            ),
+            cooldown_seconds=cooldown,
+        )
+
     def _handle_response_stall(self, devplan_data: dict, task_id: str) -> Decision:
         """
         处理 RESPONSE_STALL：累积型中断检测。
@@ -586,3 +809,4 @@ class DualChannelEngine:
             )
         self.tracker.continue_retries = 0
         self.tracker.stall_continue_count = 0
+        self.tracker.clear_network_resilience()

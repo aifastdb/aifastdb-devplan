@@ -48,7 +48,8 @@ class UIState:
             "project_name": "",
             "poll_interval": 15,
             "split_quadrant": True,
-            "screenshot_interval": 1.5,
+            "vision_enabled": True,
+            "screenshot_interval": 3.0,
             "overall_progress": "--",
             "current_phase": "",
             "current_phase_title": "",
@@ -74,6 +75,8 @@ class UIState:
             "quad_bottom_right_b64": "",
             "quad_top_right_status": "",
             "quad_bottom_right_status": "",
+            "top_right_changed": None,
+            "bottom_right_changed": None,
             "last_update": "",
             "logs": [],
         }
@@ -183,15 +186,19 @@ ui_state = UIState()
 # Executor 组件引用（由 set_executor_refs 注入）
 _gui_ref: Any = None
 _client_ref: Any = None
+_executor_ref: Any = None
+_UNSET = object()
 
 
-def set_executor_refs(gui: Any = None, client: Any = None) -> None:
+def set_executor_refs(gui: Any = _UNSET, client: Any = _UNSET, executor: Any = _UNSET) -> None:
     """注入 Executor 组件引用，供 Web UI API 调用"""
-    global _gui_ref, _client_ref
-    if gui is not None:
+    global _gui_ref, _client_ref, _executor_ref
+    if gui is not _UNSET:
         _gui_ref = gui
-    if client is not None:
+    if client is not _UNSET:
         _client_ref = client
+    if executor is not _UNSET:
+        _executor_ref = executor
 
 
 # ── 工具函数 ─────────────────────────────────────────────────
@@ -312,10 +319,23 @@ def create_app():
         """设置截图间隔"""
         try:
             data = request.get_json() or {}
-            interval = float(data.get("interval", 1.5))
+            interval = float(data.get("interval", 3.0))
             interval = max(0.5, min(10.0, interval))  # 限制范围
             ui_state.update(screenshot_interval=interval)
             return jsonify({"success": True, "interval": interval})
+        except Exception as e:
+            return jsonify({"success": False, "message": str(e)})
+
+    @app.route("/api/set_vision", methods=["POST"])
+    def api_set_vision():
+        """运行时启用/禁用截图分析分支"""
+        if _executor_ref is None or not hasattr(_executor_ref, "set_vision_enabled"):
+            return jsonify({"success": False, "message": "Executor 不支持运行时切换截图分析"})
+        try:
+            data = request.get_json() or {}
+            enabled = bool(data.get("enabled", True))
+            ok, message = _executor_ref.set_vision_enabled(enabled)
+            return jsonify({"success": bool(ok), "enabled": enabled, "message": message})
         except Exception as e:
             return jsonify({"success": False, "message": str(e)})
 
@@ -375,3 +395,7 @@ def start_server_thread(host: str = "127.0.0.1", port: int = 5000) -> Optional[t
     thread.start()
     logger.info("Web UI 已启动: http://%s:%d", host, port)
     return thread
+
+
+# 兼容测试：模块导入时提供 app 对象
+app = create_app()

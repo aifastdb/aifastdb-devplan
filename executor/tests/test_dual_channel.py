@@ -37,6 +37,7 @@ from __future__ import annotations
 import sys
 import os
 import unittest
+from unittest.mock import patch
 
 # 确保 src 在路径上
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
@@ -528,6 +529,29 @@ class TestVisionAnalyzerDiagnostics(unittest.TestCase):
         self.assertFalse(changing)
         self.assertIn("不可用", raw)
 
+    def test_model_empty_response_returns_unknown(self):
+        """模型返回空文本时应返回 UNKNOWN + 明确提示"""
+        from src.config import ExecutorConfig
+        from pathlib import Path
+
+        config = ExecutorConfig()
+        analyzer = VisionAnalyzer.__new__(VisionAnalyzer)
+        analyzer.config = config
+        analyzer._ollama = type("M", (), {"chat": lambda self, **kwargs: {}})()
+        analyzer._numpy = None
+        analyzer._pil_image = None
+        analyzer._pyautogui = None
+        analyzer._available = True
+        p = Path(config.log_dir)
+        p.mkdir(parents=True, exist_ok=True)
+        img = p / "dummy.png"
+        img.write_bytes(b"fake")
+
+        with patch.object(VisionAnalyzer, "_extract_chat_content", return_value=""):
+            status, raw = analyzer._call_vision_model(str(img), prompt="x")
+            self.assertEqual(status, UIStatus.UNKNOWN)
+            self.assertIn("empty content", raw)
+
     def test_diagnostics_structure(self):
         """get_diagnostics 返回正确的结构"""
         from src.config import ExecutorConfig
@@ -674,6 +698,67 @@ class TestResponseStallDetection(unittest.TestCase):
         # wait + RESPONSE_STALL → SEND_CONTINUE
         d2 = engine2.decide(make_devplan_wait(), UIStatus.RESPONSE_STALL)
         self.assertEqual(d2.action, Action.SEND_CONTINUE)
+
+
+class TestQuadrantScreenChanging(unittest.TestCase):
+    """四象限模式下，屏幕变化应基于右上+右下联合判断"""
+
+    def test_compare_working_quadrants_true_when_tr_changes(self):
+        from src.config import ExecutorConfig
+        from pathlib import Path
+        from PIL import Image
+
+        config = ExecutorConfig()
+        analyzer = VisionAnalyzer.__new__(VisionAnalyzer)
+        analyzer.config = config
+        analyzer._numpy = __import__("numpy")
+        analyzer._pil_image = Image
+        analyzer._log_dir = Path(config.log_dir)
+        analyzer._log_dir.mkdir(parents=True, exist_ok=True)
+
+        tr1 = analyzer._log_dir / "quad_top_right_1.png"
+        tr2 = analyzer._log_dir / "quad_top_right_2.png"
+        br1 = analyzer._log_dir / "quad_bottom_right_1.png"
+        br2 = analyzer._log_dir / "quad_bottom_right_2.png"
+
+        Image.new("RGB", (8, 8), color=(0, 0, 0)).save(tr1)
+        Image.new("RGB", (8, 8), color=(255, 255, 255)).save(tr2)  # 右上变化
+        Image.new("RGB", (8, 8), color=(10, 10, 10)).save(br1)
+        Image.new("RGB", (8, 8), color=(10, 10, 10)).save(br2)
+
+        self.assertTrue(analyzer._compare_working_quadrants())
+
+    def test_parse_change_verdict(self):
+        self.assertTrue(VisionAnalyzer._parse_change_verdict("CHANGED"))
+        self.assertFalse(VisionAnalyzer._parse_change_verdict("UNCHANGED"))
+        self.assertIsNone(VisionAnalyzer._parse_change_verdict("maybe"))
+
+    def test_build_change_compare_image_with_red_separator(self):
+        from src.config import ExecutorConfig
+        from pathlib import Path
+        from PIL import Image
+
+        config = ExecutorConfig()
+        analyzer = VisionAnalyzer.__new__(VisionAnalyzer)
+        analyzer.config = config
+        analyzer._pil_image = Image
+        analyzer._log_dir = Path(config.log_dir)
+        analyzer._log_dir.mkdir(parents=True, exist_ok=True)
+
+        top = analyzer._log_dir / "cmp_top.png"
+        bottom = analyzer._log_dir / "cmp_bottom.png"
+        out = analyzer._log_dir / "cmp_out.png"
+
+        Image.new("RGB", (16, 10), color=(10, 20, 30)).save(top)
+        Image.new("RGB", (16, 10), color=(40, 50, 60)).save(bottom)
+        ok = analyzer._build_change_compare_image(str(top), str(bottom), str(out), separator_height=6)
+        self.assertTrue(ok)
+        self.assertTrue(out.exists())
+
+        img = Image.open(out)
+        # 中间分隔线取一像素，应该是红色
+        r, g, b = img.getpixel((3, 10))
+        self.assertEqual((r, g, b), (255, 0, 0))
 
 
 if __name__ == "__main__":

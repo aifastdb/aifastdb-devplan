@@ -233,8 +233,10 @@ export class DevPlanDocumentStore implements IDevPlanStore {
     if (subSection) {
       const subTag = `sub:${subSection}`;
       filtered = docs.filter((doc: any) => (doc.tags as string[]).includes(subTag));
-    } else if (section !== 'technical_notes' && section !== 'custom') {
-      // 非多子文档类型，排除有 sub: tag 的
+    } else {
+      // 未指定 subSection 时，只匹配“根文档”（无 sub: tag）。
+      // 否则在 multi-doc section（technical_notes/custom）下会误命中任意子文档，
+      // 导致 saveSection() 将“新增根文档”误判为“更新已有子文档”并覆盖旧内容。
       filtered = docs.filter((doc: any) =>
         !(doc.tags as string[]).some((t: string) => t.startsWith('sub:'))
       );
@@ -2105,7 +2107,7 @@ export class DevPlanDocumentStore implements IDevPlanStore {
 
   /**
    * EnhancedDocumentStore 不支持图谱导出，返回 null。
-   * 如需图谱可视化，请使用 SocialGraphV2 引擎（DevPlanGraphStore）。
+   * 如需项目图谱展示，请使用 SocialGraphV2 引擎（DevPlanGraphStore）。
    */
   exportGraph(_options?: {
     includeDocuments?: boolean;

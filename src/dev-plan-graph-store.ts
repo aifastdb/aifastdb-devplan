@@ -41,6 +41,7 @@ import {
   type MemoryScanReport,
   // ConflictResult — TS 层冲突检测已重写为直接向量搜索，不再委托 Rust 层
 } from 'aifastdb';
+import { randomUUID } from 'crypto';
 
 import * as path from 'path';
 import * as fs from 'fs';
@@ -314,6 +315,12 @@ export class DevPlanGraphStore implements IDevPlanStore {
   private rerankReady: boolean = false;
   /** Phase-54: 重排使用的模型名称 */
   private rerankModel: string = 'gemma3:4b';
+  /** NAPI 能力探测：memoryTreeSearch 是否可用（避免 wrapper 存在但 native 缺失时报错） */
+  private nativeMemoryTreeSearchReady: boolean = false;
+  /** NAPI 能力探测：anchorExtractFromText 是否可用 */
+  private nativeAnchorExtractReady: boolean = false;
+  /** NAPI 能力探测：applyMutations 是否可用 */
+  private nativeApplyMutationsReady: boolean = false;
   /** Phase-52/T52.5: 文档 TreeIndex 检索是否启用（需 LLM Gateway 可用） */
   private treeIndexRetrievalEnabled: boolean = false;
   /** TreeIndex 候选节点上限 */
@@ -397,6 +404,7 @@ export class DevPlanGraphStore implements IDevPlanStore {
     }
 
     this.graph = new SocialGraphV2(graphConfig);
+    this.detectNativeCapabilities();
 
     // SocialStoreV2::new() 已在构造函数内自动调用 recover()（包括实体 WAL + 向量 WAL）
     // ⚠️ 不要再手动调用 graph.recover()！第二次 recover() 会导致 HNSW 向量索引被清空
@@ -453,6 +461,51 @@ export class DevPlanGraphStore implements IDevPlanStore {
     if (config.enableTreeIndexRetrieval && !this.treeIndexRetrievalEnabled) {
       console.warn('[DevPlan] TreeIndex retrieval requested but LLM Gateway is unavailable. TreeIndex channel disabled.');
     }
+  }
+
+  /**
+   * 检测当前加载的 NAPI 二进制能力，避免 JS wrapper 存在但 native 方法缺失时反复抛错。
+   */
+  private detectNativeCapabilities(): void {
+    try {
+      const native = (this.graph as any).native as Record<string, unknown> | undefined;
+      const hasNativeFn = (name: string): boolean => Boolean(native && typeof native[name] === 'function');
+
+      this.nativeMemoryTreeSearchReady = hasNativeFn('memoryTreeSearch');
+      this.nativeAnchorExtractReady = hasNativeFn('anchorExtractFromText');
+      this.nativeApplyMutationsReady = hasNativeFn('applyMutations');
+
+      const missing: string[] = [];
+      if (!this.nativeMemoryTreeSearchReady) missing.push('memoryTreeSearch');
+      if (!this.nativeAnchorExtractReady) missing.push('anchorExtractFromText');
+      if (!this.nativeApplyMutationsReady) missing.push('applyMutations');
+
+      if (missing.length > 0) {
+        console.warn(
+          `[DevPlan] Native capability gap detected (likely aifastdb JS/native mismatch): ` +
+          `missing [${missing.join(', ')}]. Falling back to compatible paths.`
+        );
+      }
+    } catch (e) {
+      console.warn(
+        `[DevPlan] Failed to probe native capabilities: ${e instanceof Error ? e.message : String(e)}`
+      );
+    }
+  }
+
+  /**
+   * 导出 Native 能力探测结果（供 MCP devplan_capabilities 诊断输出）。
+   */
+  getNativeCapabilities(): {
+    memoryTreeSearch: boolean;
+    anchorExtractFromText: boolean;
+    applyMutations: boolean;
+  } {
+    return {
+      memoryTreeSearch: this.nativeMemoryTreeSearchReady,
+      anchorExtractFromText: this.nativeAnchorExtractReady,
+      applyMutations: this.nativeApplyMutationsReady,
+    };
   }
 
   /**
@@ -955,7 +1008,7 @@ export class DevPlanGraphStore implements IDevPlanStore {
     if (relationType) {
       return this.graph.outgoingByType(entityId, relationType) as Relation[];
     }
-    const filter: any = { sourceId: entityId };
+    const filter: any = { source: entityId };
     return this.graph.listRelations(filter);
   }
 
@@ -2505,23 +2558,29 @@ export class DevPlanGraphStore implements IDevPlanStore {
     // - contentL3: 原始文档全文（如提供）
     const searchableContent = input.contentL2 || input.content;
     const entityName = `Memory: ${input.memoryType} — ${input.content.slice(0, 40)}`;
+    const sourceRef = input.sourceRef || undefined;
+    const sourceRefKey = sourceRef
+      ? (sourceRef.variant ? `${sourceRef.sourceId}#${sourceRef.variant}` : sourceRef.sourceId)
+      : undefined;
 
     // Phase-78B: 统一使用 upsertEntityByProp 保持 UUID 稳定
-    // 策略：有 sourceId 时用 sourceId 做 upsert key；无 sourceId 时退回 findDuplicateMemory
+    // 策略：有 sourceRef 时用 sourceRefKey 做 upsert key；无 sourceRef 时退回 findDuplicateMemory
     let entity: Entity;
     let isUpdate = false;
 
-    if (input.sourceId) {
-      // ---- 有 sourceId → upsertEntityByProp（引擎级去重，UUID 不变） ----
+    if (sourceRefKey) {
+      // ---- 有 sourceRef → upsertEntityByProp（引擎级去重，UUID 不变） ----
       entity = this.graph.upsertEntityByProp(
-        ET.MEMORY, 'sourceId', input.sourceId, entityName, {
+        ET.MEMORY, 'sourceRefKey', sourceRefKey, entityName, {
         projectName: this.projectName,
         memoryType: input.memoryType,
         content: searchableContent,
         contentL3: input.contentL3 || null,
         tags: input.tags || [],
         relatedTaskId: input.relatedTaskId || null,
-        sourceId: input.sourceId,
+        sourceRef: sourceRef || null,
+        sourceRefKey,
+        provenance: input.provenance || null,
         importance: input.importance ?? 0.5,
         hitCount: 0,
         lastAccessedAt: null,
@@ -2540,13 +2599,16 @@ export class DevPlanGraphStore implements IDevPlanStore {
             contentL3: input.contentL3 || ep.contentL3 || null,
             memoryType: input.memoryType,
             tags: input.tags || ep.tags || [],
+            sourceRef: sourceRef || ep.sourceRef || null,
+            sourceRefKey,
+            provenance: input.provenance || ep.provenance || null,
             importance: input.importance ?? ep.importance ?? 0.5,
             updatedAt: now,
           },
         });
       }
     } else {
-      // ---- 无 sourceId → 传统去重检测 ----
+      // ---- 无 sourceRef → 传统去重检测 ----
       const existingDup = this.findDuplicateMemory(input);
       if (existingDup) {
         isUpdate = true;
@@ -2560,7 +2622,9 @@ export class DevPlanGraphStore implements IDevPlanStore {
             memoryType: input.memoryType,
             tags: input.tags || oldProps.tags || [],
             importance: input.importance ?? oldProps.importance ?? 0.5,
-            sourceId: input.sourceId || oldProps.sourceId || null,
+            sourceRef: sourceRef || oldProps.sourceRef || null,
+            sourceRefKey: sourceRefKey || oldProps.sourceRefKey || null,
+            provenance: input.provenance || oldProps.provenance || null,
             updatedAt: now,
           },
         });
@@ -2573,7 +2637,9 @@ export class DevPlanGraphStore implements IDevPlanStore {
           contentL3: input.contentL3 || null,
           tags: input.tags || [],
           relatedTaskId: input.relatedTaskId || null,
-          sourceId: input.sourceId || null,
+          sourceRef: sourceRef || null,
+          sourceRefKey: sourceRefKey || null,
+          provenance: input.provenance || null,
           importance: input.importance ?? 0.5,
           hitCount: 0,
           lastAccessedAt: null,
@@ -2620,8 +2686,8 @@ export class DevPlanGraphStore implements IDevPlanStore {
     }
 
     // ---- Phase-37: 从文档生成的记忆自动建立 MEMORY_FROM_DOC 关系 ----
-    if (input.sourceId) {
-      this.autoLinkMemoryToDoc(entity.id, input.sourceId);
+    if (sourceRef?.sourceId) {
+      this.autoLinkMemoryToDoc(entity.id, sourceRef.sourceId);
     }
 
     // ---- Phase-37: 模块级记忆自动建立 MODULE_MEMORY 关系 ----
@@ -2723,33 +2789,47 @@ export class DevPlanGraphStore implements IDevPlanStore {
 
       // Phase-44: 使用 applyMutations 批量创建（单次 Rust 调用）
       // Phase-46: 移除 as any 断言 — aifastdb ≥2.8.0 已有正式类型
-      {
+      if (this.nativeApplyMutationsReady) {
         const mutations: any[] = [];
         for (const { targetId, score } of relationsToCreate) {
           // 正向关系
           mutations.push({
             type: 'PutRelation',
             relation: {
+              id: randomUUID(),
               source: newMemoryId,
               target: targetId,
               relation_type: RT.MEMORY_RELATES,
               weight: score,
+              bidirectional: false,
+              metadata: {},
+              created_at: Date.now(),
             },
           });
           // 反向关系（双向）
           mutations.push({
             type: 'PutRelation',
             relation: {
+              id: randomUUID(),
               source: targetId,
               target: newMemoryId,
               relation_type: RT.MEMORY_RELATES,
               weight: score,
+              bidirectional: false,
+              metadata: {},
+              created_at: Date.now(),
             },
           });
         }
         this.graph.applyMutations(mutations).catch((e: any) => {
           console.warn(`[DevPlan] applyMutations for memory links failed: ${e}`);
         });
+      } else {
+        // 兼容老 native：逐条 putRelation 回退，避免 applyMutations 缺失导致噪声报错
+        for (const { targetId, score } of relationsToCreate) {
+          this.graph.putRelation(newMemoryId, targetId, RT.MEMORY_RELATES, score, false);
+          this.graph.putRelation(targetId, newMemoryId, RT.MEMORY_RELATES, score, false);
+        }
       }
 
       console.log(`[DevPlan] Memory ${newMemoryId.slice(0, 8)}... auto-linked to ${relationsToCreate.length} similar memories`);
@@ -2761,17 +2841,17 @@ export class DevPlanGraphStore implements IDevPlanStore {
   /**
    * Phase-37: 从文档生成的记忆自动建立 MEMORY_FROM_DOC 关系
    *
-   * 当 sourceId 格式为 "section" 或 "section|subSection" 时，
+   * 当 sourceRef.sourceId 格式为 "section" 或 "section|subSection" 时，
    * 找到对应的文档 Entity 并建立 MEMORY_FROM_DOC 关系。
    */
-  private autoLinkMemoryToDoc(memoryId: string, sourceId: string): void {
+  private autoLinkMemoryToDoc(memoryId: string, sourceKey: string): void {
     try {
-      // sourceId 格式："section" 或 "section|subSection"
+      // sourceKey 格式："section" 或 "section|subSection"
       // 任务格式："phase-7"（以 phase- 或 T 开头的不是文档）
-      if (sourceId.startsWith('phase-') || sourceId.startsWith('T')) return;
+      if (sourceKey.startsWith('phase-') || sourceKey.startsWith('T')) return;
 
       // 解析 section 和 subSection
-      const parts = sourceId.split('|');
+      const parts = sourceKey.split('|');
       const section = parts[0];
       const subSection = parts[1];
 
@@ -2842,7 +2922,7 @@ export class DevPlanGraphStore implements IDevPlanStore {
     let anchorName = input.anchorName;
     let anchorType = input.anchorType || ANCHOR_TYPES.CONCEPT;
 
-    if (!anchorName) {
+    if (!anchorName && this.nativeAnchorExtractReady) {
       // 自动从内容中提取触点
       try {
         const extracted: NativeExtractedAnchor[] = g.anchorExtractFromText(input.content);
@@ -4192,11 +4272,24 @@ export class DevPlanGraphStore implements IDevPlanStore {
 
     const embedding = this.synapse.embed(query);
 
-    // 调用 Rust 激活引擎
-    const activation: ActivationResult = this.graph.memoryTreeSearch(
+    // 调用 Rust 激活引擎（缺失绑定时安全降级，避免 not a function 噪声）
+    if (!this.nativeMemoryTreeSearchReady) {
+      return [];
+    }
+    let activation: ActivationResult;
+    try {
+      activation = this.graph.memoryTreeSearch(
       embedding,
       this.projectName,  // userId = projectName
     );
+    } catch (e) {
+      console.warn(
+        `[DevPlan] memoryTreeSearch unavailable, fallback to legacy search: ${
+          e instanceof Error ? e.message : String(e)
+        }`,
+      );
+      return [];
+    }
 
     if (!activation || !activation.memories || activation.memories.length === 0) {
       return [];
@@ -5217,7 +5310,8 @@ export class DevPlanGraphStore implements IDevPlanStore {
       content: p.content || '',
       tags: p.tags || [],
       relatedTaskId: p.relatedTaskId || undefined,
-      sourceId: p.sourceId || undefined,
+      sourceRef: p.sourceRef || undefined,
+      provenance: p.provenance || undefined,
       importance: p.importance ?? 0.5,
       hitCount: p.hitCount || 0,
       lastAccessedAt: p.lastAccessedAt || null,
@@ -5352,8 +5446,8 @@ export class DevPlanGraphStore implements IDevPlanStore {
     const memoryContentSet = new Set<string>();
     for (const m of existingMemories) {
       if (m.relatedTaskId) memoryByTaskId.add(m.relatedTaskId);
-      // Phase-35: sourceId 去重 — 最可靠的匹配方式
-      if (m.sourceId) memoryBySourceId.add(m.sourceId);
+      // Phase-97: sourceRef.sourceId 去重
+      if (m.sourceRef?.sourceId) memoryBySourceId.add(m.sourceRef.sourceId);
       // 用前 50 字符作内容指纹（fallback，对旧记忆仍有效）
       memoryContentSet.add(m.content.slice(0, 50).toLowerCase());
     }
@@ -5364,15 +5458,15 @@ export class DevPlanGraphStore implements IDevPlanStore {
     let phasesWithMemory = 0;
     let docsWithMemory = 0;
     let skippedWithMemory = 0;
-    const buildSkillInstructions = (
+      const buildSkillInstructions = (
       sourceType: 'task' | 'document',
-      sourceId: string,
+      sourceKey: string,
       sourceTitle: string,
       memoryType: MemoryType,
       section?: string,
     ) => {
       const subject = sourceType === 'task'
-        ? `任务ID：${sourceId}\n任务标题：${sourceTitle}`
+        ? `任务ID：${sourceKey}\n任务标题：${sourceTitle}`
         : `文档标题：${sourceTitle}\n文档类型：${section || 'custom'}`;
       const commonRule = `粒度规则：
 - decision/bugfix：L2 必须保留"关键代码片段 + 文件路径 + 决策/根因与修复"（若原文存在）
@@ -5396,7 +5490,7 @@ export class DevPlanGraphStore implements IDevPlanStore {
       totalCompletedPhases = completedTasks.length;
 
       for (const task of completedTasks) {
-        // Phase-35: 三重去重检查 — sourceId > relatedTaskId > tags
+        // Phase-35: 三重去重检查 — sourceRef.sourceId > relatedTaskId > tags
         const hasMemory = memoryBySourceId.has(task.taskId) || memoryByTaskId.has(task.taskId);
         if (hasMemory) {
           phasesWithMemory++;
@@ -5409,6 +5503,15 @@ export class DevPlanGraphStore implements IDevPlanStore {
         const subTaskLines = subTasks
           .map((st) => `  - [${st.status === 'completed' ? '✅' : '⬜'}] ${st.taskId}: ${st.title}`)
           .join('\n');
+        const commitHints = subTasks
+          .map((st) => st.completedAtCommit)
+          .filter((v): v is string => typeof v === 'string' && v.length > 0);
+        const uniqueCommitHints = Array.from(new Set(commitHints));
+        const evidenceLines = [
+          uniqueCommitHints.length > 0 ? `- commit: ${uniqueCommitHints.join(', ')}` : '',
+          `- diff 命令: git show <commit> --stat --patch`,
+          `- 日志命令: git log --oneline --decorate --graph -- ${task.taskId}`,
+        ].filter(Boolean);
 
         const content = [
           `## ${task.title}`,
@@ -5419,6 +5522,9 @@ export class DevPlanGraphStore implements IDevPlanStore {
           task.completedAt ? `- 完成时间: ${new Date(task.completedAt).toISOString().slice(0, 10)}` : '',
           `- 子任务 (${task.completedSubtasks}/${task.totalSubtasks}):`,
           subTaskLines,
+          '',
+          '### 原始材料入口',
+          ...evidenceLines,
         ].filter(Boolean).join('\n');
 
         // 推断重要性：P0 高优先级 → 0.8, P1 → 0.6, P2 → 0.5
@@ -5427,7 +5533,7 @@ export class DevPlanGraphStore implements IDevPlanStore {
         // Phase-58: 同时传递完整内容 + Claude Skills 指令
         allEligible.push({
           sourceType: 'task',
-          sourceId: task.taskId,
+          sourceRef: { sourceId: task.taskId },
           sourceTitle: task.title,
           content,
           contentL3: content,
@@ -5436,6 +5542,16 @@ export class DevPlanGraphStore implements IDevPlanStore {
           suggestedTags: [task.taskId, task.priority],
           hasExistingMemory: false,
           skillInstructions: buildSkillInstructions('task', task.taskId, task.title, 'summary'),
+          rawEvidence: {
+            commitIds: uniqueCommitHints,
+            commandHints: [
+              'git show <commit> --stat --patch',
+              `git log --oneline --decorate --graph -- ${task.taskId}`,
+            ],
+            notes: [
+              '若需高保真 L3，请结合 commit diff 与执行日志，而非仅依赖任务摘要。',
+            ],
+          },
         });
       }
     }
@@ -5489,7 +5605,7 @@ export class DevPlanGraphStore implements IDevPlanStore {
           ? `${doc.section}|${doc.subSection}`
           : doc.section;
 
-        // Phase-35: 三重去重检查 — sourceId（最可靠） > 内容指纹（fallback）
+        // Phase-35: 三重去重检查 — sourceRef.sourceId（最可靠） > 内容指纹（fallback）
         const hasMemoryBySourceId = memoryBySourceId.has(docKey);
         const contentFingerprint = doc.content.slice(0, 50).toLowerCase();
         const hasMemoryByFingerprint = memoryContentSet.has(contentFingerprint);
@@ -5541,7 +5657,7 @@ export class DevPlanGraphStore implements IDevPlanStore {
         const fullDocContent = doc.content;
         allEligible.push({
           sourceType: 'document',
-          sourceId: docKey,
+          sourceRef: { sourceId: docKey },
           sourceTitle: doc.title,
           content,
           contentL3: fullDocContent,
@@ -5556,69 +5672,70 @@ export class DevPlanGraphStore implements IDevPlanStore {
 
     // ========== Phase-44: 构建 suggestedRelations ==========
     // 为候选项之间推断关联关系，帮助 AI 用 applyMutations 构建记忆子图
-    const candidateIdSet = new Set(allEligible.map(c => c.sourceId));
+    const candidateIdSet = new Set(allEligible.map(c => c.sourceRef.sourceId));
 
     for (const candidate of allEligible) {
-      const relations: Array<{ relationType: string; targetSourceId: string; weight?: number; reason?: string }> = [];
+      const relations: Array<{ relationType: string; targetSourceRef: string; weight?: number; reason?: string }> = [];
+      const candidateSourceId = candidate.sourceRef.sourceId;
 
       if (candidate.sourceType === 'task') {
         // 任务 → 关联文档: DERIVED_FROM
-        const taskEntity = this.listMainTasks().find(t => t.taskId === candidate.sourceId);
+        const taskEntity = this.listMainTasks().find(t => t.taskId === candidateSourceId);
         if (taskEntity?.relatedSections) {
           for (const docRef of taskEntity.relatedSections) {
             if (candidateIdSet.has(docRef)) {
-              relations.push({ targetSourceId: docRef, relationType: 'mem:DERIVED_FROM', weight: 0.7, reason: 'task references this document' });
+              relations.push({ targetSourceRef: docRef, relationType: 'mem:DERIVED_FROM', weight: 0.7, reason: 'task references this document' });
             }
           }
         }
         // 任务 → 同模块任务: RELATES
         if (taskEntity?.moduleId) {
           for (const other of allEligible) {
-            if (other.sourceId !== candidate.sourceId && other.sourceType === 'task') {
-              const otherTask = this.listMainTasks().find(t => t.taskId === other.sourceId);
+            if (other.sourceRef.sourceId !== candidateSourceId && other.sourceType === 'task') {
+              const otherTask = this.listMainTasks().find(t => t.taskId === other.sourceRef.sourceId);
               if (otherTask?.moduleId === taskEntity.moduleId) {
-                relations.push({ targetSourceId: other.sourceId, relationType: 'mem:RELATES', weight: 0.5, reason: `same module: ${taskEntity.moduleId}` });
+                relations.push({ targetSourceRef: other.sourceRef.sourceId, relationType: 'mem:RELATES', weight: 0.5, reason: `same module: ${taskEntity.moduleId}` });
               }
             }
           }
         }
         // 任务 → 相邻阶段: TEMPORAL_NEXT (phase-N → phase-N+1)
-        const phaseMatch = candidate.sourceId.match(/^phase-(\d+)/);
+        const phaseMatch = candidateSourceId.match(/^phase-(\d+)/);
         if (phaseMatch) {
           const nextPhaseId = `phase-${parseInt(phaseMatch[1]) + 1}`;
           if (candidateIdSet.has(nextPhaseId)) {
-            relations.push({ targetSourceId: nextPhaseId, relationType: 'mem:TEMPORAL_NEXT', weight: 0.6, reason: 'consecutive phases' });
+            relations.push({ targetSourceRef: nextPhaseId, relationType: 'mem:TEMPORAL_NEXT', weight: 0.6, reason: 'consecutive phases' });
           }
         }
       } else if (candidate.sourceType === 'document') {
         // 文档 → 关联任务: DERIVED_FROM
         const docEntity = this.listSections().find(d => {
           const key = d.subSection ? `${d.section}|${d.subSection}` : d.section;
-          return key === candidate.sourceId;
+          return key === candidateSourceId;
         });
         if (docEntity?.relatedTaskIds) {
           for (const taskId of docEntity.relatedTaskIds) {
             if (candidateIdSet.has(taskId)) {
-              relations.push({ targetSourceId: taskId, relationType: 'mem:DERIVED_FROM', weight: 0.7, reason: 'document references this task' });
+              relations.push({ targetSourceRef: taskId, relationType: 'mem:DERIVED_FROM', weight: 0.7, reason: 'document references this task' });
             }
           }
         }
         // 文档 → 父文档: CONTAINS (反向)
         if (docEntity?.parentDoc) {
           if (candidateIdSet.has(docEntity.parentDoc)) {
-            relations.push({ targetSourceId: docEntity.parentDoc, relationType: 'mem:CONTAINS', weight: 0.8, reason: 'child document of parent' });
+            relations.push({ targetSourceRef: docEntity.parentDoc, relationType: 'mem:CONTAINS', weight: 0.8, reason: 'child document of parent' });
           }
         }
         // 文档 → 同section文档: RELATES
         if (docEntity) {
           for (const other of allEligible) {
-            if (other.sourceId !== candidate.sourceId && other.sourceType === 'document') {
+            if (other.sourceRef.sourceId !== candidateSourceId && other.sourceType === 'document') {
               const otherDoc = this.listSections().find(d => {
                 const key = d.subSection ? `${d.section}|${d.subSection}` : d.section;
-                return key === other.sourceId;
+                return key === other.sourceRef.sourceId;
               });
               if (otherDoc && otherDoc.section === docEntity.section && otherDoc.subSection !== docEntity.subSection) {
-                relations.push({ targetSourceId: other.sourceId, relationType: 'mem:RELATES', weight: 0.4, reason: `same section: ${docEntity.section}` });
+                relations.push({ targetSourceRef: other.sourceRef.sourceId, relationType: 'mem:RELATES', weight: 0.4, reason: `same section: ${docEntity.section}` });
               }
             }
           }
@@ -5632,7 +5749,7 @@ export class DevPlanGraphStore implements IDevPlanStore {
 
     // ========== Phase-57: 为候选项匹配触点 + 推断变更类型 ==========
     const g57 = this.graph as any;
-    const hasAnchorApi = typeof g57.anchorExtractFromText === 'function'
+    const hasAnchorApi = this.nativeAnchorExtractReady
       && typeof g57.anchorFindByName === 'function';
 
     if (hasAnchorApi) {
@@ -5670,7 +5787,7 @@ export class DevPlanGraphStore implements IDevPlanStore {
           }
         } catch (e) {
           // 触点提取失败不影响候选项的其他信息
-          console.warn(`[DevPlan] anchor extraction failed for candidate ${candidate.sourceId}: ${e instanceof Error ? e.message : String(e)}`);
+          console.warn(`[DevPlan] anchor extraction failed for candidate ${candidate.sourceRef.sourceId}: ${e instanceof Error ? e.message : String(e)}`);
         }
       }
     } else {
@@ -5975,7 +6092,7 @@ export class DevPlanGraphStore implements IDevPlanStore {
       }
     }
 
-    // Prompt 节点（默认包含，可视化页面可传 includePrompts=false 排除）
+    // Prompt 节点（默认包含，项目图谱页面可传 includePrompts=false 排除）
     if (includePrompts) {
       const prompts = this.listPrompts();
       for (const prompt of prompts) {
@@ -6163,7 +6280,8 @@ export class DevPlanGraphStore implements IDevPlanStore {
           hitCount: mem.hitCount,
           tags: mem.tags,
           relatedTaskId: mem.relatedTaskId || null,
-          sourceId: mem.sourceId || null,
+          sourceRef: mem.sourceRef || null,
+          provenance: mem.provenance || null,
         },
       });
 

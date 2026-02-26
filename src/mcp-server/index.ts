@@ -53,6 +53,7 @@ import {
   getDefaultBasePath,
   type DevPlanEngine,
 } from '../dev-plan-factory';
+import { version as aifastdbDevplanVersion } from '../../package.json';
 import { migrateEngine } from '../dev-plan-migrate';
 import type { IDevPlanStore } from '../dev-plan-interface';
 import {
@@ -153,6 +154,34 @@ function getDevPlan(projectName: string, engine?: DevPlanEngine): IDevPlanStore 
 // ============================================================================
 
 const TOOLS = [
+  {
+    name: 'devplan_capabilities',
+    description: 'Output runtime capability diagnostics for ABI/version alignment. Shows project engine, package versions, and native feature readiness (memoryTreeSearch, anchorExtractFromText, applyMutations).\n输出运行时能力诊断信息，用于 ABI/版本对齐排查。包含项目引擎、包版本和 native 能力状态（memoryTreeSearch、anchorExtractFromText、applyMutations）。',
+    inputSchema: {
+      type: 'object' as const,
+      properties: {
+        projectName: {
+          type: 'string',
+          description: `Project name (default: "${DEFAULT_PROJECT_NAME}")\n项目名称（默认："${DEFAULT_PROJECT_NAME}"）`,
+        },
+      },
+      required: ['projectName'],
+    },
+  },
+  {
+    name: 'devplan_capabilities_verbose',
+    description: 'Verbose runtime capability diagnostics for ABI/version alignment. Includes missingCapabilities, loaded module paths, and recommendedActions.\n详细运行时能力诊断（用于 ABI/版本对齐排查）。额外返回 missingCapabilities、已加载模块路径和建议动作。',
+    inputSchema: {
+      type: 'object' as const,
+      properties: {
+        projectName: {
+          type: 'string',
+          description: `Project name (default: "${DEFAULT_PROJECT_NAME}")\n项目名称（默认："${DEFAULT_PROJECT_NAME}"）`,
+        },
+      },
+      required: ['projectName'],
+    },
+  },
   {
     name: 'devplan_init',
     description: 'Initialize a development plan for a project. Creates an empty plan structure. Also lists existing plans if no projectName is given. Auto-generates .cursor/rules/dev-plan-management.mdc template if not present.\n初始化项目的开发计划。创建空的计划结构。如果不提供 projectName 则列出已有的计划。自动生成 .cursor/rules/ 模板文件（仅首次）。',
@@ -704,7 +733,7 @@ const TOOLS = [
   },
   {
     name: 'devplan_start_visual',
-    description: 'Start the graph visualization HTTP server. Opens an interactive vis-network page in the browser to visualize modules, tasks, and their relationships as a graph. The server runs in the background. Only works with projects using the "graph" engine.\n启动图谱可视化 HTTP 服务器。在浏览器中打开交互式 vis-network 页面，将模块、任务及其关系以图谱形式可视化展示。服务器在后台运行。仅支持使用 "graph" 引擎的项目。',
+    description: 'Start the graph visualization HTTP server. Opens an interactive Project graph page (vis-network) in the browser to visualize modules, tasks, and their relationships as a graph. The server runs in the background. Only works with projects using the "graph" engine.\n启动项目图谱 HTTP 服务器。在浏览器中打开交互式 vis-network 页面，将模块、任务及其关系以图谱形式可视化展示。服务器在后台运行。仅支持使用 "graph" 引擎的项目。',
     inputSchema: {
       type: 'object' as const,
       properties: {
@@ -939,9 +968,33 @@ const TOOLS = [
           type: 'number',
           description: 'Optional: Importance score 0~1 (default: 0.5)\n可选：重要性评分 0~1（默认 0.5）',
         },
-        sourceId: {
-          type: 'string',
-          description: 'Optional: Source ID tracking which document/task this memory was generated from. Used by devplan_memory_generate for dedup. Format: taskId (e.g., "phase-7") or "section|subSection" (e.g., "overview", "technical_notes|security"). **IMPORTANT**: When saving memories from devplan_memory_generate candidates, ALWAYS pass the candidate\'s `sourceId` field here to enable proper dedup tracking.\n可选：记忆来源 ID，标记该记忆由哪个文档/任务生成。用于 devplan_memory_generate 的去重。格式：taskId（如 "phase-7"）或 "section|subSection"（如 "overview"）。**重要**：从 devplan_memory_generate 候选项保存记忆时，务必传入候选项的 sourceId 以启用去重追踪。',
+        sourceRef: {
+          type: 'object',
+          description: 'Optional: Unified source reference (ai_db source_ref). sourceId identifies logical origin, variant distinguishes multiple memories from same source.\n可选：统一来源标识（ai_db source_ref）。sourceId 表示逻辑来源，variant 用于同源多记忆区分。',
+          properties: {
+            sourceId: { type: 'string' },
+            variant: { type: 'string' },
+          },
+        },
+        provenance: {
+          type: 'object',
+          description: 'Optional: Unified provenance/evidence payload (ai_db provenance).\n可选：统一追溯证据结构（ai_db provenance）。',
+          properties: {
+            origin: { type: 'string' },
+            note: { type: 'string' },
+            evidences: {
+              type: 'array',
+              items: {
+                type: 'object',
+                properties: {
+                  kind: { type: 'string' },
+                  refId: { type: 'string' },
+                  locator: { type: 'string' },
+                  excerpt: { type: 'string' },
+                },
+              },
+            },
+          },
         },
         moduleId: {
           type: 'string',
@@ -1238,7 +1291,7 @@ const TOOLS = [
   },
   {
     name: 'devplan_memory_generate',
-    description: 'Generate memory candidates from existing documents and completed tasks. Returns structured candidates that the AI can review and selectively save as memories via devplan_memory_save. This tool aggregates raw data; the AI provides the intelligence to extract meaningful memories.\n从已有文档和已完成任务中生成记忆候选项。返回结构化候选项供 AI 审查后通过 devplan_memory_save 批量保存为记忆。此工具聚合原始数据，AI 负责提取有意义的记忆。\n\n**Batch AI Workflow (批量 AI 处理工作流)**:\nWhen user says "批量生成记忆" / "全量导入记忆" / "batch generate memories":\n1. Call this tool with limit=5 to get a small batch\n2. For EACH candidate: read its content, extract 1-3 key insights, determine the best memoryType\n3. Call devplan_memory_save for each with AI-refined content (concise, 1-3 sentences), **MUST pass sourceId from candidate.sourceId**\n4. Check stats.remaining — if > 0, repeat from step 1\n5. Continue until remaining === 0\n\n**Granularity Policy (粒度策略, Phase-52/T52.4)**:\n- `decision` / `bugfix`: keep decision/root-cause + fix approach, and preserve key code snippet + file path when available.\n- `summary`: keep only 2~3 sentences of high-level outcome.\n- `pattern` / `insight` / `preference`: keep 1~3 concise sentences plus one minimal example.\n- Use the latest L1/L2/L3 rules; do not reuse old definitions.\n\n**Memory Tree / suggestedRelations (记忆树 / 建议关联)**:\nEach candidate may include a `suggestedRelations` array with `{ targetSourceId, relationType, weight, reason }` entries.\nThese represent inferred connections between candidates (e.g., task→doc DERIVED_FROM, consecutive phases TEMPORAL_NEXT, same-module RELATES).\n`targetSourceId` references another candidate\'s `sourceId`. After saving all memories, map sourceId→entityId and build relations via the graph.\nThis transforms flat memories into a connected Memory Tree graph.\n\n**CRITICAL — sourceId dedup tracking**: Each candidate has a `sourceId` field (e.g., "phase-7" for tasks, "overview" or "technical_notes|security" for docs). When calling devplan_memory_save, you MUST pass `sourceId: candidate.sourceId` so that subsequent calls to devplan_memory_generate can skip already-processed sources. Without sourceId, the same candidates will keep appearing.\n\nThe stats.remaining field tells how many more eligible candidates exist beyond the current batch.',
+    description: 'Generate memory candidates from existing documents and completed tasks. Returns structured candidates that the AI can review and selectively save as memories via devplan_memory_save. This tool aggregates raw data; the AI provides the intelligence to extract meaningful memories.\n从已有文档和已完成任务中生成记忆候选项。返回结构化候选项供 AI 审查后通过 devplan_memory_save 批量保存为记忆。此工具聚合原始数据，AI 负责提取有意义的记忆。\n\n**Batch AI Workflow (批量 AI 处理工作流)**:\nWhen user says "批量生成记忆" / "全量导入记忆" / "batch generate memories":\n1. Call this tool with limit=5 to get a small batch\n2. For EACH candidate: read its content, extract 1-3 key insights, determine the best memoryType\n3. Call devplan_memory_save for each with AI-refined content (concise, 1-3 sentences), **MUST pass sourceRef from candidate.sourceRef**\n4. Check stats.remaining — if > 0, repeat from step 1\n5. Continue until remaining === 0\n\n**Granularity Policy (粒度策略, Phase-52/T52.4)**:\n- `decision` / `bugfix`: keep decision/root-cause + fix approach, and preserve key code snippet + file path when available.\n- `summary`: keep only 2~3 sentences of high-level outcome.\n- `pattern` / `insight` / `preference`: keep 1~3 concise sentences plus one minimal example.\n- Use the latest L1/L2/L3 rules; do not reuse old definitions.\n\n**Memory Tree / suggestedRelations (记忆树 / 建议关联)**:\nEach candidate may include a `suggestedRelations` array with `{ targetSourceRef, relationType, weight, reason }` entries.\nThese represent inferred connections between candidates (e.g., task→doc DERIVED_FROM, consecutive phases TEMPORAL_NEXT, same-module RELATES).\n`targetSourceRef` references another candidate\'s `sourceRef.sourceId`. After saving all memories, map sourceRef.sourceId→entityId and build relations via the graph.\nThis transforms flat memories into a connected Memory Tree graph.\n\n**CRITICAL — sourceRef dedup tracking**: Each candidate has a `sourceRef` field with `sourceId` (e.g., "phase-7" for tasks, "overview" or "technical_notes|security" for docs). When calling devplan_memory_save, you MUST pass `sourceRef: candidate.sourceRef` so that subsequent calls to devplan_memory_generate can skip already-processed sources. Without sourceRef, the same candidates will keep appearing.\n\nThe stats.remaining field tells how many more eligible candidates exist beyond the current batch.',
     inputSchema: {
       type: 'object' as const,
       properties: {
@@ -1709,8 +1762,14 @@ interface ToolArgs {
   maxMemories?: number;
   /** devplan_memory_save: 记忆来源 */
   source?: string;
-  /** devplan_memory_save: 记忆来源 ID（用于批量生成去重追踪） */
-  sourceId?: string;
+  /** devplan_memory_save: 统一来源标识（ai_db source_ref） */
+  sourceRef?: { sourceId: string; variant?: string };
+  /** devplan_memory_save: 统一追溯证据（ai_db provenance） */
+  provenance?: {
+    origin?: string;
+    note?: string;
+    evidences?: Array<{ kind: string; refId?: string; locator?: string; excerpt?: string }>;
+  };
   /** devplan_recall_unified: 是否包含文档统一召回（已废弃，推荐 docStrategy） */
   includeDocs?: boolean;
   /** devplan_recall_unified: URI 定位提示 */
@@ -1786,6 +1845,24 @@ interface ToolArgs {
   clear?: boolean;
 }
 
+function safeReadDependencyVersion(depName: string): string | null {
+  try {
+    const pkgJsonPath = require.resolve(`${depName}/package.json`);
+    const pkg = JSON.parse(fs.readFileSync(pkgJsonPath, 'utf-8'));
+    return typeof pkg.version === 'string' ? pkg.version : null;
+  } catch {
+    return null;
+  }
+}
+
+function safeResolveModuleFile(moduleSpecifier: string): string | null {
+  try {
+    return require.resolve(moduleSpecifier);
+  } catch {
+    return null;
+  }
+}
+
 /**
  * 解析 projectName
  *
@@ -1824,6 +1901,83 @@ async function handleToolCall(name: string, args: ToolArgs): Promise<string> {
   args.projectName = resolveProjectName(args, name);
 
   switch (name) {
+    case 'devplan_capabilities': {
+      const projectName = args.projectName!;
+      const engine = getProjectEngine(projectName) || 'unknown';
+      const plan = getDevPlan(projectName);
+      const nativeCaps = typeof (plan as any).getNativeCapabilities === 'function'
+        ? (plan as any).getNativeCapabilities()
+        : {
+            memoryTreeSearch: false,
+            anchorExtractFromText: false,
+            applyMutations: false,
+          };
+      const aifastdbVersion = safeReadDependencyVersion('aifastdb');
+      return JSON.stringify({
+        projectName,
+        engine,
+        packageVersions: {
+          aifastdbDevplan: aifastdbDevplanVersion,
+          aifastdb: aifastdbVersion,
+          node: process.version,
+        },
+        nativeCapabilities: nativeCaps,
+        notes: [
+          'If packageVersions.aifastdb is new but nativeCapabilities are false, it usually indicates JS/native binary mismatch.',
+          'Restart Cursor after npm install/rebuild to ensure the updated native .node is loaded.',
+        ],
+      }, null, 2);
+    }
+
+    case 'devplan_capabilities_verbose': {
+      const projectName = args.projectName!;
+      const engine = getProjectEngine(projectName) || 'unknown';
+      const plan = getDevPlan(projectName);
+      const nativeCaps = typeof (plan as any).getNativeCapabilities === 'function'
+        ? (plan as any).getNativeCapabilities()
+        : {
+            memoryTreeSearch: false,
+            anchorExtractFromText: false,
+            applyMutations: false,
+          };
+      const aifastdbVersion = safeReadDependencyVersion('aifastdb');
+      const aifastdbPkgJsonPath = safeResolveModuleFile('aifastdb/package.json');
+      const aifastdbEntryPath = safeResolveModuleFile('aifastdb');
+      const aifastdbNativePath = safeResolveModuleFile('aifastdb/aifastdb.win32-x64-msvc.node');
+
+      const missingCapabilities = Object.entries(nativeCaps)
+        .filter(([, ok]) => !ok)
+        .map(([k]) => k);
+
+      const recommendedActions: string[] = [];
+      if (missingCapabilities.length > 0) {
+        recommendedActions.push('Restart Cursor/IDE process to reload native .node modules.');
+        recommendedActions.push('Run `npm install` in aifastdb-devplan to ensure JS and native binaries are aligned.');
+        recommendedActions.push('If still failing, remove node_modules and reinstall to clear stale native artifacts.');
+        recommendedActions.push('Verify loaded module paths in this output match the expected workspace (avoid global/other workspace shadowing).');
+      } else {
+        recommendedActions.push('All tracked native capabilities are available. ABI alignment looks healthy.');
+      }
+
+      return JSON.stringify({
+        projectName,
+        engine,
+        packageVersions: {
+          aifastdbDevplan: aifastdbDevplanVersion,
+          aifastdb: aifastdbVersion,
+          node: process.version,
+        },
+        nativeCapabilities: nativeCaps,
+        missingCapabilities,
+        loadedPaths: {
+          aifastdbPackageJson: aifastdbPkgJsonPath,
+          aifastdbEntry: aifastdbEntryPath,
+          aifastdbNativeNode: aifastdbNativePath,
+        },
+        recommendedActions,
+      }, null, 2);
+    }
+
     case 'devplan_init': {
       if (!args.projectName) {
         // List existing plans with engine info
@@ -1944,6 +2098,22 @@ async function handleToolCall(name: string, args: ToolArgs): Promise<string> {
       if (!args.projectName || !args.section || !args.title || !args.content) {
         throw new McpError(ErrorCode.InvalidParams, 'Missing required: projectName, section, title, content');
       }
+      const sectionName = String(args.section);
+      const normalizedSubSection = typeof args.subSection === 'string'
+        ? args.subSection.trim()
+        : '';
+      // Guardrail: multi-doc sections should always provide subSection in MCP writes.
+      // This prevents accidental root writes when callers intended to create a new sub document.
+      if ((sectionName === 'technical_notes' || sectionName === 'custom') && !normalizedSubSection) {
+        throw new McpError(
+          ErrorCode.InvalidParams,
+          [
+            `For section "${sectionName}", "subSection" is required in devplan_save_section.`,
+            'Reason: this section supports multiple documents; omitting subSection can cause ambiguous writes.',
+            `Example: section="${sectionName}", subSection="your-topic-slug".`,
+          ].join(' ')
+        );
+      }
 
       const plan = getDevPlan(args.projectName);
       const id = plan.saveSection({
@@ -1952,7 +2122,7 @@ async function handleToolCall(name: string, args: ToolArgs): Promise<string> {
         title: args.title,
         content: args.content,
         version: args.version,
-        subSection: args.subSection,
+        subSection: normalizedSubSection || undefined,
         moduleId: args.moduleId,
         relatedTaskIds: args.relatedTaskIds,
         parentDoc: args.parentDoc,
@@ -1963,7 +2133,7 @@ async function handleToolCall(name: string, args: ToolArgs): Promise<string> {
         documentId: id,
         projectName: args.projectName,
         section: args.section,
-        subSection: args.subSection || null,
+        subSection: normalizedSubSection || null,
         title: args.title,
       });
     }
@@ -3062,7 +3232,8 @@ async function handleToolCall(name: string, args: ToolArgs): Promise<string> {
           importance: args.importance,
           tags: args.tags,
           relatedTaskId: args.relatedTaskId,
-          sourceId: args.sourceId,
+          sourceRef: args.sourceRef,
+          provenance: args.provenance,
           moduleId: args.moduleId,
           source: args.source || 'cursor',
           decompose,
@@ -4118,8 +4289,8 @@ async function handleToolCall(name: string, args: ToolArgs): Promise<string> {
 生成三个层级：
 - L1（触点摘要）：一句话概括，作为记忆的"入口"
 - L2（详细记忆）：3~5句话，包含关键技术细节和设计决策
-- L3_summary（结构总结）：列出主要组件及其关系
-请以 JSON 格式返回：{"L1": "...", "L2": "...", "L3_summary": "...", "suggestedTags": ["tag1", "tag2"]}`,
+- L3_index（结构索引）：列出主要组件及其关系
+请以 JSON 格式返回：{"L1": "...", "L2": "...", "L3_index": "...", "suggestedTags": ["tag1", "tag2"]}`,
 
         skill_l1: `你是 L1 触点摘要生成器。请严格按最新 L1 规则输出：
 - 只输出一个极简"触点入口"摘要（15~30字，避免细节堆叠）
@@ -4627,8 +4798,12 @@ async function handleToolCall(name: string, args: ToolArgs): Promise<string> {
         cache = createBatchCache(projectName, engine, model);
       }
 
-      // 已准备的 sourceId 集合（用于跳过）
-      const preparedSourceIds = new Set(cache.entries.map(e => e.sourceId));
+      // 已准备的 sourceRef.sourceId 集合（用于跳过）
+      const preparedSourceIds = new Set(
+        cache.entries
+          .map(e => e.sourceRef.sourceId)
+          .filter((v): v is string => !!v)
+      );
 
       // ---- 获取候选项列表（优先从缓存读取，避免每次都扫描文档/任务） ----
       let candidates: any[];
@@ -4641,9 +4816,9 @@ async function handleToolCall(name: string, args: ToolArgs): Promise<string> {
         });
         candidates = allCandidates?.candidates || [];
         cache.candidates = candidates.map((c: any) => ({
-          sourceId: c.sourceId,
+          sourceRef: c.sourceRef,
           sourceType: c.sourceType || 'doc',
-          title: c.title || c.sourceId || 'unknown',
+          title: c.title || c.sourceTitle || c.sourceRef?.sourceId || 'unknown',
           content: c.content || '',
           contentL3: c.contentL3,
           suggestedMemoryType: c.suggestedMemoryType,
@@ -4653,7 +4828,10 @@ async function handleToolCall(name: string, args: ToolArgs): Promise<string> {
       }
 
       // 过滤掉已缓存的
-      const pending = candidates.filter((c: any) => !preparedSourceIds.has(c.sourceId));
+      const pending = candidates.filter((c: any) => {
+        const sid = c.sourceRef?.sourceId;
+        return !sid || !preparedSourceIds.has(sid);
+      });
       const totalCandidates = candidates.length;
       const alreadyPrepared = totalCandidates - pending.length;
 
@@ -4821,7 +4999,7 @@ async function handleToolCall(name: string, args: ToolArgs): Promise<string> {
 生成三个层级（必须以 JSON 返回）：
 - L1（触点摘要）：一句话概括（15~30字），作为记忆的"入口"或"触点"
 - L2（详细记忆）：默认 3~8句话，包含关键技术细节、设计决策、实现方案。要保留重要的技术名词和架构关系
-- L3_summary（结构总结）：列出主要组件、依赖关系及其作用（如果内容是技术文档）。如果是非技术内容，则提供内容的结构化摘要
+- L3_index（结构索引）：列出主要组件、依赖关系及其作用（如果内容是技术文档）。如果是非技术内容，则提供内容的结构化摘要
 - memoryType：从 decision/pattern/bugfix/insight/preference/summary 中选择最合适的类型
 - importance：重要性评分 0~1
 - suggestedTags：建议标签数组
@@ -4836,11 +5014,13 @@ async function handleToolCall(name: string, args: ToolArgs): Promise<string> {
 - 不要使用旧版 L1/L2/L3 定义，按本策略输出
 
 请严格以 JSON 格式返回：
-{"L1": "...", "L2": "...", "L3_summary": "...", "memoryType": "...", "importance": 0.7, "suggestedTags": [...], "anchorName": "...", "anchorType": "...", "anchorOverview": "..."}`;
+{"L1": "...", "L2": "...", "L3_index": "...", "memoryType": "...", "importance": 0.7, "suggestedTags": [...], "anchorName": "...", "anchorType": "...", "anchorOverview": "..."}`;
 
       // ---- 处理单个候选的核心函数 ----
       const processOneCandidate = async (candidate: any, cacheRef: BatchCacheFile): Promise<{ ok: boolean }> => {
-        const title = candidate.title || candidate.sourceId || 'unknown';
+        const candidateSourceId = candidate.sourceRef?.sourceId;
+        if (!candidateSourceId) return { ok: true };
+        const title = candidate.title || candidateSourceId || 'unknown';
         const rawContent = candidate.contentL3 || candidate.content || '';
 
         if (!rawContent || rawContent.length < 50) {
@@ -4861,8 +5041,8 @@ async function handleToolCall(name: string, args: ToolArgs): Promise<string> {
               undefined,
               title,
               candidate.sourceType === 'task'
-                ? `sourceId=${candidate.sourceId}; sourceType=task`
-                : `sourceId=${candidate.sourceId}; sourceType=doc`,
+                ? `sourceRef.sourceId=${candidateSourceId}; sourceType=task`
+                : `sourceRef.sourceId=${candidateSourceId}; sourceType=doc`,
             );
 
             const l1 = out?.l1Summary ?? out?.l1_summary;
@@ -4874,7 +5054,11 @@ async function handleToolCall(name: string, args: ToolArgs): Promise<string> {
 
             if (l1 || l2 || l3) {
               const entry: BatchCacheEntry = {
-                sourceId: candidate.sourceId,
+                sourceRef: candidate.sourceRef || { sourceId: candidateSourceId },
+                provenance: {
+                  origin: 'batch_prepare',
+                  evidences: [],
+                },
                 sourceType: candidate.sourceType || 'doc',
                 memoryType: candidate.suggestedMemoryType || 'insight',
                 contentL1: l1 || rawContent.slice(0, 100),
@@ -4883,7 +5067,7 @@ async function handleToolCall(name: string, args: ToolArgs): Promise<string> {
                 content: l2 || l1 || rawContent.slice(0, 300),
                 importance: 0.7,
                 tags: Array.isArray(tags) ? tags : (candidate.suggestedTags || []),
-                relatedTaskId: candidate.sourceType === 'task' ? candidate.sourceId : undefined,
+                relatedTaskId: candidate.sourceType === 'task' ? candidateSourceId : undefined,
                 anchorName: anchor,
                 anchorType,
                 title,
@@ -4908,7 +5092,11 @@ async function handleToolCall(name: string, args: ToolArgs): Promise<string> {
         let entry: BatchCacheEntry;
         if (!llmResult) {
           entry = {
-            sourceId: candidate.sourceId,
+            sourceRef: candidate.sourceRef || { sourceId: candidateSourceId },
+            provenance: {
+              origin: 'batch_prepare',
+              evidences: [],
+            },
             sourceType: candidate.sourceType || 'doc',
             memoryType: candidate.suggestedMemoryType || 'insight',
             contentL1: rawContent.slice(0, 100),
@@ -4917,7 +5105,7 @@ async function handleToolCall(name: string, args: ToolArgs): Promise<string> {
             content: rawContent.slice(0, 300),
             importance: 0.5,
             tags: candidate.suggestedTags || [],
-            relatedTaskId: candidate.sourceType === 'task' ? candidate.sourceId : undefined,
+            relatedTaskId: candidate.sourceType === 'task' ? candidateSourceId : undefined,
             title,
             preparedAt: Date.now(),
             committed: false,
@@ -4930,7 +5118,11 @@ async function handleToolCall(name: string, args: ToolArgs): Promise<string> {
 
         const parsed = parseJsonFromLlm(llmResult);
         entry = {
-          sourceId: candidate.sourceId,
+          sourceRef: candidate.sourceRef || { sourceId: candidateSourceId },
+          provenance: {
+            origin: 'batch_prepare',
+            evidences: [],
+          },
           sourceType: candidate.sourceType || 'doc',
           memoryType: parsed?.memoryType || candidate.suggestedMemoryType || 'insight',
           contentL1: parsed?.L1 || rawContent.slice(0, 100),
@@ -4939,7 +5131,7 @@ async function handleToolCall(name: string, args: ToolArgs): Promise<string> {
           content: parsed?.L2 || rawContent.slice(0, 300),
           importance: parsed?.importance || 0.5,
           tags: parsed?.suggestedTags || candidate.suggestedTags || [],
-          relatedTaskId: candidate.sourceType === 'task' ? candidate.sourceId : undefined,
+          relatedTaskId: candidate.sourceType === 'task' ? candidateSourceId : undefined,
           anchorName: parsed?.anchorName,
           anchorType: parsed?.anchorType,
           anchorOverview: parsed?.anchorOverview,
@@ -4976,7 +5168,7 @@ async function handleToolCall(name: string, args: ToolArgs): Promise<string> {
           let bgProcessed = 0;
           for (const candidate of pending) {
             if (!bgTask?.running) break; // 允许外部中止
-            const title = candidate.title || candidate.sourceId || 'unknown';
+            const title = candidate.title || candidate.sourceRef?.sourceId || 'unknown';
             bgTask.currentTitle = title;
 
             const itemStart = Date.now();
@@ -5124,7 +5316,7 @@ async function handleToolCall(name: string, args: ToolArgs): Promise<string> {
           message: `Would commit ${pendingEntries.length} entries (${cache.entries.length} total in cache).`,
           pendingCount: pendingEntries.length,
           sampleEntries: pendingEntries.slice(0, 5).map(e => ({
-            sourceId: e.sourceId,
+            sourceId: e.sourceRef.sourceId,
             title: e.title,
             memoryType: e.memoryType,
             contentL1: e.contentL1.slice(0, 80),
@@ -5158,7 +5350,7 @@ async function handleToolCall(name: string, args: ToolArgs): Promise<string> {
           let bgCommitted = cache.entries.length - pendingEntries.length;
           for (const entry of pendingEntries) {
             if (!bgTask?.running) break;
-            bgTask.currentTitle = entry.title || entry.sourceId || '';
+            bgTask.currentTitle = entry.title || entry.sourceRef.sourceId || '';
 
             const itemStart = Date.now();
             await memorySaveMutex.acquire();
@@ -5170,7 +5362,8 @@ async function handleToolCall(name: string, args: ToolArgs): Promise<string> {
                 importance: entry.importance,
                 tags: entry.tags,
                 relatedTaskId: entry.relatedTaskId,
-                sourceId: entry.sourceId,
+                sourceRef: entry.sourceRef,
+                provenance: entry.provenance,
                 source: 'batch_import',
                 contentL1: entry.contentL1,
                 contentL2: entry.contentL2,
@@ -5232,7 +5425,8 @@ async function handleToolCall(name: string, args: ToolArgs): Promise<string> {
             importance: entry.importance,
             tags: entry.tags,
             relatedTaskId: entry.relatedTaskId,
-            sourceId: entry.sourceId,
+            sourceRef: entry.sourceRef,
+            provenance: entry.provenance,
             source: 'batch_import',
             contentL1: entry.contentL1,
             contentL2: entry.contentL2,
@@ -5345,7 +5539,7 @@ async function handleToolCall(name: string, args: ToolArgs): Promise<string> {
       }
 
       const errorEntries = cache.entries.filter(e => e.commitError).map(e => ({
-        sourceId: e.sourceId,
+        sourceId: e.sourceRef.sourceId,
         title: e.title,
         error: e.commitError,
       }));

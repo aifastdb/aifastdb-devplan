@@ -36,6 +36,7 @@ export function getStyles(): string {
     .nav-item.disabled { cursor: default; opacity: 0.5; }
     .nav-item.disabled:hover { background: #1e293b; }
     .nav-item-icon { width: 22px; height: 22px; display: flex; align-items: center; justify-content: center; font-size: 16px; flex-shrink: 0; }
+    .nav-item-icon svg { width: 18px; height: 18px; display: block; stroke: currentColor; }
     .nav-item-text { font-size: 13px; font-weight: 500; opacity: 0; transition: opacity 0.2s; }
     .sidebar.expanded .nav-item-text { opacity: 1; }
     .nav-item-badge { font-size: 9px; padding: 1px 6px; border-radius: 4px; background: #374151; color: #6b7280; margin-left: auto; opacity: 0; transition: opacity 0.2s; }
@@ -206,6 +207,7 @@ export function getStyles(): string {
     /* Page Views */
     .page-view { display: none; }
     .page-view.active { display: flex; flex-direction: column; flex: 1; min-height: 0; }
+    .page-graph { position: relative; }
     .page-graph.active { display: flex; flex-direction: column; flex: 1; min-height: 0; }
 
     /* Settings Page */

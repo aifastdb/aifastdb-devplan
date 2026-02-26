@@ -23,7 +23,7 @@
 - **阶段自动执行**：通过"开始 phase-X"指令自动启动开发阶段，AI 自动创建 TodoList 并逐个执行子任务
 - **模块聚合**：通过功能模块（Module）维度组织任务和文档，提供模块中心视图
 - **Git 集成**：任务完成时锚定 Git commit，支持回滚检测和状态同步
-- **可视化**：内置图谱可视化和统计仪表盘，实时展示项目全貌
+- **可视化**：内置项目图谱和统计仪表盘，实时展示项目全貌
 
 ### 1.2 版本演进
 
@@ -34,7 +34,7 @@ v2.0.0 (2026-02-09)  双引擎架构 — Graph (SocialGraphV2) + Document (JSONL
   ↓
 v2.1.0 (2026-02-09)  数据迁移工具 — document ↔ graph 双向迁移
   ↓
-v3.0.0 (2026-02-09)  图谱可视化服务 — vis-network 交互式图谱
+v3.0.0 (2026-02-09)  项目图谱服务 — vis-network 交互式图谱
   ↓
 v3.x   (2026-02-09)  统计仪表盘、侧边栏导航、UI 增强
   ↓
@@ -500,9 +500,9 @@ MainTask ◀──N:M──▶ DevPlanDoc   (通过 task_has_doc 关系双向关
 | `devplan_sync_git` | 同步 Git 历史与任务状态（检测回滚自动回退） | `projectName` | `dryRun` |
 | `devplan_export_graph` | 导出图结构用于可视化（仅 graph 引擎） | `projectName` | `includeDocuments`, `includeModules` |
 | `devplan_migrate_engine` | 在 document ↔ graph 引擎之间迁移数据 | `projectName`, `targetEngine` | `backup`, `dryRun` |
-| `devplan_start_visual` | 启动图谱可视化 HTTP 服务器（后台运行） | `projectName` | `port`（默认 3210） |
+| `devplan_start_visual` | 启动项目图谱 HTTP 服务器（后台运行） | `projectName` | `port`（默认 3210） |
 
-**`devplan_start_visual`** 会在后台启动一个轻量 HTTP 服务器，自动打开浏览器展示交互式图谱可视化页面。仅支持使用 graph 引擎的项目。
+**`devplan_start_visual`** 会在后台启动一个轻量 HTTP 服务器，自动打开浏览器展示交互式项目图谱页面。仅支持使用 graph 引擎的项目。
 
 ---
 
@@ -718,7 +718,7 @@ HTTP Server (Node.js http 模块)
 }
 ```
 
-### 7.3 图谱可视化页面
+### 7.3 项目图谱页面
 
 基于 **vis-network** 库的交互式图谱，通过 CDN 加载（依次尝试 unpkg → jsdelivr → cdnjs 三个源容错）。
 
@@ -823,7 +823,7 @@ HTTP Server (Node.js http 模块)
 
 | 图标 | 名称 | 状态 | 说明 |
 |------|------|------|------|
-| 🔗 | 图谱可视化 | 可用 | 图谱页面 |
+| 🔗 | 项目图谱 | 可用 | 项目图谱页面 |
 | 📋 | 任务看板 | 即将推出 | 占位 |
 | 📄 | 文档浏览 | 即将推出 | 占位 |
 | 📊 | 统计仪表盘 | 可用 | 仪表盘页面 |
@@ -1040,7 +1040,7 @@ aifastdb-devplan (独立项目，依赖 aifastdb npm 包)
 │   ├── src/dev-plan-graph-store.ts              ← import { SocialGraphV2, VibeSynapse } from 'aifastdb'
 │   ├── src/dev-plan-factory.ts                  ← 根据 engine.json 选择上述两个实现之一
 │   ├── src/dev-plan-migrate.ts                  ← 数据迁移工具（document ↔ graph）
-│   ├── src/visualize/template.ts                ← 图谱可视化 HTML 模板（vis-network）
+│   ├── src/visualize/template.ts                ← 项目图谱 HTML 模板（vis-network）
 │   ├── src/visualize/server.ts                  ← 轻量 HTTP 可视化服务器 + /api/auto/* 端点 (规划中)
 │   └── src/mcp-server/index.ts                  ← 23 + 3 个 devplan_* 工具 (3 个 autopilot 规划中)
 │
@@ -1158,7 +1158,7 @@ DevPlan 设计了三层互补的信息架构，解决大型项目文档的 AI �
 - 迁移前自动备份 + dryRun 预览模式
 - MCP 工具从 17 个增加到 18 个
 
-### v3.0.0 — 图谱可视化服务 (2026-02-09)
+### v3.0.0 — 项目图谱服务 (2026-02-09)
 
 - 新增 `src/visualize/` 目录（`template.ts` + `server.ts`）
 - 轻量 HTTP 服务器（Node.js 内置 `http` 模块，无额外依赖）
@@ -2090,7 +2090,7 @@ executor 的核心创新是**双通道联合决策**：同时采集 DevPlan 任�
 | **进度追踪** | 无（重启丢失） | Git 锚定 + 可视化仪表盘 |
 | **断点续传** | 不支持 | DevPlan 完美支持（任务状态持久化） |
 | **多项目** | 一次只能跑一个 `tasks.txt` | DevPlan 多项目管理 |
-| **可视化** | 简陋 Web UI | DevPlan 图谱可视化 + 统计仪表盘 |
+| **可视化** | 简陋 Web UI | DevPlan 项目图谱 + 统计仪表盘 |
 | **准确性** | Ollama 视觉模型判断 | DevPlan 精确状态（100%）+ 截图辅助（UI 层） |
 | **AI 上下文** | AI 不知道有自动化工具在运行 | AI 通过 MCP 工具感知 autopilot 状态 |
 

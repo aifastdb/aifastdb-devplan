@@ -48,7 +48,7 @@ In the age of AI-assisted programming, developers collaborate with AI assistants
 | Feature | Description |
 |---------|-------------|
 | **Dual Storage Engine** | Choose between `graph` (SocialGraphV2, default) or `document` (JSONL) per project |
-| **Graph Visualization** | Built-in HTTP server + vis-network page to visualize tasks/modules as an interactive graph |
+| **Project Graph Page** | Built-in HTTP server + vis-network page to visualize tasks/modules as an interactive graph |
 | **11 Document Section Types** | overview, requirements, api_design, technical_notes, architecture, and more |
 | **Two-Level Task Hierarchy** | MainTask + SubTask with priority levels (P0–P3) and status transitions |
 | **Module Registry** | Aggregate tasks and docs by module for intuitive project architecture |
@@ -184,7 +184,7 @@ Engine selection priority:
 3. Auto-detect existing JSONL files → `document`
 4. New projects → `graph`
 
-### Graph Visualization
+### Project Graph Page
 
 Visualize your development plan as an interactive graph:
 
@@ -393,7 +393,7 @@ Storage path resolution priority:
 | 特性 | 说明 |
 |------|------|
 | **双存储引擎** | 每个项目可独立选择 `graph`（SocialGraphV2，默认）或 `document`（JSONL）引擎 |
-| **图谱可视化** | 内置 HTTP 服务器 + vis-network 页面，将任务/模块以交互式图谱展示 |
+| **项目图谱** | 内置 HTTP 服务器 + vis-network 页面，将任务/模块以交互式图谱展示 |
 | **11 种文档片段** | overview, requirements, api_design, technical_notes, architecture 等标准类型 |
 | **两级任务层级** | 主任务 (MainTask) + 子任务 (SubTask)，支持优先级 (P0-P3) 和状态流转 |
 | **功能模块注册表** | 按模块维度聚合任务和文档，直观展示项目架构 |
@@ -512,7 +512,7 @@ console.log(progress);
 | `devplan_export_graph` | 导出图结构 `{ nodes, edges }` 用于可视化（仅 graph 引擎） |
 | `devplan_migrate_engine` | 在 `document` 和 `graph` 引擎间迁移数据 |
 | `devplan_sync_git` | 同步 Git 历史，检测代码回滚 |
-| `devplan_start_visual` | 启动图谱可视化 HTTP 服务器并自动打开浏览器 |
+| `devplan_start_visual` | 启动项目图谱 HTTP 服务器并自动打开浏览器 |
 
 ### 双存储引擎
 
@@ -529,7 +529,7 @@ console.log(progress);
 3. 已有 JSONL 数据文件 → 自动识别为 `document`
 4. 新项目 → 默认使用 `graph`
 
-### 图谱可视化
+### 项目图谱
 
 将开发计划以交互式图谱形式展示：
 
