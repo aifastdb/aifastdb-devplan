@@ -388,8 +388,8 @@ export interface IDevPlanStore {
    * @param options - 过滤选项
    */
   generateMemoryCandidates?(options?: {
-    /** 数据源：tasks=已完成任务, docs=文档, both=全部 (默认 both) */
-    source?: 'tasks' | 'docs' | 'both';
+    /** 数据源：tasks=已完成任务, docs=文档, modules=功能模块, both=全部 (默认 both) */
+    source?: 'tasks' | 'docs' | 'modules' | 'both';
     /** 指定阶段 ID (仅从该阶段提取) */
     taskId?: string;
     /** 指定文档 section (仅从该章节提取) */

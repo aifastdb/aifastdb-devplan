@@ -1,0 +1,1 @@
+{"version":3,"file":"monitor.d.ts","sourceRoot":"","sources":["monitor.ts"],"names":[],"mappings":"AAMA,OAAO,EAAE,aAAa,EAAE,kBAAkB,EAAE,cAAc,EAAE,MAAM,SAAS,CAAC;AAE5E,MAAM,WAAW,wBAAwB;IACvC,eAAe,CAAC,EAAE,CAAC,WAAW,EAAE,MAAM,KAAK,aAAa,GAAG,SAAS,CAAC;CACtE;AAwKD,wBAAsB,iBAAiB,CACrC,IAAI,EAAE,kBAAkB,EACxB,OAAO,GAAE,wBAA6B,GACrC,OAAO,CAAC,cAAc,CAAC,CAqFzB"}

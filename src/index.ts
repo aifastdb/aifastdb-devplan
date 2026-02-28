@@ -118,3 +118,17 @@ export {
   recordHeartbeat,
   getLastHeartbeat,
 } from './autopilot';
+
+// Test tools hub
+export type {
+  TestToolDefinition,
+  TestToolRegistry,
+  TestToolStatus,
+  PhaseSnapshot,
+} from '../packages/test-tools-hub/dist/index';
+export {
+  DEFAULT_REGISTRY,
+  loadRegistryFromFile,
+  getEnabledTools,
+  collectToolStatus,
+} from '../packages/test-tools-hub/dist/index';

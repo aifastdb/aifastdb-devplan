@@ -2,7 +2,16 @@
   "defaultProject": "aifastdb-devplan",
   "enableSemanticSearch": true,
   "enableTextSearch": true,
+  "llmAnalyze": {
+    "engine": "ollama",
+    "ollamaModel": "qwen3.5:27b"
+  },
   "perceptionPreset": "ollamaQwen3Embedding8b",
+  "memoryGatewayAdapter": {
+    "preferUnifiedApi": true,
+    "unifiedApiFallbackEnabled": true,
+    "fallbackAlertThreshold": 0.2
+  },
   "projects": {
     "ai_db": {
       "rootPath": "D:\\Project\\git\\ai_db"

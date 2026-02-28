@@ -45,6 +45,18 @@ export function getHTML(projectName: string): string {
         <span class="nav-item-text">文档库</span>
         <span class="nav-tooltip">文档库</span>
       </div>
+      <div class="nav-item" data-page="test-tools" onclick="navTo('test-tools')">
+        <span class="nav-item-icon">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+            <path d="M9.5 3.5h5l2 2v3h-2v-2h-5v2h-2v-3z"></path>
+            <rect x="4" y="9" width="16" height="10.5" rx="2"></rect>
+            <path d="M9 13.5h6"></path>
+            <path d="M12 11v5"></path>
+          </svg>
+        </span>
+        <span class="nav-item-text">测试工具</span>
+        <span class="nav-tooltip">测试工具</span>
+      </div>
       <div class="nav-item" data-page="memory" onclick="navTo('memory')">
         <span class="nav-item-icon">🧠</span>
         <span class="nav-item-text">记忆</span>
@@ -179,6 +191,10 @@ export function getHTML(projectName: string): string {
           <div class="docs-group-list" id="docsGroupList">
             <div style="text-align:center;padding:40px;color:#6b7280;font-size:12px;">加载中...</div>
           </div>
+          <div class="docs-paging-bar" id="docsPagingBar">
+            <button class="docs-load-more-btn" id="docsLoadMoreBtn" onclick="loadMoreDocs()">加载更多</button>
+            <div class="docs-paging-info" id="docsPagingInfo"></div>
+          </div>
         </div>
         <!-- Right: Document Content / Chat -->
         <div class="docs-content">
@@ -290,6 +306,20 @@ export function getHTML(projectName: string): string {
       </div>
     </div>
 
+    <!-- ===== PAGE: Test Tools ===== -->
+    <div class="page-view" id="pageTestTools">
+      <div class="stats-page" style="padding-bottom:12px;">
+        <div class="stats-header">
+          <h2>🧪 测试工具中心 — ${projectName}</h2>
+          <p>集中查看可视化测试工具状态与当前阶段进度（文档页下方入口）</p>
+        </div>
+        <div id="testToolsSummary" style="display:flex;gap:10px;flex-wrap:wrap;margin:0 0 12px 0;"></div>
+        <div id="testToolsContent" style="background:#0f172a;border:1px solid #1f2a44;border-radius:10px;padding:12px;min-height:280px;">
+          <div style="text-align:center;padding:60px;color:#6b7280;">加载中...</div>
+        </div>
+      </div>
+    </div>
+
     <!-- ===== PAGE: Memory Browser ===== -->
     <div class="page-view" id="pageMemory">
       <div class="memory-page">
@@ -343,6 +373,16 @@ export function getHTML(projectName: string): string {
               <option value="both">全部</option>
               <option value="tasks">仅任务</option>
               <option value="docs">仅文档</option>
+              <option value="modules">仅功能模块</option>
+            </select>
+            <label style="font-size:11px;color:#9ca3af;">批次:</label>
+            <select id="aiBatchLimit" style="background:#111827;border:1px solid #374151;color:#e5e7eb;border-radius:4px;padding:3px 8px;font-size:11px;">
+              <option value="all">全部</option>
+              <option value="10">10 条</option>
+              <option value="30">30 条</option>
+              <option value="40">40 条</option>
+              <option value="50">50 条</option>
+              <option value="100">100 条</option>
             </select>
             <button onclick="startAiBatchProcess()" id="aiBatchStartBtn" style="background:linear-gradient(135deg,#8b5cf6,#6366f1);color:white;border:none;border-radius:6px;padding:5px 16px;font-size:12px;cursor:pointer;font-weight:600;">开始</button>
           </div>
@@ -459,6 +499,16 @@ export function getHTML(projectName: string): string {
                     <label class="s3d-toggle"><input type="checkbox" id="settingShowProjectEdges" onchange="updateGraphSetting('showProjectEdges',this.checked)"><span class="s3d-toggle-slider"></span></label>
                   </div>
                 </div>
+              </div>
+            </div>
+          </div>
+
+          <!-- Gateway 阈值告警 -->
+          <div class="settings-section">
+            <div class="settings-section-title">🚨 Recall 阈值告警（Gateway 回退率）</div>
+            <div class="settings-3d-panel">
+              <div id="gatewayAlertPanel">
+                <div style="text-align:center;padding:12px;color:#6b7280;font-size:12px;">加载中...</div>
               </div>
             </div>
           </div>

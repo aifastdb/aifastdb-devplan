@@ -1,0 +1,16 @@
+{
+  "types": {
+    "anchorUpsert": "function",
+    "anchorFindByName": "function",
+    "flowAppend": "function",
+    "anchorExtractFromText": "function"
+  },
+  "anchorUpsertCall": {
+    "ok": true,
+    "anchorId": "92eadaa8-c1d3-413a-8c5c-3418bd8d611a"
+  },
+  "anchorFindByNameCall": {
+    "ok": true,
+    "found": true
+  }
+}

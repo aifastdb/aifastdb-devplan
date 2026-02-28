@@ -29,6 +29,12 @@ import {
   getLastHeartbeat,
 } from '../autopilot';
 import type { ExecutorHeartbeat } from '../types';
+import {
+  loadRegistryFromFile,
+  getEnabledTools,
+  collectToolStatus,
+  type PhaseSnapshot,
+} from '../../packages/test-tools-hub/dist/index';
 
 // ============================================================================
 // CLI Argument Parsing
@@ -38,6 +44,50 @@ interface CliArgs {
   project: string;
   port: number;
   basePath: string;
+}
+
+const TEST_TOOLS_REGISTRY_FILE = process.env.DEVPLAN_TEST_TOOLS_REGISTRY;
+
+function normalizeNonEmptyString(v: unknown): string | undefined {
+  if (typeof v !== 'string') return undefined;
+  const t = v.trim();
+  return t.length > 0 ? t : undefined;
+}
+
+function buildCursorBindingProvenance(
+  provenance: any,
+  input: {
+    profile?: string;
+    contentSessionId?: string;
+    memorySessionId?: string;
+    hookPhase?: string;
+    hookName?: string;
+  },
+): any {
+  const profile = normalizeNonEmptyString(input.profile);
+  if (!profile || profile.toLowerCase() !== 'cursor') {
+    return provenance;
+  }
+  const contentSessionId = normalizeNonEmptyString(input.contentSessionId);
+  const memorySessionId = normalizeNonEmptyString(input.memorySessionId);
+  if (!contentSessionId && !memorySessionId) {
+    return provenance;
+  }
+  const hookPhase = normalizeNonEmptyString(input.hookPhase) || 'unknown';
+  const hookName = normalizeNonEmptyString(input.hookName) || 'unknown';
+
+  const next = {
+    ...(provenance || {}),
+    evidences: Array.isArray(provenance?.evidences) ? [...provenance.evidences] : [],
+  };
+  next.evidences.push({
+    kind: 'cursor_session_binding',
+    refId: memorySessionId,
+    locator: contentSessionId ? `cursor://content/${contentSessionId}` : undefined,
+    excerpt: `hook_phase=${hookPhase}; hook_name=${hookName}`,
+  });
+  next.note = `cursor_profile=true; hook_phase=${hookPhase}; hook_name=${hookName}`;
+  return next;
 }
 
 function parseArgs(): CliArgs {
@@ -116,6 +166,27 @@ function createStore(project: string, basePath: string): IDevPlanStore {
  */
 function createFreshStore(projectName: string, basePath: string): IDevPlanStore {
   return createDevPlan(projectName, basePath, 'graph');
+}
+
+function getCurrentPhaseSnapshot(projectName: string): PhaseSnapshot | undefined {
+  try {
+    const plan = createDevPlan(projectName);
+    const progress = plan.getProgress();
+    const tasks = progress.tasks || [];
+    const inProgress = tasks.find((t: any) => t.status === 'in_progress');
+    const current = inProgress || tasks.find((t: any) => t.status === 'pending') || tasks[0];
+    if (!current) return undefined;
+    return {
+      taskId: current.taskId,
+      title: current.title,
+      status: current.status,
+      completed: Number(current.completed || 0),
+      total: Number(current.total || 0),
+      percent: Number(current.percent || 0),
+    };
+  } catch {
+    return undefined;
+  }
 }
 
 // ============================================================================
@@ -284,6 +355,7 @@ function startServer(projectName: string, basePath: string, port: number): void 
         case '/graph':
         case '/stats':
         case '/docs':
+        case '/test-tools':
         case '/memory':
         case '/md-viewer':
         case '/settings':
@@ -343,6 +415,50 @@ function startServer(projectName: string, basePath: string, port: number): void 
             docCount: sections.length,
             promptCount,
           }));
+          break;
+        }
+
+        case '/api/test-tools/registry': {
+          const registry = loadRegistryFromFile(TEST_TOOLS_REGISTRY_FILE);
+          res.writeHead(200, { 'Content-Type': 'application/json; charset=utf-8' });
+          res.end(JSON.stringify(registry));
+          break;
+        }
+
+        case '/api/test-tools/status': {
+          const targetProject = (url.searchParams.get('project') || '').trim();
+          const includeRaw = url.searchParams.get('includeRaw') === 'true';
+          const registry = loadRegistryFromFile(TEST_TOOLS_REGISTRY_FILE);
+          let tools = getEnabledTools(registry);
+          if (targetProject) {
+            tools = tools.filter((t) => t.projectName === targetProject);
+          }
+          const items = await Promise.all(
+            tools.map((t) =>
+              collectToolStatus(t, {
+                getCurrentPhase: getCurrentPhaseSnapshot,
+              }),
+            ),
+          );
+          const mapped = includeRaw
+            ? items
+            : items.map((it) => ({
+                tool: it.tool,
+                reachable: it.reachable,
+                checkedAt: it.checkedAt,
+                state: it.state,
+                progress: it.progress,
+                phase: it.phase,
+                error: it.error,
+              }));
+          res.writeHead(200, { 'Content-Type': 'application/json; charset=utf-8' });
+          res.end(
+            JSON.stringify({
+              updatedAt: new Date().toISOString(),
+              count: mapped.length,
+              items: mapped,
+            })
+          );
           break;
         }
 
@@ -567,6 +683,22 @@ function startServer(projectName: string, basePath: string, port: number): void 
           break;
         }
 
+        case '/api/recall-observability': {
+          const store = createFreshStore(projectName, basePath);
+          let observability: any = null;
+          if (typeof (store as any).getRecallObservability === 'function') {
+            observability = (store as any).getRecallObservability();
+          }
+          res.writeHead(200, { 'Content-Type': 'application/json; charset=utf-8' });
+          res.end(JSON.stringify({
+            projectName,
+            observability,
+            gatewayAlert: observability?.gatewayAlert || null,
+            gatewayAdapter: observability?.gatewayAdapter || null,
+          }));
+          break;
+        }
+
         case '/api/memories': {
           // 列出所有记忆（用于记忆浏览页面）
           const memStore = createFreshStore(projectName, basePath);
@@ -593,6 +725,11 @@ function startServer(projectName: string, basePath: string, port: number): void 
           const genSource = url.searchParams.get('source') || 'both';
           const genTaskId = url.searchParams.get('taskId') || undefined;
           const genSection = url.searchParams.get('section') || undefined;
+          const sourceRefsParam = url.searchParams.get('sourceRefs') || '';
+          const targetSourceRefs = sourceRefsParam
+            .split(',')
+            .map((s) => decodeURIComponent(s).trim())
+            .filter((s) => s.length > 0);
           const rawLimit = url.searchParams.get('limit') ? parseInt(url.searchParams.get('limit')!, 10) : 50;
           const genLimit = rawLimit <= 0 ? 99999 : rawLimit;
 
@@ -602,6 +739,14 @@ function startServer(projectName: string, basePath: string, port: number): void 
             section: genSection,
             limit: genLimit,
           });
+          // 定向修复模式：仅返回指定 sourceRef.sourceId 对应候选
+          if (targetSourceRefs.length > 0 && result && Array.isArray(result.candidates)) {
+            const allowSet = new Set(targetSourceRefs);
+            result.candidates = result.candidates.filter((c: any) => {
+              const sid = c?.sourceRef?.sourceId;
+              return !!sid && allowSet.has(String(sid));
+            });
+          }
           res.writeHead(200, { 'Content-Type': 'application/json; charset=utf-8' });
           res.end(JSON.stringify(result));
           break;
@@ -615,6 +760,13 @@ function startServer(projectName: string, basePath: string, port: number): void 
             break;
           }
           const saveBody = await readRequestBody(req);
+          const saveProvenance = buildCursorBindingProvenance(saveBody.provenance, {
+            profile: saveBody.profile,
+            contentSessionId: saveBody.contentSessionId,
+            memorySessionId: saveBody.memorySessionId,
+            hookPhase: saveBody.hookPhase,
+            hookName: saveBody.hookName,
+          });
           const saveStore = createFreshStore(projectName, basePath);
           if (typeof (saveStore as any).saveMemory !== 'function') {
             res.writeHead(400, { 'Content-Type': 'application/json; charset=utf-8' });
@@ -629,7 +781,7 @@ function startServer(projectName: string, basePath: string, port: number): void 
               tags: saveBody.tags || [],
               relatedTaskId: saveBody.relatedTaskId || undefined,
               sourceRef: saveBody.sourceRef || undefined,
-              provenance: saveBody.provenance || undefined,
+              provenance: saveProvenance || undefined,
               importance: saveBody.importance ?? 0.5,
             });
             res.writeHead(200, { 'Content-Type': 'application/json; charset=utf-8' });
@@ -725,6 +877,56 @@ function startServer(projectName: string, basePath: string, port: number): void 
           break;
         }
 
+        case '/api/memories/repair-regenerate-prepare': {
+          // 定向重生成准备：删除问题记忆（按 memoryIds + sourceRefs），并返回需要重生成的 sourceRefs
+          if (req.method !== 'POST') {
+            res.writeHead(405, { 'Content-Type': 'application/json; charset=utf-8' });
+            res.end(JSON.stringify({ error: 'Method Not Allowed. Use POST.' }));
+            break;
+          }
+          const body = await readRequestBody(req);
+          const sourceRefs: string[] = Array.isArray(body.sourceRefs) ? body.sourceRefs.map((v: any) => String(v)).filter(Boolean) : [];
+          const memoryIds: string[] = Array.isArray(body.memoryIds) ? body.memoryIds.map((v: any) => String(v)).filter(Boolean) : [];
+          const prepStore = createFreshStore(projectName, basePath);
+          if (typeof (prepStore as any).listMemories !== 'function' || typeof (prepStore as any).deleteMemory !== 'function') {
+            res.writeHead(400, { 'Content-Type': 'application/json; charset=utf-8' });
+            res.end(JSON.stringify({ error: 'repair prepare not supported (requires graph engine with deleteMemory)' }));
+            break;
+          }
+          try {
+            const allMems: any[] = (prepStore as any).listMemories({});
+            const sourceSet = new Set(sourceRefs);
+            const deleteSet = new Set(memoryIds);
+            const targetSourceRefSet = new Set<string>(sourceRefs);
+
+            for (const mem of allMems) {
+              const memId = String(mem.id || '');
+              const sid = mem?.sourceRef?.sourceId ? String(mem.sourceRef.sourceId) : '';
+              if (deleteSet.has(memId) || (sid && sourceSet.has(sid))) {
+                if (memId) deleteSet.add(memId);
+                if (sid) targetSourceRefSet.add(sid);
+              }
+            }
+
+            let deleted = 0;
+            for (const memId of deleteSet) {
+              const ok = (prepStore as any).deleteMemory(memId);
+              if (ok) deleted++;
+            }
+
+            res.writeHead(200, { 'Content-Type': 'application/json; charset=utf-8' });
+            res.end(JSON.stringify({
+              status: 'prepared',
+              deleted,
+              targetSourceRefs: Array.from(targetSourceRefSet),
+            }));
+          } catch (e: any) {
+            res.writeHead(500, { 'Content-Type': 'application/json; charset=utf-8' });
+            res.end(JSON.stringify({ error: e?.message || String(e) }));
+          }
+          break;
+        }
+
         // [Phase-77: /api/memories/graph route removed — memory page now list-only]
 
         case '/api/docs': {
@@ -741,8 +943,56 @@ function startServer(projectName: string, basePath: string, port: number): void 
             childDocs: s.childDocs || [],
             updatedAt: s.updatedAt || null,
           }));
+          // 统一稳定排序：先按更新时间倒序，再按 key 升序打破并列
+          docList.sort((a: any, b: any) => {
+            const ta = typeof a.updatedAt === 'number' ? a.updatedAt : 0;
+            const tb = typeof b.updatedAt === 'number' ? b.updatedAt : 0;
+            if (tb !== ta) return tb - ta;
+            const ka = `${a.section}|${a.subSection || ''}|${a.title || ''}`;
+            const kb = `${b.section}|${b.subSection || ''}|${b.title || ''}`;
+            return ka.localeCompare(kb);
+          });
           res.writeHead(200, { 'Content-Type': 'application/json; charset=utf-8' });
           res.end(JSON.stringify({ docs: docList }));
+          break;
+        }
+
+        case '/api/docs/paged': {
+          // 文档分页列表（最小改造版）：page/limit（1-based page）
+          const store = createFreshStore(projectName, basePath);
+          const rawPage = parseInt(url.searchParams.get('page') || '1', 10);
+          const rawLimit = parseInt(url.searchParams.get('limit') || '50', 10);
+          const page = Number.isFinite(rawPage) && rawPage > 0 ? rawPage : 1;
+          const limit = Number.isFinite(rawLimit) ? Math.max(1, Math.min(rawLimit, 200)) : 50;
+
+          const allSections = store.listSections();
+          const docList = allSections.map((s: any) => ({
+            section: s.section,
+            subSection: s.subSection || null,
+            title: s.title,
+            version: s.version || null,
+            moduleId: s.moduleId || null,
+            parentDoc: s.parentDoc || null,
+            childDocs: s.childDocs || [],
+            updatedAt: s.updatedAt || null,
+          }));
+          docList.sort((a: any, b: any) => {
+            const ta = typeof a.updatedAt === 'number' ? a.updatedAt : 0;
+            const tb = typeof b.updatedAt === 'number' ? b.updatedAt : 0;
+            if (tb !== ta) return tb - ta;
+            const ka = `${a.section}|${a.subSection || ''}|${a.title || ''}`;
+            const kb = `${b.section}|${b.subSection || ''}|${b.title || ''}`;
+            return ka.localeCompare(kb);
+          });
+
+          const total = docList.length;
+          const start = (page - 1) * limit;
+          const end = start + limit;
+          const docs = start >= total ? [] : docList.slice(start, end);
+          const hasMore = end < total;
+
+          res.writeHead(200, { 'Content-Type': 'application/json; charset=utf-8' });
+          res.end(JSON.stringify({ docs, page, limit, total, hasMore }));
           break;
         }
 
@@ -1488,10 +1738,13 @@ function startServer(projectName: string, basePath: string, port: number): void 
           // Phase-60: 获取 LLM 批量生成配置（供浏览器端直连 Ollama）
           const wsConfig = readDevPlanConfig() || {} as any;
           const llmCfg = (wsConfig as any)?.llmAnalyze || {};
+          const llmEngine = llmCfg.engine || 'ollama';
           const ollamaBaseUrl = (llmCfg.ollamaBaseUrl || 'http://localhost:11434/v1').replace(/\/v1\/?$/, '').replace(/\/+$/, '');
           const ollamaModel = llmCfg.ollamaModel || 'gemma3:27b';
           res.writeHead(200, { 'Content-Type': 'application/json; charset=utf-8' });
           res.end(JSON.stringify({
+            llmEngine,
+            isExternalModel: llmEngine === 'models_online',
             ollamaBaseUrl,
             ollamaModel,
             systemPrompt: `你是一个记忆构建助手。请根据以下文档/任务内容生成多级记忆。
@@ -1520,6 +1773,13 @@ function startServer(projectName: string, basePath: string, port: number): void 
             break;
           }
           const batchSaveBody = await readRequestBody(req);
+          const batchSaveProvenance = buildCursorBindingProvenance(batchSaveBody.provenance, {
+            profile: batchSaveBody.profile,
+            contentSessionId: batchSaveBody.contentSessionId,
+            memorySessionId: batchSaveBody.memorySessionId,
+            hookPhase: batchSaveBody.hookPhase,
+            hookName: batchSaveBody.hookName,
+          });
           const batchSaveStore = createFreshStore(projectName, basePath);
           if (typeof (batchSaveStore as any).saveMemory !== 'function') {
             res.writeHead(400, { 'Content-Type': 'application/json; charset=utf-8' });
@@ -1534,7 +1794,7 @@ function startServer(projectName: string, basePath: string, port: number): void 
               tags: batchSaveBody.tags || [],
               relatedTaskId: batchSaveBody.relatedTaskId || undefined,
               sourceRef: batchSaveBody.sourceRef || undefined,
-              provenance: batchSaveBody.provenance || undefined,
+              provenance: batchSaveProvenance || undefined,
               importance: batchSaveBody.importance ?? 0.5,
               source: 'batch_import_ui',
               contentL1: batchSaveBody.contentL1 || undefined,
@@ -2027,25 +2287,107 @@ function startServer(projectName: string, basePath: string, port: number): void 
             const rg = (repairStore as any).graph;
 
             const hasAnchorUpsert = !!(rg && typeof rg.anchorUpsert === 'function');
+            const hasAnchorFindByName = !!(rg && typeof rg.anchorFindByName === 'function');
             const hasAnchorExtract = !!(rg && typeof rg.anchorExtractFromText === 'function');
             const hasFlowAppend = !!(rg && typeof rg.flowAppend === 'function');
             const hasOutgoingByType = !!(rg && typeof rg.outgoingByType === 'function');
             const hasPutRelation = !!(rg && typeof rg.putRelation === 'function');
+            const hasUpsertEntityByProp = !!(rg && typeof rg.upsertEntityByProp === 'function');
+            const hasAddEntity = !!(rg && typeof rg.addEntity === 'function');
+            const hasShadowAnchorStore = hasUpsertEntityByProp || hasAddEntity;
 
-            if (!hasAnchorUpsert || !hasOutgoingByType || !hasPutRelation) {
+            if (!hasOutgoingByType || !hasPutRelation) {
               res.writeHead(400, { 'Content-Type': 'application/json; charset=utf-8' });
               res.end(JSON.stringify({
                 error: 'Anchor API unavailable in current runtime. Please align aifastdb native module and restart Cursor.',
                 diagnostics: {
                   hasAnchorUpsert,
+                  hasAnchorFindByName,
                   hasAnchorExtract,
                   hasFlowAppend,
                   hasOutgoingByType,
                   hasPutRelation,
+                  hasUpsertEntityByProp,
+                  hasAddEntity,
                 },
               }));
               break;
             }
+
+            // Runtime probe: some mismatched native builds expose JS methods but throw at call time
+            // (e.g. "this.native.anchorUpsert is not a function"). Fail fast with clear diagnostics.
+            let anchorRuntimeReady = true;
+            let anchorRuntimeError: string | undefined;
+            if (hasAnchorUpsert) {
+              try {
+                // Probe the actual critical op used by native repair flow.
+                rg.anchorUpsert('__devplan_anchor_runtime_probe__', 'concept', 'runtime probe', undefined);
+              } catch (e: any) {
+                anchorRuntimeReady = false;
+                anchorRuntimeError = e?.message || String(e);
+              }
+            } else {
+              anchorRuntimeReady = false;
+              anchorRuntimeError = 'anchorUpsert API not exposed in current runtime';
+            }
+            const allowShadowFallback = repairBody.allowShadowFallback !== false;
+            const useShadowFallback = !anchorRuntimeReady && allowShadowFallback && hasShadowAnchorStore;
+            if (!anchorRuntimeReady && !useShadowFallback) {
+              res.writeHead(400, { 'Content-Type': 'application/json; charset=utf-8' });
+              res.end(JSON.stringify({
+                error: `Anchor runtime probe failed: ${anchorRuntimeError}. Current native module is incompatible for Anchor repair.`,
+                diagnostics: {
+                  hasAnchorUpsert,
+                  hasAnchorFindByName,
+                  hasAnchorExtract,
+                  hasFlowAppend,
+                  hasOutgoingByType,
+                  hasPutRelation,
+                  hasUpsertEntityByProp,
+                  hasAddEntity,
+                  anchorRuntimeReady,
+                  anchorRuntimeError,
+                  allowShadowFallback,
+                },
+                hint: 'Reinstall dependencies in aifastdb-devplan and restart the visual server/Cursor to align JS-native ABI.',
+              }));
+              break;
+            }
+
+            const upsertShadowAnchor = (anchorName: string, anchorType: string, anchorDesc: string): { id: string; name: string; anchor_type: string } => {
+              const normalizedName = String(anchorName || '').trim() || 'unknown-anchor';
+              const normalizedType = String(anchorType || 'concept').trim() || 'concept';
+              const key = `${normalizedType}::${normalizedName}`.toLowerCase();
+              const now = Date.now();
+              if (hasUpsertEntityByProp) {
+                const entity = rg.upsertEntityByProp(
+                  'devplan-anchor-shadow',
+                  'anchorKey',
+                  key,
+                  `ShadowAnchor: ${normalizedName}`,
+                  {
+                    anchorKey: key,
+                    anchorName: normalizedName,
+                    anchorType: normalizedType,
+                    description: anchorDesc,
+                    source: 'repair-anchor-fallback',
+                    updatedAt: now,
+                    createdAt: now,
+                  },
+                );
+                return { id: entity.id, name: normalizedName, anchor_type: normalizedType };
+              }
+              const entity = rg.addEntity(`ShadowAnchor: ${normalizedName}`, 'devplan-anchor-shadow', {
+                anchorKey: key,
+                anchorName: normalizedName,
+                anchorType: normalizedType,
+                description: anchorDesc,
+                source: 'repair-anchor-fallback',
+                updatedAt: now,
+                createdAt: now,
+              });
+              return { id: entity.id, name: normalizedName, anchor_type: normalizedType };
+            };
 
             let targetMems = allMems;
             if (repairMemoryIds && repairMemoryIds.length > 0) {
@@ -2134,10 +2476,12 @@ function startServer(projectName: string, basePath: string, port: number): void 
               }
 
               try {
-                const anchor = rg.anchorUpsert(inferred.anchorName, inferred.anchorType, anchorDesc, undefined);
+                const anchor = useShadowFallback
+                  ? upsertShadowAnchor(inferred.anchorName, inferred.anchorType, anchorDesc)
+                  : rg.anchorUpsert(inferred.anchorName, inferred.anchorType, anchorDesc, undefined);
                 rg.putRelation(mem.id, anchor.id, 'anchored_by');
 
-                if (hasFlowAppend) {
+                if (!useShadowFallback && hasFlowAppend) {
                   try {
                     const flowSummary = String(mem.contentL1 || mem.content || inferred.anchorName).replace(/\s+/g, ' ').slice(0, 80);
                     const flowDetail = String(mem.contentL2 || mem.contentL3 || mem.content || '');
@@ -2154,7 +2498,7 @@ function startServer(projectName: string, basePath: string, port: number): void 
                   anchorId: anchor.id,
                   anchorName: anchor.name,
                   anchorType: anchor.anchor_type,
-                  strategy: inferred.strategy,
+                  strategy: useShadowFallback ? `${inferred.strategy}+shadow_fallback` : inferred.strategy,
                   status: 'repaired',
                 });
               } catch (e: any) {
@@ -2189,6 +2533,11 @@ function startServer(projectName: string, basePath: string, port: number): void 
                 hasAnchorUpsert,
                 hasAnchorExtract,
                 hasFlowAppend,
+                hasUpsertEntityByProp,
+                hasAddEntity,
+                anchorRuntimeReady,
+                anchorRuntimeError,
+                usedShadowFallback: useShadowFallback,
               },
               results,
             }));

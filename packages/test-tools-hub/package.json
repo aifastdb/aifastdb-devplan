@@ -1,0 +1,28 @@
+{
+  "name": "@aifastdb/test-tools-hub",
+  "version": "0.1.0",
+  "description": "Reusable test visualization hub for benchmark/tools status aggregation",
+  "main": "dist/index.js",
+  "types": "dist/index.d.ts",
+  "bin": {
+    "aifastdb-test-tools-hub": "./dist/server.js"
+  },
+  "files": [
+    "dist",
+    "README.md"
+  ],
+  "scripts": {
+    "build": "tsc",
+    "dev": "tsc --watch",
+    "clean": "rimraf dist"
+  },
+  "devDependencies": {
+    "@types/node": "^20.11.0",
+    "rimraf": "^5.0.5",
+    "typescript": "^5.3.3"
+  },
+  "engines": {
+    "node": ">=18"
+  },
+  "license": "MIT"
+}

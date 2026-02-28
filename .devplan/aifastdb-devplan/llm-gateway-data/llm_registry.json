@@ -1,0 +1,62 @@
+{
+  "providers": [
+    {
+      "id": "ollama-memory-generator",
+      "name": "Ollama (Memory Generator)",
+      "brand": "ollama",
+      "base_url": "http://localhost:11434/v1",
+      "protocol": "open_ai_compat",
+      "capabilities": {
+        "supports_streaming": true,
+        "supports_function_calling": true,
+        "supports_vision": true,
+        "supports_image_generation": false,
+        "supports_audio_input": false,
+        "supports_audio_output": false,
+        "supports_thinking": false,
+        "supports_embeddings": true,
+        "max_context_length": null
+      },
+      "rate_limit": null,
+      "priority": 100,
+      "weight": 1,
+      "is_healthy": true,
+      "status": "active",
+      "timeout_secs": 30,
+      "created_at": 1772207967074,
+      "updated_at": 1772207967074
+    }
+  ],
+  "models": [
+    {
+      "id": "qwen3.5:27b",
+      "provider_id": "ollama-memory-generator",
+      "name": "qwen3.5:27b",
+      "display_name": "qwen3.5:27b",
+      "capabilities": {
+        "supports_streaming": true,
+        "supports_function_calling": false,
+        "supports_vision": false,
+        "supports_image_generation": false,
+        "supports_audio_input": false,
+        "supports_audio_output": false,
+        "supports_thinking": false,
+        "supports_embeddings": false,
+        "max_context_length": null,
+        "max_output_tokens": null
+      },
+      "default_config": {
+        "temperature": 0.7,
+        "max_tokens": null,
+        "top_p": null,
+        "top_k": null,
+        "frequency_penalty": null,
+        "presence_penalty": null
+      },
+      "is_default": false,
+      "status": "active",
+      "created_at": 1772207967075,
+      "updated_at": 1772207967075
+    }
+  ]
+}

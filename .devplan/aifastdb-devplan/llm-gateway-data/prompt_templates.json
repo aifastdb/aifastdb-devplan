@@ -1,0 +1,213 @@
+[
+  {
+    "id": "skill-memory-l3",
+    "name": "Memory L3 Full Content Skill",
+    "content": "Generate a comprehensive structured knowledge document for the following content.\nThe L1 touch-point is: \"{{l1_summary}}\"\nThe L2 technical detail is: \"{{l2_detail}}\"\n\nTitle: {{title}}\nAnchor: {{anchor_name}} (type: {{anchor_type}})\nContext: {{context}}\n\n---\nCONTENT:\n{{content}}\n---\n\nRespond with ONLY a JSON object:\n{\"content\": \"<comprehensive Markdown document preserving all important details>\", \"components\": [{\"name\": \"...\", \"role\": \"...\"}]}",
+    "description": "Generates comprehensive structured knowledge for memory L3 layer",
+    "variables": [
+      "l1_summary",
+      "l2_detail",
+      "title",
+      "anchor_name",
+      "anchor_type",
+      "context",
+      "content"
+    ],
+    "category": "skill",
+    "version": "1.0.0",
+    "is_builtin": false,
+    "is_default": false,
+    "metadata": null,
+    "created_at": 1772207617821,
+    "updated_at": 1772207617821
+  },
+  {
+    "id": "user-translate",
+    "name": "Translation Template",
+    "content": "Translate the following text from {{source_language}} to {{target_language}}. Maintain the original tone and meaning.\n\nText: {{text}}",
+    "description": "Multi-language translation template",
+    "variables": [
+      "source_language",
+      "target_language",
+      "text"
+    ],
+    "category": "user",
+    "version": "1.0.0",
+    "is_builtin": true,
+    "is_default": false,
+    "metadata": null,
+    "created_at": 1772207617818,
+    "updated_at": 1772207617818
+  },
+  {
+    "id": "summary-title",
+    "name": "Conversation Title Generator",
+    "content": "Generate a short, descriptive title (max 8 words) for this conversation:\n\n{{conversation}}\n\nTitle:",
+    "description": "Generate a title for a conversation",
+    "variables": [
+      "conversation"
+    ],
+    "category": "summary",
+    "version": "1.0.0",
+    "is_builtin": true,
+    "is_default": false,
+    "metadata": null,
+    "created_at": 1772207617818,
+    "updated_at": 1772207617818
+  },
+  {
+    "id": "system-coder",
+    "name": "Coding Assistant System Prompt",
+    "content": "You are an expert software engineer and coding assistant. Help the user with programming tasks, code reviews, debugging, and software architecture. Provide clear, well-documented code examples. Follow best practices for {{language}}.",
+    "description": "System prompt optimized for coding tasks",
+    "variables": [
+      "language"
+    ],
+    "category": "system",
+    "version": "1.0.0",
+    "is_builtin": true,
+    "is_default": false,
+    "metadata": null,
+    "created_at": 1772207617818,
+    "updated_at": 1772207617818
+  },
+  {
+    "id": "rag-strict",
+    "name": "Strict RAG Template",
+    "content": "Answer the following question based ONLY on the provided context. Do NOT use any external knowledge. If the answer is not in the context, respond with \"I cannot find this information in the provided context.\"\n\n## Context (relevance score: {{score}})\n{{context}}\n\n## Question\n{{question}}",
+    "description": "Strict RAG template — answers only from context",
+    "variables": [
+      "score",
+      "context",
+      "question"
+    ],
+    "category": "rag",
+    "version": "1.0.0",
+    "is_builtin": true,
+    "is_default": false,
+    "metadata": null,
+    "created_at": 1772207617818,
+    "updated_at": 1772207617818
+  },
+  {
+    "id": "summary-default",
+    "name": "Default Summary Template",
+    "content": "Please provide a concise summary of the following conversation:\n\n{{conversation}}\n\nSummary:",
+    "description": "Summarize a conversation into key points",
+    "variables": [
+      "conversation"
+    ],
+    "category": "summary",
+    "version": "1.0.0",
+    "is_builtin": true,
+    "is_default": true,
+    "metadata": null,
+    "created_at": 1772207617818,
+    "updated_at": 1772207617818
+  },
+  {
+    "id": "user-explain",
+    "name": "Explain Like I'm 5",
+    "content": "Explain the following concept in simple terms that a {{audience}} could understand:\n\n{{concept}}",
+    "description": "Simplify complex concepts for any audience",
+    "variables": [
+      "audience",
+      "concept"
+    ],
+    "category": "user",
+    "version": "1.0.0",
+    "is_builtin": true,
+    "is_default": false,
+    "metadata": null,
+    "created_at": 1772207617818,
+    "updated_at": 1772207617818
+  },
+  {
+    "id": "skill-memory-l2",
+    "name": "Memory L2 Structured Detail Skill",
+    "content": "Generate structured technical details for the following content.\nThe L1 touch-point summary is: \"{{l1_summary}}\"\n\nTitle: {{title}}\nAnchor: {{anchor_name}} (type: {{anchor_type}})\nContext: {{context}}\n\n---\nCONTENT:\n{{content}}\n---\n\nRespond with ONLY a JSON object:\n{\"detail\": \"<3-5 sentences with key technical details>\", \"key_points\": [\"point1\", \"point2\", \"point3\"]}",
+    "description": "Generates structured technical details for memory L2 layer",
+    "variables": [
+      "l1_summary",
+      "title",
+      "anchor_name",
+      "anchor_type",
+      "context",
+      "content"
+    ],
+    "category": "skill",
+    "version": "1.0.0",
+    "is_builtin": false,
+    "is_default": false,
+    "metadata": null,
+    "created_at": 1772207617821,
+    "updated_at": 1772207617821
+  },
+  {
+    "id": "system-analyst",
+    "name": "Data Analyst System Prompt",
+    "content": "You are a skilled data analyst. Help the user analyze data, create queries, interpret results, and provide insights. When working with {{database_type}}, use appropriate syntax and best practices.",
+    "description": "System prompt for data analysis tasks",
+    "variables": [
+      "database_type"
+    ],
+    "category": "system",
+    "version": "1.0.0",
+    "is_builtin": true,
+    "is_default": false,
+    "metadata": null,
+    "created_at": 1772207617818,
+    "updated_at": 1772207617818
+  },
+  {
+    "id": "skill-memory-l1",
+    "name": "Memory L1 Touch-Point Skill",
+    "content": "Generate a touch-point summary for the following content.\n\nTitle: {{title}}\nAnchor: {{anchor_name}} (type: {{anchor_type}})\nContext: {{context}}\n\n---\nCONTENT:\n{{content}}\n---\n\nRespond with ONLY a JSON object:\n{\"summary\": \"<one sentence, max 100 chars>\", \"suggested_anchor\": \"<entity_name>\", \"suggested_type\": \"<type>\", \"suggested_tags\": [\"tag1\", \"tag2\"]}",
+    "description": "Generates a single-sentence touch-point summary for memory L1 layer",
+    "variables": [
+      "title",
+      "anchor_name",
+      "anchor_type",
+      "context",
+      "content"
+    ],
+    "category": "skill",
+    "version": "1.0.0",
+    "is_builtin": false,
+    "is_default": false,
+    "metadata": null,
+    "created_at": 1772207617821,
+    "updated_at": 1772207617821
+  },
+  {
+    "id": "system-default",
+    "name": "Default System Prompt",
+    "content": "You are a helpful, accurate, and friendly AI assistant. Answer the user's questions clearly and concisely. If you don't know something, say so honestly.",
+    "description": "General-purpose system prompt for chat conversations",
+    "variables": [],
+    "category": "system",
+    "version": "1.0.0",
+    "is_builtin": true,
+    "is_default": true,
+    "metadata": null,
+    "created_at": 1772207617818,
+    "updated_at": 1772207617818
+  },
+  {
+    "id": "rag-default",
+    "name": "Default RAG Context Template",
+    "content": "Use the following context to answer the user's question. If the context doesn't contain relevant information, say so.\n\n## Context\n{{context}}\n\n## Question\n{{question}}",
+    "description": "Standard RAG template with context injection",
+    "variables": [
+      "context",
+      "question"
+    ],
+    "category": "rag",
+    "version": "1.0.0",
+    "is_builtin": true,
+    "is_default": true,
+    "metadata": null,
+    "created_at": 1772207617818,
+    "updated_at": 1772207617818
+  }
+]

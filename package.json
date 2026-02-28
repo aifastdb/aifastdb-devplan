@@ -14,16 +14,19 @@
     "aifastdb-devplan-visual": "./dist/visualize/server.js"
   },
   "scripts": {
-    "build": "tsc",
+    "build": "npm run build:test-tools-hub && tsc",
+    "build:test-tools-hub": "tsc -p packages/test-tools-hub/tsconfig.json",
     "dev": "tsc --watch",
     "test": "jest --passWithNoTests",
     "typecheck": "tsc --noEmit",
     "clean": "rimraf dist",
-    "visualize": "node dist/visualize/server.js"
+    "visualize": "node dist/visualize/server.js",
+    "test-hub": "node packages/test-tools-hub/dist/server.js"
   },
   "dependencies": {
     "@modelcontextprotocol/sdk": "^1.0.0",
-    "aifastdb": "^2.9.8"
+    "@aifastdb/test-tools-hub": "file:./packages/test-tools-hub",
+    "aifastdb": "file:../ai_db/packages/node"
   },
   "devDependencies": {
     "@types/node": "^20.11.0",

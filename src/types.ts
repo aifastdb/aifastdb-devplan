@@ -612,6 +612,34 @@ export interface DevPlanGraphStoreConfig {
   rerankBaseUrl?: string;
 
   /**
+   * Optional: initialize LlmGateway memory subsystem for ops/recall compatibility.
+   *
+   * When provided and `enable` is true, DevPlan will call `llmGateway.enableMemory(...)`
+   * after LlmGateway initialization, and forward dedup-related options.
+   */
+  llmGatewayMemory?: {
+    enable?: boolean;
+    graphDataDir?: string;
+    enableDedupWindow?: boolean;
+    dedupWindowMs?: number;
+    dedupScope?: 'conversation' | 'user';
+    enableCursorMemoryProfile?: boolean;
+  };
+
+  /**
+   * Phase-140: 记忆网关适配器配置（长期链路）
+   *
+   * - preferUnifiedApi: 优先调用 ai_db 统一 API（LlmGateway.recallUnified / outbox API）
+   * - unifiedApiFallbackEnabled: 统一 API 失败时回退到 DevPlan 本地实现
+   */
+  memoryGatewayAdapter?: {
+    preferUnifiedApi?: boolean;
+    unifiedApiFallbackEnabled?: boolean;
+    /** gateway fallbackRate 超过该阈值时触发独立告警（默认 0.2） */
+    fallbackAlertThreshold?: number;
+  };
+
+  /**
    * Phase-57B: LLM 分析提供者配置
    *
    * 控制 devplan_llm_analyze 工具使用的 LLM 后端。
@@ -1409,6 +1437,22 @@ export interface UnifiedRecallOptions {
   scope?: RecallScope;
   /** 文档检索策略 */
   docStrategy?: DocStrategy;
+  /** deterministic filter 开关：true 时优先执行强过滤 */
+  deterministicFirst?: boolean;
+  /** 过滤：项目名（兼容 ai_db recall 参数） */
+  filterProject?: string;
+  /** 过滤：记忆类型（兼容 ai_db recall 参数） */
+  filterMemoryType?: MemoryType | string;
+  /** 过滤：created_at 下界（ms） */
+  filterCreatedAfterMs?: number;
+  /** 过滤：created_at 上界（ms） */
+  filterCreatedBeforeMs?: number;
+  /** 过滤：scope（兼容参数；DevPlan 内部为软适配） */
+  filterScope?: string;
+  /** 过滤：roleId（兼容参数；DevPlan 内部为软适配） */
+  filterRoleId?: string;
+  /** 过滤：是否包含 global fallback（兼容参数） */
+  filterIncludeGlobalFallback?: boolean;
 }
 
 /**
@@ -1441,6 +1485,44 @@ export interface RecallObservability {
   alert: boolean;
   alertReason?: string;
   lastError?: string;
+  /** Phase-143: Adapter 统一 API 命中/回退聚合指标 */
+  gatewayAdapter?: {
+    recallUnified: {
+      gatewayCalls: number;
+      fallbackCalls: number;
+      totalCalls: number;
+      gatewayHitRate: number;
+      fallbackRate: number;
+      lastRoute: 'gateway' | 'fallback' | 'none';
+      lastError?: string;
+    };
+    getOutboxEntries: {
+      gatewayCalls: number;
+      fallbackCalls: number;
+      totalCalls: number;
+      gatewayHitRate: number;
+      fallbackRate: number;
+      lastRoute: 'gateway' | 'fallback' | 'none';
+      lastError?: string;
+    };
+    retryOutboxEntry: {
+      gatewayCalls: number;
+      fallbackCalls: number;
+      totalCalls: number;
+      gatewayHitRate: number;
+      fallbackRate: number;
+      lastRoute: 'gateway' | 'fallback' | 'none';
+      lastError?: string;
+    };
+  };
+  /** Phase-144: gateway 回退率独立阈值告警 */
+  gatewayAlert?: {
+    alerted: boolean;
+    threshold: number;
+    triggeredOps: Array<'recallUnified' | 'getOutboxEntries' | 'retryOutboxEntry'>;
+    maxFallbackRate: number;
+    reason?: string;
+  };
 }
 
 /**
@@ -1610,7 +1692,7 @@ export interface MemoryContext {
  */
 export interface MemoryCandidate {
   /** 来源类型 */
-  sourceType: 'task' | 'document';
+  sourceType: 'task' | 'document' | 'module';
   /** 统一来源标识（候选层主键） */
   sourceRef: {
     /** 逻辑来源 ID (taskId 或 section|subSection) */
@@ -1731,10 +1813,14 @@ export interface MemoryGenerateResult {
     totalCompletedPhases: number;
     /** 文档总数 */
     totalDocuments: number;
+    /** 功能模块总数 */
+    totalModules: number;
     /** 已有记忆的阶段数 */
     phasesWithMemory: number;
     /** 已有记忆的文档数 */
     docsWithMemory: number;
+    /** 已有记忆的功能模块数 */
+    modulesWithMemory: number;
     /** 因已有记忆而被跳过的候选项数 */
     skippedWithMemory: number;
     /** 返回的候选项数（已排除有记忆的） */

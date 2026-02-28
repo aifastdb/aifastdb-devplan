@@ -10,6 +10,11 @@ export function getPagesScript(): string {
 var docsLoaded = false;
 var docsData = [];       // 全部文档列表
 var currentDocKey = '';  // 当前选中文档的 key (section|subSection)
+var docsDataIsPartial = false; // true 表示当前 docsData 为分页子集
+var docsPageState = { page: 0, limit: 50, total: 0, hasMore: false, loading: false };
+var docsCacheUpdatedAt = 0;
+var DOCS_CACHE_TTL_MS = 60000;
+var docsSilentRefreshing = false;
 
 /** 根据 docKey 从 docsData 中查找文档标题 */
 function findDocTitle(docKey) {
@@ -39,34 +44,172 @@ var SECTION_ICONS = {
 
 /** 加载文档数据（全局共享，仅请求一次） */
 function loadDocsData(callback) {
-  if (docsLoaded && docsData.length > 0) {
+  if (docsLoaded && docsData.length > 0 && !docsDataIsPartial) {
     if (callback) callback(docsData, null);
     return;
   }
   fetch('/api/docs').then(function(r) { return r.json(); }).then(function(data) {
     docsData = data.docs || [];
     docsLoaded = true;
+    docsDataIsPartial = false;
     if (callback) callback(docsData, null);
   }).catch(function(err) {
     if (callback) callback(null, err);
   });
 }
 
-function loadDocsPage() {
-  var list = document.getElementById('docsGroupList');
-  // 数据已加载（可能由全局文档弹层预先加载），直接渲染到侧边栏
-  if (docsLoaded && docsData.length > 0) {
-    renderDocsList(docsData);
+function fetchDocsPage(page, callback) {
+  var url = '/api/docs/paged?page=' + page + '&limit=' + docsPageState.limit;
+  fetch(url).then(function(r) {
+    if (!r.ok) throw new Error('HTTP ' + r.status);
+    return r.json();
+  }).then(function(data) {
+    if (callback) callback(data, null);
+  }).catch(function(err) {
+    if (callback) callback(null, err);
+  });
+}
+
+function hasFreshDocsCache() {
+  return docsPageState.page > 0 &&
+    docsData.length > 0 &&
+    (Date.now() - docsCacheUpdatedAt) <= DOCS_CACHE_TTL_MS;
+}
+
+function applyFirstPageData(data) {
+  docsData = (data && data.docs) ? data.docs : [];
+  docsPageState.page = data.page || 1;
+  docsPageState.limit = data.limit || docsPageState.limit;
+  docsPageState.total = data.total || docsData.length;
+  docsPageState.hasMore = !!data.hasMore;
+  docsLoaded = true;
+  docsDataIsPartial = true;
+  docsCacheUpdatedAt = Date.now();
+}
+
+function silentRefreshDocsFirstPage() {
+  if (docsSilentRefreshing) return;
+  docsSilentRefreshing = true;
+  fetchDocsPage(1, function(data, err) {
+    docsSilentRefreshing = false;
+    if (err) return; // 静默刷新失败不打断当前浏览
+
+    applyFirstPageData(data);
+    var searchInput = document.getElementById('docsSearch');
+    var searching = !!(searchInput && (searchInput.value || '').trim());
+    if (!searching) {
+      renderDocsList(docsData);
+    } else {
+      filterDocs();
+    }
+    updateDocsLoadMoreUI(searching);
+  });
+}
+
+function updateDocsLoadMoreUI(forceHide) {
+  var bar = document.getElementById('docsPagingBar');
+  var btn = document.getElementById('docsLoadMoreBtn');
+  var info = document.getElementById('docsPagingInfo');
+  if (!bar || !btn || !info) return;
+  if (forceHide) {
+    bar.style.display = 'none';
     return;
   }
-  if (list) list.innerHTML = '<div style="text-align:center;padding:40px;color:#6b7280;font-size:12px;"><div class="spinner" style="margin:0 auto 12px;width:24px;height:24px;border-width:3px;"></div>加载文档列表...</div>';
 
-  loadDocsData(function(data, err) {
+  bar.style.display = 'block';
+  var loaded = docsData.length;
+  var total = docsPageState.total || loaded;
+  info.textContent = '已加载 ' + loaded + ' / ' + total;
+
+  if (docsPageState.loading) {
+    btn.disabled = true;
+    btn.textContent = '加载中...';
+    return;
+  }
+  if (!docsPageState.hasMore) {
+    btn.disabled = true;
+    btn.textContent = '已全部加载';
+    return;
+  }
+  btn.disabled = false;
+  btn.textContent = '加载更多';
+}
+
+function loadMoreDocs() {
+  if (docsPageState.loading || docsSilentRefreshing || !docsPageState.hasMore) return;
+  docsPageState.loading = true;
+  updateDocsLoadMoreUI(false);
+  fetchDocsPage(docsPageState.page + 1, function(data, err) {
+    docsPageState.loading = false;
     if (err) {
-      if (list) list.innerHTML = '<div style="text-align:center;padding:40px;color:#f87171;font-size:12px;">加载失败: ' + err.message + '<br><span style="cursor:pointer;color:#818cf8;text-decoration:underline;" onclick="docsLoaded=false;loadDocsPage();">重试</span></div>';
+      var info = document.getElementById('docsPagingInfo');
+      if (info) info.textContent = '加载失败: ' + err.message;
+      updateDocsLoadMoreUI(false);
       return;
     }
+    var pageDocs = (data && data.docs) ? data.docs : [];
+    var keySet = {};
+    for (var i = 0; i < docsData.length; i++) keySet[docItemKey(docsData[i])] = true;
+    for (var j = 0; j < pageDocs.length; j++) {
+      var k = docItemKey(pageDocs[j]);
+      if (!keySet[k]) {
+        docsData.push(pageDocs[j]);
+        keySet[k] = true;
+      }
+    }
+
+    docsPageState.page = data.page || (docsPageState.page + 1);
+    docsPageState.limit = data.limit || docsPageState.limit;
+    docsPageState.total = data.total || docsData.length;
+    docsPageState.hasMore = !!data.hasMore;
+    docsLoaded = true;
+    docsDataIsPartial = true;
+    docsCacheUpdatedAt = Date.now();
+
+    var searchInput = document.getElementById('docsSearch');
+    var searching = !!(searchInput && (searchInput.value || '').trim());
+    if (!searching) {
+      renderDocsList(docsData);
+    } else {
+      filterDocs();
+    }
+    updateDocsLoadMoreUI(searching);
+  });
+}
+
+function loadDocsPage() {
+  var list = document.getElementById('docsGroupList');
+  if (hasFreshDocsCache()) {
+    var searchInput = document.getElementById('docsSearch');
+    var searching = !!(searchInput && (searchInput.value || '').trim());
+    if (!searching) {
+      renderDocsList(docsData);
+    } else {
+      filterDocs();
+    }
+    updateDocsLoadMoreUI(searching);
+    silentRefreshDocsFirstPage();
+    return;
+  }
+
+  docsData = [];
+  docsLoaded = false;
+  docsDataIsPartial = true;
+  docsCacheUpdatedAt = 0;
+  docsPageState = { page: 0, limit: 50, total: 0, hasMore: false, loading: true };
+  if (list) list.innerHTML = '<div style="text-align:center;padding:40px;color:#6b7280;font-size:12px;"><div class="spinner" style="margin:0 auto 12px;width:24px;height:24px;border-width:3px;"></div>加载文档列表...</div>';
+  updateDocsLoadMoreUI(false);
+
+  fetchDocsPage(1, function(data, err) {
+    docsPageState.loading = false;
+    if (err) {
+      if (list) list.innerHTML = '<div style="text-align:center;padding:40px;color:#f87171;font-size:12px;">加载失败: ' + err.message + '<br><span style="cursor:pointer;color:#818cf8;text-decoration:underline;" onclick="docsLoaded=false;loadDocsPage();">重试</span></div>';
+      updateDocsLoadMoreUI(true);
+      return;
+    }
+    applyFirstPageData(data);
     renderDocsList(docsData);
+    updateDocsLoadMoreUI(false);
   });
 }
 
@@ -287,8 +430,10 @@ function clearDocsSearch(searchId, clearBtnId, targetId, selectFn) {
 function filterDocs(searchId, targetId, selectFn) {
   var input = document.getElementById(searchId || 'docsSearch');
   var query = (input ? input.value || '' : '').toLowerCase().trim();
+  var isMainDocsSearch = !searchId || searchId === 'docsSearch';
   if (!query) {
     renderDocsList(docsData, targetId, selectFn);
+    if (isMainDocsSearch) updateDocsLoadMoreUI(false);
     return;
   }
   var filtered = [];
@@ -300,6 +445,7 @@ function filterDocs(searchId, targetId, selectFn) {
     }
   }
   renderDocsList(filtered, targetId, selectFn);
+  if (isMainDocsSearch) updateDocsLoadMoreUI(true);
 }
 
 // ========== Document Management Modal ==========
@@ -1399,6 +1545,173 @@ function phaseItem(task, status, icon) {
   return h;
 }
 
+// ========== Test Tools ==========
+var testToolsLoaded = false;
+var testToolsTimer = null;
+var testToolsLatestData = { items: [] };
+var testToolsSelectedToolId = '';
+
+function loadTestToolsPage() {
+  if (!testToolsLoaded) {
+    var content = document.getElementById('testToolsContent');
+    if (content) {
+      content.innerHTML = '<div style="text-align:center;padding:60px;color:#6b7280;"><div class="spinner" style="margin:0 auto 12px;"></div>加载测试工具状态...</div>';
+    }
+  }
+  refreshTestTools();
+
+  if (testToolsTimer) return;
+  testToolsTimer = setInterval(function() {
+    if (currentPage === 'test-tools') {
+      refreshTestTools();
+    }
+  }, 4000);
+}
+
+function refreshTestTools() {
+  fetch('/api/test-tools/status?includeRaw=true')
+    .then(function(r) {
+      if (!r.ok) throw new Error('HTTP ' + r.status);
+      return r.json();
+    })
+    .then(function(data) {
+      testToolsLoaded = true;
+      testToolsLatestData = data || { items: [] };
+      renderTestToolsPage(data || {});
+    })
+    .catch(function(err) {
+      var content = document.getElementById('testToolsContent');
+      if (content) {
+        content.innerHTML = '<div style="text-align:center;padding:60px;color:#f87171;">加载失败: ' +
+          escHtml(err.message || String(err)) +
+          '<br><button class="refresh-btn" style="margin-top:12px;" onclick="refreshTestTools()">重试</button></div>';
+      }
+    });
+}
+
+function openTestToolDetail(toolId) {
+  testToolsSelectedToolId = String(toolId || '');
+  renderTestToolsPage(testToolsLatestData || { items: [] });
+}
+
+function openTestToolDetailByIndex(idx) {
+  var items = (testToolsLatestData && testToolsLatestData.items) ? testToolsLatestData.items : [];
+  var it = items[idx];
+  var toolId = it && it.tool && it.tool.id ? String(it.tool.id) : '';
+  if (!toolId) return;
+  openTestToolDetail(toolId);
+}
+
+function closeTestToolDetail() {
+  testToolsSelectedToolId = '';
+  renderTestToolsPage(testToolsLatestData || { items: [] });
+}
+
+function fmtNum(n) {
+  var x = Number(n || 0);
+  if (!isFinite(x)) return '0';
+  return x.toLocaleString('en-US');
+}
+
+function renderTestToolsPage(data) {
+  var summary = document.getElementById('testToolsSummary');
+  var content = document.getElementById('testToolsContent');
+  if (!summary || !content) return;
+
+  var items = data.items || [];
+  var reachable = 0;
+  var running = 0;
+  var stalled = 0;
+  var completed = 0;
+  for (var i = 0; i < items.length; i++) {
+    var st = String(items[i].state || '');
+    if (items[i].reachable) reachable++;
+    if (st === 'running' || st === 'compiling' || st === 'preparing_data') running++;
+    if (st === 'stalled' || st === 'aborted' || st === 'unreachable') stalled++;
+    if (st === 'completed') completed++;
+  }
+
+  summary.innerHTML =
+    statCard('🧩', items.length, '已注册工具', '', 'blue') +
+    statCard('🟢', reachable, '可达', '', 'green') +
+    statCard('🔄', running, '运行中', '', 'amber') +
+    statCard('⏸', stalled, '异常/卡住', '', 'rose') +
+    statCard('✅', completed, '已完成', '', 'purple');
+
+  if (items.length === 0) {
+    content.innerHTML = '<div style="text-align:center;padding:60px;color:#6b7280;">暂无已注册测试工具</div>';
+    return;
+  }
+
+  var html = '';
+  html += '<table style="width:100%;border-collapse:collapse;font-size:12px;">';
+  html += '<thead><tr style="color:#93a4c7;border-bottom:1px solid #263655;">' +
+    '<th style="text-align:left;padding:8px;">工具</th>' +
+    '<th style="text-align:left;padding:8px;">项目</th>' +
+    '<th style="text-align:left;padding:8px;">状态</th>' +
+    '<th style="text-align:left;padding:8px;">进度</th>' +
+    '<th style="text-align:left;padding:8px;">当前阶段</th>' +
+    '<th style="text-align:left;padding:8px;">入口</th>' +
+    '</tr></thead><tbody>';
+
+  for (var j = 0; j < items.length; j++) {
+    var it = items[j];
+    var state = String(it.state || 'unknown');
+    var stateColor = '#fbbf24';
+    if (state === 'completed' || state === 'ok') stateColor = '#34d399';
+    if (state === 'stalled' || state === 'aborted' || state === 'unreachable') stateColor = '#f87171';
+    var phase = it.phase ? (it.phase.taskId + ' (' + (it.phase.percent || 0) + '%)') : '-';
+    var endpoint = it.tool && it.tool.endpoint ? String(it.tool.endpoint) : '';
+    var openAction = endpoint
+      ? '<a href="' + escHtml(endpoint) + '" target="_blank" style="color:#818cf8;text-decoration:none;">打开</a>'
+      : '<a href="javascript:void(0)" onclick="openTestToolDetailByIndex(' + j + ')" style="color:#818cf8;text-decoration:none;">打开</a>';
+    html += '<tr style="border-bottom:1px solid #1e2b46;">' +
+      '<td style="padding:8px;">' + escHtml((it.tool && it.tool.name) || '-') + '</td>' +
+      '<td style="padding:8px;color:#9fb0d1;">' + escHtml((it.tool && it.tool.projectName) || '-') + '</td>' +
+      '<td style="padding:8px;color:' + stateColor + ';font-weight:600;">' + escHtml(state) + '</td>' +
+      '<td style="padding:8px;">' + Number(it.progress || 0) + '%</td>' +
+      '<td style="padding:8px;color:#9fb0d1;">' + escHtml(phase) + '</td>' +
+      '<td style="padding:8px;">' + openAction + '</td>' +
+      '</tr>';
+  }
+  html += '</tbody></table>';
+
+  var selected = null;
+  if (testToolsSelectedToolId) {
+    for (var k = 0; k < items.length; k++) {
+      var cur = items[k];
+      if (cur && cur.tool && String(cur.tool.id || '') === testToolsSelectedToolId) {
+        selected = cur;
+        break;
+      }
+    }
+  }
+
+  if (selected && selected.raw) {
+    var raw = selected.raw || {};
+    var inserted = fmtNum(raw.inserted || 0);
+    var total = fmtNum(raw.totalImages || 0);
+    var stale = Number(raw.staleSeconds || 0);
+    var logTail = (raw.tail && raw.tail.join) ? raw.tail.join(String.fromCharCode(10)) : '';
+    html += '<div style="margin-top:14px;border:1px solid #223150;border-radius:12px;background:rgba(14,22,45,.5);padding:14px;">';
+    html += '<div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:8px;">' +
+      '<div style="font-size:13px;font-weight:700;color:#dbe7ff;">内置详情 · ' + escHtml((selected.tool && selected.tool.name) || '-') + '</div>' +
+      '<a href="javascript:void(0)" onclick="closeTestToolDetail()" style="color:#8da2d6;text-decoration:none;font-size:12px;">关闭</a>' +
+      '</div>';
+    html += '<div style="display:grid;grid-template-columns:repeat(4,minmax(120px,1fr));gap:8px;margin-bottom:10px;">' +
+      '<div style="background:#111d39;border:1px solid #223150;border-radius:8px;padding:8px;"><div style="font-size:11px;color:#8da2d6;">progress</div><div style="font-size:14px;color:#e9f2ff;font-weight:700;">' + Number(selected.progress || 0) + '%</div></div>' +
+      '<div style="background:#111d39;border:1px solid #223150;border-radius:8px;padding:8px;"><div style="font-size:11px;color:#8da2d6;">inserted</div><div style="font-size:14px;color:#e9f2ff;font-weight:700;">' + inserted + '</div></div>' +
+      '<div style="background:#111d39;border:1px solid #223150;border-radius:8px;padding:8px;"><div style="font-size:11px;color:#8da2d6;">total</div><div style="font-size:14px;color:#e9f2ff;font-weight:700;">' + total + '</div></div>' +
+      '<div style="background:#111d39;border:1px solid #223150;border-radius:8px;padding:8px;"><div style="font-size:11px;color:#8da2d6;">staleSeconds</div><div style="font-size:14px;color:#e9f2ff;font-weight:700;">' + stale + '</div></div>' +
+      '</div>';
+    html += '<div style="font-size:11px;color:#8da2d6;margin-bottom:6px;">log tail</div>';
+    html += '<pre style="margin:0;max-height:260px;overflow:auto;background:#0a1430;border:1px solid #223150;border-radius:8px;padding:10px;color:#c6d5f3;font-size:11px;line-height:1.45;">' + escHtml(logTail || '(empty)') + '</pre>';
+    html += '</div>';
+  }
+
+  content.innerHTML = html;
+}
+
 // ========== Memory Browser ==========
 var memoryLoaded = false;
 var memoryData = [];
@@ -1552,8 +1865,9 @@ function formatMemoryTime(ts) {
 // ========== Phase-60: AI 批量生成（浏览器直连 Ollama） ==========
 var _aiBatchCancelled = false;
 var _aiBatchRunning = false;
-var _aiBatchConfig = null; // { ollamaBaseUrl, ollamaModel, systemPrompt }
+var _aiBatchConfig = null; // { llmEngine, isExternalModel, ollamaBaseUrl, ollamaModel, systemPrompt }
 var _BATCH_CACHE_KEY = 'aiBatch_phaseA_cache';  // Phase-65: localStorage key
+var _aiBatchRepairContext = null; // { sourceRefs: string[], memoryIds: string[] }
 
 // ─── Phase-65: localStorage 断点续传辅助函数 ───
 function _batchCacheLoad() {
@@ -1562,16 +1876,17 @@ function _batchCacheLoad() {
     if (!raw) return null;
     var cache = JSON.parse(raw);
     if (!cache || !Array.isArray(cache.results)) return null;
-    return cache; // { timestamp, model, source, results: [{sourceRef, ...saveBody}] }
+    return cache; // { timestamp, model, source, limit, results: [{sourceRef, ...saveBody}] }
   } catch(e) { return null; }
 }
 
-function _batchCacheSave(model, source, results) {
+function _batchCacheSave(model, source, limit, results) {
   try {
     localStorage.setItem(_BATCH_CACHE_KEY, JSON.stringify({
       timestamp: Date.now(),
       model: model,
       source: source,
+      limit: limit,
       results: results
     }));
   } catch(e) {
@@ -1655,8 +1970,10 @@ function startAiBatchGenerate() {
       var cacheInfo = document.createElement('div');
       cacheInfo.id = 'aiBatchCacheInfo';
       cacheInfo.style.cssText = 'margin:8px 0 12px;padding:10px 14px;background:rgba(96,165,250,0.15);border:1px solid rgba(96,165,250,0.3);border-radius:8px;font-size:13px;color:#93c5fd;';
+      var cacheLimit = existingCache.limit || 'all';
+      var cacheLimitLabel = cacheLimit === 'all' ? '全部' : (cacheLimit + ' 条');
       cacheInfo.innerHTML = '📦 Phase A 缓存: <b>' + existingCache.results.length + ' 条</b> LLM 结果'
-        + '<br><span style="color:#9ca3af;font-size:12px;">模型: ' + (existingCache.model || '?') + ' · 来源: ' + (existingCache.source || 'both') + ' · ' + cacheAgeStr + '</span>';
+        + '<br><span style="color:#9ca3af;font-size:12px;">模型: ' + (existingCache.model || '?') + ' · 来源: ' + (existingCache.source || 'both') + ' · 批次: ' + cacheLimitLabel + ' · ' + cacheAgeStr + '</span>';
 
       // 续传按钮
       var resumeBtn = document.createElement('button');
@@ -1699,7 +2016,7 @@ function startAiBatchGenerate() {
     }
   }).catch(function(err) {
     if (statusEl) statusEl.textContent = '⚠️ 加载配置失败，使用默认值';
-    _aiBatchConfig = { ollamaBaseUrl: 'http://localhost:11434', ollamaModel: 'gemma3:27b', systemPrompt: '' };
+    _aiBatchConfig = { llmEngine: 'ollama', isExternalModel: false, ollamaBaseUrl: 'http://localhost:11434', ollamaModel: 'gemma3:27b', systemPrompt: '' };
   });
 }
 
@@ -1728,9 +2045,17 @@ function startAiBatchProcess(resumeMode) {
   var urlInput = document.getElementById('aiBatchOllamaUrl');
   var modelInput = document.getElementById('aiBatchModel');
   var sourceSelect = document.getElementById('aiBatchSource');
+  var limitSelect = document.getElementById('aiBatchLimit');
   var ollamaUrl = urlInput ? urlInput.value.trim() : 'http://localhost:11434';
   var model = modelInput ? modelInput.value.trim() : 'gemma3:27b';
   var source = sourceSelect ? sourceSelect.value : 'both';
+  var batchLimitValue = limitSelect ? String(limitSelect.value || 'all') : 'all';
+  var batchLimit = batchLimitValue === 'all' ? 99999 : parseInt(batchLimitValue, 10);
+  if (!(batchLimit > 0)) batchLimit = 99999;
+  if (batchLimit >= 99999) batchLimitValue = 'all';
+  var forcedSourceRefs = (_aiBatchRepairContext && _aiBatchRepairContext.sourceRefs && _aiBatchRepairContext.sourceRefs.length > 0)
+    ? _aiBatchRepairContext.sourceRefs.slice()
+    : null;
 
   // get systemPrompt from config or use default
   var systemPrompt = (_aiBatchConfig && _aiBatchConfig.systemPrompt) ? _aiBatchConfig.systemPrompt : '你是一个记忆构建助手。请根据以下文档/任务内容生成多级记忆。\\n生成三个层级（必须以 JSON 返回）：\\n- L1（触点摘要）：一句话概括（15~30字）\\n- L2（详细记忆）：默认 3~8句话，包含关键技术细节\\n- L3_index（结构索引）：列出主要组件、依赖关系\\n- memoryType：从 decision/pattern/bugfix/insight/preference/summary 选择\\n- importance：0~1\\n- suggestedTags：标签数组\\n- anchorName：触点名称\\n- anchorType：触点类型（module/concept/api/architecture/feature/library/protocol）\\n- anchorOverview：触点概览（3~5句话目录索引式摘要，列出关键子项、核心 Flow、主要组件）\\n\\n粒度策略（必须遵守）：\\n- decision/bugfix：L2 必须保留决策/根因+修复思路+关键代码片段+文件路径（若原文存在）\\n- summary：仅保留 2~3 句概要\\n- pattern/insight/preference：保留 1~3 句结论 + 一个最小示例\\n- 若输入包含原始材料入口（commit/diff/log），L2 与 L3_index 必须保留这些追溯线索\\n- 不要沿用旧版 L1/L2/L3 定义\\n\\n请严格以 JSON 格式返回：\\n{"L1": "...", "L2": "...", "L3_index": "...", "memoryType": "...", "importance": 0.7, "suggestedTags": [...], "anchorName": "...", "anchorType": "...", "anchorOverview": "..."}';
@@ -1771,9 +2096,23 @@ function startAiBatchProcess(resumeMode) {
   var totalSkipped = 0;
   var phaseASkipped = 0;
   var phaseACached = 0;  // Phase-65: 从缓存恢复的数量
+  var phaseAIntegrityRetries = 0;
+  var phaseAIntegrityDropped = 0;
   var startTime = Date.now();
+  var cursorBatchSeed = String(startTime);
+  var cursorContentSessionId = 'visual-batch-content-' + cursorBatchSeed;
+  var cursorMemorySessionId = 'visual-batch-memory-' + cursorBatchSeed;
   var fetchProgressTimer = null;
   var fetchProgressValue = 0;
+  var PHASE_A_MAX_RETRIES = ((_aiBatchConfig && _aiBatchConfig.phaseAIntegrityMaxRetries) || 3);
+  var VALID_MEMORY_TYPES = {
+    decision: true,
+    pattern: true,
+    bugfix: true,
+    insight: true,
+    preference: true,
+    summary: true
+  };
 
   function stopCandidateFetchProgress() {
     if (fetchProgressTimer) {
@@ -1798,6 +2137,96 @@ function startAiBatchProcess(resumeMode) {
     }, 220);
   }
 
+  function normalizeMemoryType(v) {
+    if (typeof v !== 'string') return '';
+    return v.toLowerCase().replace(/[^a-z]/g, '');
+  }
+
+  function buildPreparedEntry(candidate, rawContent, candidateSourceId, candidateTitle, parsed) {
+    var memContent = '';
+    var memContentL1 = '';
+    var memContentL2 = '';
+    var memContentL3 = rawContent;
+    var memType = candidate.suggestedMemoryType || 'summary';
+    var memImportance = candidate.suggestedImportance || 0.5;
+    var memTags = candidate.suggestedTags || [];
+    var anchorName = null;
+    var anchorType = null;
+    var anchorOverview = null;
+
+    if (parsed) {
+      memContentL1 = parsed.L1 || rawContent.slice(0, 100);
+      memContentL2 = parsed.L2 || parsed.L3_index || parsed.L3_summary || rawContent.slice(0, 500);
+      memContent = parsed.L2 || parsed.L1 || rawContent.slice(0, 500);
+      memType = parsed.memoryType || memType;
+      memImportance = parsed.importance || memImportance;
+      if (parsed.suggestedTags && parsed.suggestedTags.length > 0) memTags = parsed.suggestedTags;
+      anchorName = parsed.anchorName || null;
+      anchorType = parsed.anchorType || null;
+      anchorOverview = parsed.anchorOverview || null;
+    } else {
+      // Fallback: no valid JSON from LLM
+      memContentL1 = rawContent.slice(0, 100);
+      memContentL2 = rawContent.slice(0, 500);
+      memContent = rawContent.slice(0, 500);
+    }
+
+    return {
+      memoryType: memType,
+      content: memContent,
+      tags: memTags,
+      relatedTaskId: candidate.sourceType === 'task' ? candidateSourceId : undefined,
+      sourceRef: candidate.sourceRef || (candidateSourceId ? { sourceId: candidateSourceId } : undefined),
+      provenance: {
+        origin: 'batch_import_ui',
+        evidences: []
+      },
+      importance: memImportance,
+      contentL1: memContentL1,
+      contentL2: memContentL2,
+      contentL3: memContentL3,
+      anchorName: anchorName,
+      anchorType: anchorType,
+      anchorOverview: anchorOverview,
+      _title: candidateTitle
+    };
+  }
+
+  function validatePreparedEntry(entry) {
+    var issues = [];
+    var normType = normalizeMemoryType(entry.memoryType);
+    if (!VALID_MEMORY_TYPES[normType]) {
+      issues.push('memoryType 非法');
+    }
+
+    var imp = Number(entry.importance);
+    if (!(imp >= 0 && imp <= 1)) {
+      issues.push('importance 异常');
+    }
+
+    var content = String(entry.content || '');
+    if (content.trim().length < 30) {
+      issues.push('content 过短');
+    }
+
+    var l1 = String(entry.contentL1 || '');
+    if (l1.trim().length < 8) {
+      issues.push('L1 过短');
+    }
+
+    var l2 = String(entry.contentL2 || '');
+    if (l2.trim().length < 30) {
+      issues.push('L2 过短');
+    }
+
+    var anchorName = String(entry.anchorName || '').trim();
+    if (!anchorName) {
+      issues.push('缺少 anchorName');
+    }
+
+    return { pass: issues.length === 0, issues: issues };
+  }
+
   // Phase-64: 分相缓存 — Phase A 的 LLM 结果暂存在 JS 数组中
   var preparedResults = [];
 
@@ -1811,6 +2240,12 @@ function startAiBatchProcess(resumeMode) {
     phaseACached = preparedResults.length;
     // 使用缓存中的 source 配置
     if (existingCache.source) source = existingCache.source;
+    if (existingCache.limit) {
+      batchLimitValue = String(existingCache.limit);
+      batchLimit = batchLimitValue === 'all' ? 99999 : parseInt(batchLimitValue, 10);
+      if (!(batchLimit > 0)) batchLimit = 99999;
+      if (limitSelect) limitSelect.value = batchLimitValue;
+    }
   } else if (!resumeMode) {
     // 重新开始：清除旧缓存
     _batchCacheClear();
@@ -1834,7 +2269,11 @@ function startAiBatchProcess(resumeMode) {
 
   // Step 1: Get all candidates
   startCandidateFetchProgress();
-  fetch('/api/memories/generate?source=' + encodeURIComponent(source) + '&limit=99999')
+  var genUrl = '/api/memories/generate?source=' + encodeURIComponent(source) + '&limit=' + encodeURIComponent(String(batchLimit));
+  if (forcedSourceRefs && forcedSourceRefs.length > 0) {
+    genUrl += '&sourceRefs=' + encodeURIComponent(forcedSourceRefs.join(','));
+  }
+  fetch(genUrl)
     .then(function(r) { return r.json(); })
     .then(function(data) {
       stopCandidateFetchProgress();
@@ -1878,7 +2317,8 @@ function startAiBatchProcess(resumeMode) {
       if (resumeMode && cacheHits > 0) {
         if (statusEl) statusEl.textContent = '📦 缓存命中: ' + phaseACached + ' 条 · 新增: ' + newCandidates.length + ' 条 — Phase A: LLM 生成开始...';
       } else {
-        if (statusEl) statusEl.textContent = '共 ' + newCandidates.length + ' 条候选项' + (totalSkipped > 0 ? '（跳过 ' + totalSkipped + ' 条已有）' : '') + ' — Phase A: LLM 生成开始...';
+        var targetedHint = (forcedSourceRefs && forcedSourceRefs.length > 0) ? '（定向修复模式）' : '';
+        if (statusEl) statusEl.textContent = '共 ' + newCandidates.length + ' 条候选项' + targetedHint + (totalSkipped > 0 ? '（跳过 ' + totalSkipped + ' 条已有）' : '') + ' — Phase A: LLM 生成开始...';
       }
 
       // 如果没有新候选需要处理 → 直接 Phase B
@@ -1931,68 +2371,49 @@ function startAiBatchProcess(resumeMode) {
         }
         if (streamArea) { streamArea.textContent = ''; streamArea.style.display = 'block'; }
 
-        // Call Ollama native /api/chat with streaming (gemma3:27b stays loaded)
-        callOllamaStream(ollamaUrl, model, systemPrompt, '标题：' + candidateTitle + '\\n\\n' + truncated, streamArea, function(llmResult) {
+        function runPhaseAAttempt(attempt, reason) {
           if (_aiBatchCancelled) { onPhaseADone(); return; }
-
-          // Parse JSON from LLM output
-          var parsed = parseJsonFromLlmOutput(llmResult);
-
-          var memContent = '';
-          var memContentL1 = '';
-          var memContentL2 = '';
-          var memContentL3 = rawContent;
-          var memType = c.suggestedMemoryType || 'summary';
-          var memImportance = c.suggestedImportance || 0.5;
-          var memTags = c.suggestedTags || [];
-          var anchorName = null;
-          var anchorType = null;
-          var anchorOverview = null;
-
-          if (parsed) {
-            memContentL1 = parsed.L1 || rawContent.slice(0, 100);
-            memContentL2 = parsed.L2 || parsed.L3_index || parsed.L3_summary || rawContent.slice(0, 500);
-            memContent = parsed.L2 || parsed.L1 || rawContent.slice(0, 500);
-            memType = parsed.memoryType || memType;
-            memImportance = parsed.importance || memImportance;
-            if (parsed.suggestedTags && parsed.suggestedTags.length > 0) memTags = parsed.suggestedTags;
-            anchorName = parsed.anchorName || null;
-            anchorType = parsed.anchorType || null;
-            anchorOverview = parsed.anchorOverview || null;
-          } else {
-            // Fallback: no valid JSON from LLM
-            memContentL1 = rawContent.slice(0, 100);
-            memContentL2 = rawContent.slice(0, 500);
-            memContent = rawContent.slice(0, 500);
+          var retryHint = '';
+          if (reason && reason.length > 0) {
+            retryHint = '\\n\\n【完整性修复要求】\\n上一轮未通过项：' + reason.join('、') + '。\\n请严格按 JSON 输出并修复上述问题。';
           }
+          var userPrompt = '标题：' + candidateTitle + '\\n\\n' + truncated + retryHint;
 
-          // 缓存到 JS 数组，不立即调用 /api/batch/save
-          preparedResults.push({
-            memoryType: memType,
-            content: memContent,
-            tags: memTags,
-            relatedTaskId: c.sourceType === 'task' ? candidateSourceId : undefined,
-            sourceRef: c.sourceRef || (candidateSourceId ? { sourceId: candidateSourceId } : undefined),
-            provenance: {
-              origin: 'batch_import_ui',
-              evidences: []
-            },
-            importance: memImportance,
-            contentL1: memContentL1,
-            contentL2: memContentL2,
-            contentL3: memContentL3,
-            anchorName: anchorName,
-            anchorType: anchorType,
-            anchorOverview: anchorOverview,
-            _title: candidateTitle
+          // Call Ollama native /api/chat with streaming (gemma3:27b stays loaded)
+          callOllamaStream(ollamaUrl, model, systemPrompt, userPrompt, streamArea, function(llmResult) {
+            if (_aiBatchCancelled) { onPhaseADone(); return; }
+
+            // Parse JSON from LLM output
+            var parsed = parseJsonFromLlmOutput(llmResult);
+            var entry = buildPreparedEntry(c, rawContent, candidateSourceId, candidateTitle, parsed);
+            var check = validatePreparedEntry(entry);
+
+            if (check.pass) {
+              preparedResults.push(entry);
+              // Phase-65: 增量保存到 localStorage（每条 LLM 完成后立即持久化）
+              _batchCacheSave(model, source, batchLimitValue, preparedResults);
+              idxA++;
+              setTimeout(processPhaseA, 100);
+              return;
+            }
+
+            if (attempt < PHASE_A_MAX_RETRIES) {
+              phaseAIntegrityRetries++;
+              if (statusEl) statusEl.textContent = 'Phase A (' + model + '): ' + (doneCount + 1) + '/' + totalCandidates + ' — 完整性未通过，正在重试 ' + attempt + '/' + PHASE_A_MAX_RETRIES + '...';
+              if (detailEl) detailEl.textContent = '🛠 重试 ' + attempt + '/' + PHASE_A_MAX_RETRIES + ' · ' + candidateTitle + ' · 问题: ' + check.issues.join('、');
+              runPhaseAAttempt(attempt + 1, check.issues);
+              return;
+            }
+
+            // 超过重试次数后，丢弃该候选，不写入缓存，确保缓存内均为通过项
+            phaseAIntegrityDropped++;
+            idxA++;
+            if (detailEl) detailEl.textContent = '❌ 已丢弃: ' + candidateTitle + '（完整性重试失败: ' + check.issues.join('、') + '）';
+            setTimeout(processPhaseA, 120);
           });
+        }
 
-          // Phase-65: 增量保存到 localStorage（每条 LLM 完成后立即持久化）
-          _batchCacheSave(model, source, preparedResults);
-
-          idxA++;
-          setTimeout(processPhaseA, 100);
-        });
+        runPhaseAAttempt(1, []);
       }
 
       // ═══════════════════════════════════════════════════
@@ -2000,7 +2421,7 @@ function startAiBatchProcess(resumeMode) {
       // ═══════════════════════════════════════════════════
       function onPhaseADone() {
         // Phase-65: 确保最终状态也保存到 localStorage
-        _batchCacheSave(model, source, preparedResults);
+        _batchCacheSave(model, source, batchLimitValue, preparedResults);
 
         if (_aiBatchCancelled && preparedResults.length === 0) {
           finishAiBatch(totalCandidates);
@@ -2102,6 +2523,11 @@ function startAiBatchProcess(resumeMode) {
       anchorName: entry.anchorName,
       anchorType: entry.anchorType,
       anchorOverview: entry.anchorOverview,
+      profile: 'cursor',
+      contentSessionId: cursorContentSessionId,
+      memorySessionId: cursorMemorySessionId,
+      hookPhase: 'manual',
+      hookName: 'ai_batch_generate',
     };
 
     fetch('/api/batch/save', {
@@ -2128,7 +2554,11 @@ function startAiBatchProcess(resumeMode) {
     var reason = _aiBatchCancelled ? '已取消' : '完成';
     var titleEl = document.getElementById('aiBatchTitle');
     if (titleEl) titleEl.textContent = _aiBatchCancelled ? '⏹ 已取消' : '✅ 全部完成！';
-    if (statusEl) statusEl.textContent = reason + ' — Phase A 缓存: ' + preparedResults.length + ' 条' + (phaseACached > 0 ? ' (续传: ' + phaseACached + ')' : '') + ' · Phase B 保存: ' + (totalSaved + totalFailed) + ' 条';
+    if (statusEl) statusEl.textContent = reason + ' — Phase A 缓存: ' + preparedResults.length + ' 条'
+      + (phaseACached > 0 ? ' (续传: ' + phaseACached + ')' : '')
+      + ' · 重试: ' + phaseAIntegrityRetries + ' 次'
+      + (phaseAIntegrityDropped > 0 ? ' · 丢弃: ' + phaseAIntegrityDropped + ' 条' : '')
+      + ' · Phase B 保存: ' + (totalSaved + totalFailed) + ' 条';
 
     var summaryEl = document.getElementById('aiBatchSummary');
     if (summaryEl) {
@@ -2137,6 +2567,8 @@ function startAiBatchProcess(resumeMode) {
         + '<span style="color:#22c55e;">✅ 保存: ' + totalSaved + '</span>'
         + (totalFailed > 0 ? '<span style="color:#f87171;">❌ 失败: ' + totalFailed + '</span>' : '')
         + '<span style="color:#6b7280;">⏭ 跳过: ' + (totalSkipped + phaseASkipped) + '</span>'
+        + (phaseAIntegrityRetries > 0 ? '<span style="color:#fbbf24;">🔁 重试: ' + phaseAIntegrityRetries + '</span>' : '')
+        + (phaseAIntegrityDropped > 0 ? '<span style="color:#f87171;">🗑 丢弃: ' + phaseAIntegrityDropped + '</span>' : '')
         + '<span style="color:#60a5fa;">📦 缓存: ' + preparedResults.length + (phaseACached > 0 ? ' (续传' + phaseACached + ')' : '') + '</span>'
         + '<span style="color:#6b7280;">⏱ 总用时: ' + elapsed + 's</span>'
         + '</div>'
@@ -2147,6 +2579,8 @@ function startAiBatchProcess(resumeMode) {
     if (!_aiBatchCancelled && totalFailed === 0) {
       _batchCacheClear();
     }
+    // 定向修复上下文只使用一次，完成后清空
+    _aiBatchRepairContext = null;
     // 如果有失败的，也保留缓存（用户可能想重试）
 
     // Phase-69: 自动触发完整性检测（仅在有成功保存时）
@@ -2416,10 +2850,14 @@ function checkAllMemoriesIntegrity() {
     if (s.warnings > 0) html += '<span style="color:#f59e0b;">⚠️ 警告: ' + s.warnings + '</span>';
     if (s.errors > 0) html += '<span style="color:#ef4444;">❌ 错误: ' + s.errors + '</span>';
     html += '<span style="color:#6b7280;">📊 总计: ' + s.total + '</span>';
-    // Phase-111: 一键修复按钮（embedding + memoryType + anchor）
-    var fixableCount = (wb.embedding || 0) + (eb.memoryType || 0) + (wb.anchor || 0);
-    if (fixableCount > 0) {
-      html += '<button id="memoryRepairBtn" onclick="batchRepairMemories()" style="background:#7c3aed;color:#e9d5ff;border:1px solid #8b5cf6;border-radius:6px;padding:3px 12px;font-size:11px;font-weight:600;cursor:pointer;margin-left:8px;transition:all 0.2s;" onmouseover="this.style.background=\\x27#6d28d9\\x27" onmouseout="this.style.background=\\x27#7c3aed\\x27">🔧 一键修复 (' + fixableCount + ')</button>';
+    // 拆分修复入口：Anchor 缺失单独回填，其它问题引导重新批量生成记忆
+    var anchorFixableCount = wb.anchor || 0;
+    var regenerateFixableCount = (wb.embedding || 0) + (eb.memoryType || 0) + (wb.importance || 0) + (wb.contentShort || 0) + (eb.content || 0);
+    if (anchorFixableCount > 0) {
+      html += '<button onclick="batchRepairAnchors()" style="background:#7c2d12;color:#fed7aa;border:1px solid #c2410c;border-radius:6px;padding:3px 12px;font-size:11px;font-weight:600;cursor:pointer;margin-left:8px;transition:all 0.2s;" onmouseover="this.style.background=\\x279a3412\\x27" onmouseout="this.style.background=\\x277c2d12\\x27">⚓ Anchor触点修复 (' + anchorFixableCount + ')</button>';
+    }
+    if (regenerateFixableCount > 0) {
+      html += '<button onclick="repairByBatchRegenerate(\\x27targeted_errors\\x27)" style="background:#312e81;color:#a5b4fc;border:1px solid #6366f1;border-radius:6px;padding:3px 12px;font-size:11px;font-weight:600;cursor:pointer;margin-left:8px;transition:all 0.2s;" onmouseover="this.style.background=\\x273731a3\\x27" onmouseout="this.style.background=\\x27312e81\\x27">♻ 批量重新生成修复 (' + regenerateFixableCount + ')</button>';
     }
     html += '<button onclick="document.getElementById(\\x27memoryVerifyResultArea\\x27).style.display=\\x27none\\x27" style="background:transparent;border:1px solid #374151;border-radius:4px;padding:2px 8px;color:#6b7280;font-size:11px;cursor:pointer;margin-left:auto;">收起 ✕</button>';
     html += '</div>';
@@ -2461,6 +2899,17 @@ function checkAllMemoriesIntegrity() {
         problemResults.push(results[pi]);
       }
     }
+    var verifySourceRefSet = {};
+    var verifyMemoryIdSet = {};
+    for (var vsi = 0; vsi < problemResults.length; vsi++) {
+      var vr = problemResults[vsi];
+      if (vr.sourceRef) verifySourceRefSet[String(vr.sourceRef)] = true;
+      if (vr.memoryId) verifyMemoryIdSet[String(vr.memoryId)] = true;
+    }
+    _aiBatchRepairContext = {
+      sourceRefs: Object.keys(verifySourceRefSet),
+      memoryIds: Object.keys(verifyMemoryIdSet),
+    };
 
     if (problemResults.length > 0) {
       html += '<div class="batch-verify-details">';
@@ -2555,107 +3004,77 @@ function scrollToMemCard(cardId) {
 }
 
 /**
- * Phase-78B: 批量修复有问题的记忆
- * 调用 /api/batch/repair 端点修复非法 memoryType + 重建缺失 Embedding
+ * 将非 Anchor 问题引导到批量生成页面，通过重新生成记忆进行修复
  */
-function batchRepairMemories() {
-  var btn = document.getElementById('memoryRepairBtn');
+function repairByBatchRegenerate(mode) {
   var resultArea = document.getElementById('memoryVerifyResultArea');
   if (!resultArea) return;
 
-  // 禁用按钮 + 显示修复中
-  if (btn) { btn.textContent = '🔧 修复中...'; btn.disabled = true; btn.style.opacity = '0.6'; }
-
-  // 在报告区域底部显示进度
   var progressEl = document.getElementById('repairProgressArea');
   if (!progressEl) {
     progressEl = document.createElement('div');
     progressEl.id = 'repairProgressArea';
     progressEl.style.cssText = 'margin-top:12px;padding:12px;background:#1e1b4b;border:1px solid #4338ca;border-radius:8px;';
-    resultArea.querySelector('.batch-verify-report').appendChild(progressEl);
+    var reportEl = resultArea.querySelector('.batch-verify-report');
+    if (reportEl) reportEl.appendChild(progressEl);
   }
-  progressEl.innerHTML = '<div style="text-align:center;"><div class="spinner" style="display:inline-block;width:16px;height:16px;border-width:2px;vertical-align:middle;margin-right:8px;"></div><span style="color:#a5b4fc;font-size:12px;">正在修复所有有问题的记忆... 修复非法 memoryType + 重建 Embedding 向量</span></div>';
-
-  fetch('/api/batch/repair', {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ fixMemoryTypes: true, rebuildEmbeddings: true })
-  }).then(function(r) { return r.json(); }).then(function(data) {
-    if (btn) { btn.textContent = '✅ 修复完成'; btn.style.background = '#065f46'; btn.style.borderColor = '#059669'; btn.style.color = '#a7f3d0'; }
-
-    if (!data || !data.summary) {
-      progressEl.innerHTML = '<div style="color:#f87171;font-size:12px;">❌ 修复失败：无效响应</div>';
+  if (mode === 'targeted_errors') {
+    var ctx = _aiBatchRepairContext || { sourceRefs: [], memoryIds: [] };
+    if ((!ctx.sourceRefs || ctx.sourceRefs.length === 0) && (!ctx.memoryIds || ctx.memoryIds.length === 0)) {
+      if (progressEl) {
+        progressEl.innerHTML = '<div style="color:#fbbf24;font-size:12px;line-height:1.8;">'
+          + '<div style="font-weight:600;font-size:13px;margin-bottom:6px;">⚠ 无可定向修复数据</div>'
+          + '<div>请先执行一次<strong>完整性检测</strong>，再点击“批量重新生成修复”。</div>'
+          + '</div>';
+      }
       return;
     }
-
-    var sm = data.summary;
-    var rd = data.diagnostics || {};
-    var html = '<div style="color:#e9d5ff;font-size:12px;line-height:1.8;">';
-    html += '<div style="font-weight:600;font-size:13px;margin-bottom:8px;">🔧 修复完成（Type + Embedding）</div>';
-    html += '<div style="display:flex;gap:16px;flex-wrap:wrap;">';
-    html += '<span>📊 处理总数: <strong>' + sm.totalProcessed + '</strong></span>';
-    if (sm.fixedTypes > 0) html += '<span style="color:#a7f3d0;">✅ Type 已修复: <strong>' + sm.fixedTypes + '</strong></span>';
-    if (sm.rebuiltEmbeddings > 0) html += '<span style="color:#93c5fd;">🧬 Embedding 已重建: <strong>' + sm.rebuiltEmbeddings + '</strong></span>';
-    if (sm.failedEmbeddings > 0) html += '<span style="color:#fca5a5;">❌ Embedding 失败: <strong>' + sm.failedEmbeddings + '</strong></span>';
-    if (sm.skippedEmbeddings > 0) html += '<span style="color:#fbbf24;">⏭️ Embedding 跳过: <strong>' + sm.skippedEmbeddings + '</strong></span>';
-    html += '</div>';
-    // Phase-78C: 向量计数 + 持久化验证
-    html += '<div style="margin-top:4px;color:#9ca3af;font-size:11px;">';
-    html += '🔢 HNSW向量: 修复前 <strong>' + sm.vectorCountBefore + '</strong>';
-    html += ' → 修复后 <strong>' + sm.vectorCountAfterRepair + '</strong>';
-    html += ' → 重载验证 <strong>' + sm.vectorCountAfterReload + '</strong>';
-    if (sm.vectorCountAfterRepair > sm.vectorCountBefore) {
-      html += ' <span style="color:#86efac;">(+' + (sm.vectorCountAfterRepair - sm.vectorCountBefore) + ')</span>';
+    if (progressEl) {
+      progressEl.innerHTML = '<div style="text-align:center;"><div class="spinner" style="display:inline-block;width:16px;height:16px;border-width:2px;vertical-align:middle;margin-right:8px;"></div><span style="color:#a5b4fc;font-size:12px;">正在清除问题记忆并准备定向重生成...</span></div>';
     }
-    if (sm.vectorCountAfterReload < sm.vectorCountAfterRepair && sm.vectorCountAfterReload >= 0) {
-      html += ' <span style="color:#fca5a5;">⚠ 持久化丢失!</span>';
-    }
-    html += '</div>';
-    // Phase-78C: Synapse 诊断
-    if (rd.synapseAvailable === false) {
-      html += '<div style="margin-top:4px;padding:6px 10px;background:#451a03;border:1px solid #92400e;border-radius:6px;color:#fbbf24;font-size:11px;">';
-      html += '⚠️ <strong>Synapse 不可用</strong> — Embedding 无法生成！';
-      if (rd.firstEmbedError) html += '<br>原因: ' + rd.firstEmbedError;
-      html += '<br>请确保 Ollama 正在运行: <code style="color:#fde68a;">ollama serve</code> 且模型已加载: <code style="color:#fde68a;">ollama pull qwen3-embedding:8b</code>';
-      html += '</div>';
-    } else {
-      html += '<div style="margin-top:2px;font-size:10px;color:#6b7280;">';
-      html += 'Synapse: ✅ | 向量维度: ' + (rd.vectorDimension || 'N/A');
-      if (rd.firstEmbedError) html += ' | 首个错误: ' + rd.firstEmbedError;
-      html += '</div>';
-    }
-
-    // 显示修复详情（可折叠）
-    if (data.results && data.results.length > 0) {
-      html += '<div style="margin-top:8px;">';
-      html += '<div onclick="var dl=document.getElementById(\\x27repairDetailList\\x27);if(dl){dl.style.display=dl.style.display===\\x27none\\x27?\\x27block\\x27:\\x27none\\x27;}" style="cursor:pointer;color:#8b5cf6;font-size:11px;">📋 查看修复详情 (' + data.results.length + ' 条) ▶</div>';
-      html += '<div id="repairDetailList" style="display:none;max-height:300px;overflow-y:auto;margin-top:6px;">';
-      for (var i = 0; i < data.results.length; i++) {
-        var rr = data.results[i];
-        html += '<div style="padding:4px 8px;margin:2px 0;background:#1a1a2e;border-radius:4px;font-size:10px;color:#d1d5db;">';
-        html += '<span style="color:#6b7280;">' + (rr.memoryId || '').substring(0, 10) + '...</span> ';
-        html += '<span style="color:#c4b5fd;">[' + rr.memoryType + ']</span> ';
-        for (var fi = 0; fi < rr.fixes.length; fi++) {
-          html += '<span style="color:#86efac;">• ' + rr.fixes[fi] + '</span> ';
-        }
-        html += '</div>';
+    fetch('/api/memories/repair-regenerate-prepare', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        sourceRefs: ctx.sourceRefs || [],
+        memoryIds: ctx.memoryIds || []
+      })
+    }).then(function(r) { return r.json(); }).then(function(data) {
+      var targetSourceRefs = (data && data.targetSourceRefs) ? data.targetSourceRefs : [];
+      if (!targetSourceRefs || targetSourceRefs.length === 0) {
+        if (progressEl) progressEl.innerHTML = '<div style="color:#f87171;font-size:12px;">❌ 定向修复准备失败：未找到可重生成的来源。</div>';
+        return;
       }
-      html += '</div>';
-      html += '</div>';
-    }
+      _aiBatchRepairContext = { sourceRefs: targetSourceRefs, memoryIds: [] };
+      if (progressEl) {
+        progressEl.innerHTML = '<div style="color:#c4b5fd;font-size:12px;line-height:1.8;">'
+          + '<div style="font-weight:600;font-size:13px;margin-bottom:6px;">♻ 定向重生成已准备</div>'
+          + '<div>已清除问题记忆 <strong>' + (data.deleted || 0) + '</strong> 条，将仅针对 <strong>' + targetSourceRefs.length + '</strong> 个来源重新生成。</div>'
+          + '<div style="margin-top:6px;">已为你打开 <strong>AI 批量生成记忆</strong> 弹层。</div>'
+          + '</div>';
+      }
+      startAiBatchGenerate();
+    }).catch(function(err) {
+      if (progressEl) progressEl.innerHTML = '<div style="color:#f87171;font-size:12px;">❌ 定向修复准备失败: ' + (err.message || err) + '</div>';
+    });
+    return;
+  }
 
-    html += '<div style="margin-top:10px;padding-top:8px;border-top:1px dashed #4338ca;display:flex;gap:8px;flex-wrap:wrap;">';
-    html += '<button onclick="batchRepairAnchors()" style="background:#7c2d12;color:#fed7aa;border:1px solid #c2410c;border-radius:6px;padding:5px 14px;font-size:11px;font-weight:600;cursor:pointer;">⚓ 回填 Anchor</button>';
-    html += '<button onclick="checkAllMemoriesIntegrity()" style="background:#312e81;color:#a5b4fc;border:1px solid #6366f1;border-radius:6px;padding:5px 14px;font-size:11px;font-weight:600;cursor:pointer;">🔍 重新检测</button>';
-    html += '<span style="color:#6b7280;font-size:10px;margin-left:12px;">点击重新检测以验证修复效果</span>';
-    html += '</div>';
-    html += '</div>';
-    progressEl.innerHTML = html;
+  var titleText = '♻ 其它错误修复入口';
+  var descText = '这些错误通常来自历史批量导入质量问题（如非法 type、缺 embedding、内容质量异常）。';
+  if (mode === 'anchor_external') {
+    titleText = '♻ Anchor 修复入口（外接模型模式）';
+    descText = '当前配置为外接模型，Anchor 触点修复将改用批量重新生成流程，避免依赖本地回填接口能力。';
+  }
 
-  }).catch(function(err) {
-    if (btn) { btn.textContent = '🔧 一键修复'; btn.disabled = false; btn.style.opacity = '1'; }
-    progressEl.innerHTML = '<div style="color:#f87171;font-size:12px;">❌ 修复请求失败: ' + (err.message || err) + '</div>';
-  });
+  if (progressEl) {
+    progressEl.innerHTML = '<div style="color:#c4b5fd;font-size:12px;line-height:1.8;">'
+      + '<div style="font-weight:600;font-size:13px;margin-bottom:6px;">' + titleText + '</div>'
+      + '<div>' + descText + '</div>'
+      + '<div style="margin-top:6px;">已为你打开 <strong>AI 批量生成记忆</strong> 弹层，请重新执行一轮生成后再点击 <strong>完整性检测</strong> 验证结果。</div>'
+      + '</div>';
+  }
+  startAiBatchGenerate();
 }
 
 /**
@@ -2663,10 +3082,39 @@ function batchRepairMemories() {
  * 调用 /api/batch/repair-anchor，对无 Anchor 记忆进行二次抽取并回填 anchored_by 关系
  */
 function batchRepairAnchors() {
+  // 外接模型模式：Anchor 修复统一走“批量生成记忆”流程
+  if (!_aiBatchConfig || (!_aiBatchConfig.llmEngine && _aiBatchConfig.isExternalModel === undefined)) {
+    fetch('/api/batch/config').then(function(r) { return r.json(); }).then(function(cfg) {
+      _aiBatchConfig = cfg || _aiBatchConfig;
+      batchRepairAnchors();
+    }).catch(function() {
+      // 配置获取失败时，回退本地 Anchor 修复
+      continueBatchRepairAnchors();
+    });
+    return;
+  }
+  if (_aiBatchConfig.isExternalModel === true || _aiBatchConfig.llmEngine === 'models_online') {
+    repairByBatchRegenerate('anchor_external');
+    return;
+  }
+  continueBatchRepairAnchors();
+}
+
+function continueBatchRepairAnchors() {
   var resultArea = document.getElementById('memoryVerifyResultArea');
   if (!resultArea) return;
   var progressEl = document.getElementById('repairProgressArea');
-  if (!progressEl) return;
+  if (!progressEl) {
+    progressEl = document.createElement('div');
+    progressEl.id = 'repairProgressArea';
+    progressEl.style.cssText = 'margin-top:12px;padding:12px;background:#1e1b4b;border:1px solid #4338ca;border-radius:8px;';
+    var reportEl = resultArea.querySelector('.batch-verify-report');
+    if (reportEl) {
+      reportEl.appendChild(progressEl);
+    } else {
+      resultArea.appendChild(progressEl);
+    }
+  }
 
   progressEl.innerHTML = '<div style="text-align:center;"><div class="spinner" style="display:inline-block;width:16px;height:16px;border-width:2px;vertical-align:middle;margin-right:8px;"></div><span style="color:#fdba74;font-size:12px;">正在回填缺失 Anchor 触点...</span></div>';
 
@@ -2674,9 +3122,20 @@ function batchRepairAnchors() {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({})
-  }).then(function(r) { return r.json(); }).then(function(data) {
+  }).then(function(r) {
+    return r.json().then(function(data) {
+      if (!r.ok) {
+        var errMsg = data && data.error ? data.error : ('HTTP ' + r.status);
+        throw { message: errMsg, diagnostics: data && data.diagnostics ? data.diagnostics : null };
+      }
+      return data;
+    });
+  }).then(function(data) {
     if (!data || !data.summary) {
-      progressEl.innerHTML = '<div style="color:#f87171;font-size:12px;">❌ Anchor 回填失败：无效响应</div>';
+      progressEl.innerHTML = '<div style="color:#f87171;font-size:12px;line-height:1.8;">'
+        + '<div>❌ Anchor 回填失败：响应中缺少 summary 字段</div>'
+        + '<div style="color:#6b7280;margin-top:4px;">请检查服务端日志或重启可视化服务。</div>'
+        + '</div>';
       return;
     }
 
@@ -2703,7 +3162,21 @@ function batchRepairAnchors() {
     html += '</div>';
     progressEl.innerHTML = html;
   }).catch(function(err) {
-    progressEl.innerHTML = '<div style="color:#f87171;font-size:12px;">❌ Anchor 回填请求失败: ' + (err.message || err) + '</div>';
+    var diag = err && err.diagnostics ? err.diagnostics : null;
+    var diagLine = '';
+    if (diag) {
+      diagLine = '<div style="margin-top:6px;font-size:10px;color:#9ca3af;">'
+        + 'anchorUpsert: ' + (diag.hasAnchorUpsert ? '✅' : '❌') + ' | '
+        + 'anchorExtract: ' + (diag.hasAnchorExtract ? '✅' : '❌') + ' | '
+        + 'flowAppend: ' + (diag.hasFlowAppend ? '✅' : '❌') + ' | '
+        + 'outgoingByType: ' + (diag.hasOutgoingByType ? '✅' : '❌') + ' | '
+        + 'putRelation: ' + (diag.hasPutRelation ? '✅' : '❌')
+        + '</div>';
+    }
+    progressEl.innerHTML = '<div style="color:#f87171;font-size:12px;line-height:1.8;">'
+      + '<div>❌ Anchor 回填请求失败: ' + (err.message || err) + '</div>'
+      + diagLine
+      + '</div>';
   });
 }
 
@@ -2721,8 +3194,9 @@ function callOllamaStream(baseUrl, model, systemPrompt, userContent, streamEl, c
         { role: 'user', content: userContent }
       ],
       stream: true,
+      think: false,
       keep_alive: '5m',  // Phase-78B: 从 30m 减至 5m，减少 VRAM 占用时间
-      options: { temperature: 0.3, num_predict: 4096 }
+      options: { temperature: 0.3, num_predict: 1200 }
     })
   }).then(function(response) {
     if (!response.ok || !response.body) {

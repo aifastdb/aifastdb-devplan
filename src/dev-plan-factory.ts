@@ -182,6 +182,26 @@ export interface DevPlanConfig {
   rerankBaseUrl?: string;
 
   /**
+   * Optional: LlmGateway memory initialization options (ai_db compatibility layer)
+   */
+  llmGatewayMemory?: {
+    enable?: boolean;
+    graphDataDir?: string;
+    enableDedupWindow?: boolean;
+    dedupWindowMs?: number;
+    dedupScope?: 'conversation' | 'user';
+    enableCursorMemoryProfile?: boolean;
+  };
+  /**
+   * Phase-140: 记忆网关适配器配置（Unified API 优先 + 可回退）
+   */
+  memoryGatewayAdapter?: {
+    preferUnifiedApi?: boolean;
+    unifiedApiFallbackEnabled?: boolean;
+    fallbackAlertThreshold?: number;
+  };
+
+  /**
    * Phase-57B: LLM 分析配置（devplan_llm_analyze 工具的默认后端）
    *
    * engine 一键切换：
@@ -522,6 +542,10 @@ export function createDevPlan(
   // Phase-57B: 读取 LLM Analyze 配置
   const llmAnalyze = projectConfig?.llmAnalyze
     ?? workspaceConfig?.llmAnalyze;
+  const llmGatewayMemory = projectConfig?.llmGatewayMemory
+    ?? workspaceConfig?.llmGatewayMemory;
+  const memoryGatewayAdapter = projectConfig?.memoryGatewayAdapter
+    ?? workspaceConfig?.memoryGatewayAdapter;
 
   // 推导项目根目录（用于 git 操作的 cwd）
   // base 是 .devplan 目录路径（如 D:\xxx\project\.devplan），dirname 即项目根
@@ -545,6 +569,8 @@ export function createDevPlan(
       rerankModel,
       rerankBaseUrl,
       llmAnalyze,
+      llmGatewayMemory,
+      memoryGatewayAdapter,
       gitCwd,
     });
   } else {

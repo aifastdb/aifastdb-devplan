@@ -101,7 +101,8 @@ devplan_save_prompt(
 
 ### 🟢 自动授权声明
 
-- ✅ 直接调用 `devplan_memory_save`，与其他 devplan 工具在同一批次中静默执行
+- ✅ Cursor 场景默认调用 `devplan_memory_save_cursor_profile`，与其他 devplan 工具在同一批次中静默执行
+- ✅ 非 Cursor/无需会话绑定时调用 `devplan_memory_save`
 - ✅ 直接调用 `devplan_memory_recall` / `devplan_memory_context`，无需告知用户
 - ❌ 不要问"是否要保存这条记忆？"
 - ❌ 不要问"需要召回相关记忆吗？"
@@ -109,7 +110,7 @@ devplan_save_prompt(
 
 ### 自动保存触发条件
 
-满足以下**任一条件**时，**必须**调用 `devplan_memory_save`：
+满足以下**任一条件**时，**必须**保存记忆（Cursor 场景优先 `devplan_memory_save_cursor_profile`）：
 
 | 条件 | memoryType | 说明 |
 |---|---|---|
@@ -131,7 +132,26 @@ devplan_save_prompt(
 | C: 讨论架构设计 | `devplan_memory_recall` | 搜索 decision 记忆，避免推翻之前的决策 |
 | D: 需要了解项目约定 | `devplan_memory_recall` | 搜索 preference/pattern 记忆 |
 
-### 保存格式
+### 保存格式（Cursor 场景默认）
+
+```
+devplan_memory_save_cursor_profile(
+  projectName: "aifastdb-devplan",
+  conversationId: "<会话ID>",
+  userId: "<用户ID>",
+  userContent: "<用户消息>",
+  assistantContent: "<助手消息>",
+  profile: "cursor",
+  contentSessionId: "<cursor content session id>",  // 可选
+  memorySessionId: "<cursor memory session id>",    // 可选
+  hookPhase: "post_response",                       // 可选
+  hookName: "auto_memory_capture",                  // 可选
+  writeScope: "user_role",                          // 可选
+  roleId: "architect-bot"                           // 可选
+)
+```
+
+### 保存格式（通用兼容）
 
 ```
 devplan_memory_save(
@@ -176,6 +196,19 @@ devplan_memory_recall(projectName: "aifastdb-devplan", query: "sharding 路由")
     // 判断 memoryType（不要盲目用 suggestedMemoryType）
     // 一个候选项可生成多条记忆
     // 跳过价值不高的内容（如 changelog、纯列表）
+    devplan_memory_save_cursor_profile(
+      projectName: "aifastdb-devplan",
+      conversationId: "<conversation-id>",
+      userId: "<user-id>",
+      userContent: "<user content>",
+      assistantContent: "<assistant content>",
+      profile: "cursor",
+      contentSessionId: "<content-session-id>",
+      memorySessionId: "<memory-session-id>",
+      hookPhase: "post_response",
+      hookName: "auto_memory_capture"
+    )
+    // 或非 Cursor 场景使用 devplan_memory_save
     devplan_memory_save(
       projectName: "aifastdb-devplan",
       content: "<AI 提炼后的精华>",
@@ -217,7 +250,7 @@ batch 2: [
 batch N: [
   devplan_complete_task(projectName: "aifastdb-devplan", taskId: "T14B.1"),
   devplan_complete_task(projectName: "aifastdb-devplan", taskId: "T14B.2"),
-  devplan_memory_save(projectName: "aifastdb-devplan", content: "呼吸灯效果使用 CSS animation 实现...", memoryType: "pattern", importance: 0.6),
+  devplan_memory_save_cursor_profile(projectName: "aifastdb-devplan", conversationId: "...", userId: "...", userContent: "...", assistantContent: "呼吸灯效果使用 CSS animation 实现...", profile: "cursor", hookPhase: "post_response"),
 ]
 ```
 

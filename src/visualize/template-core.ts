@@ -32,8 +32,8 @@ function updateStatsModalPosition() {
 }
 
 var currentPage = 'graph';
-var pageMap = { graph: 'pageGraph', stats: 'pageStats', docs: 'pageDocs', memory: 'pageMemory', 'md-viewer': 'pageMdViewer', settings: 'pageSettings' };
-var routePages = { '/': 'graph', '/graph': 'graph', '/stats': 'stats', '/docs': 'docs', '/memory': 'memory', '/md-viewer': 'md-viewer', '/settings': 'settings' };
+var pageMap = { graph: 'pageGraph', stats: 'pageStats', docs: 'pageDocs', 'test-tools': 'pageTestTools', memory: 'pageMemory', 'md-viewer': 'pageMdViewer', settings: 'pageSettings' };
+var routePages = { '/': 'graph', '/graph': 'graph', '/stats': 'stats', '/docs': 'docs', '/test-tools': 'test-tools', '/memory': 'memory', '/md-viewer': 'md-viewer', '/settings': 'settings' };
 
 function getPageFromPath(pathname) {
   if (!pathname) return 'graph';
@@ -44,6 +44,7 @@ function getPathFromPage(page) {
   if (page === 'graph') return '/graph';
   if (page === 'stats') return '/stats';
   if (page === 'docs') return '/docs';
+  if (page === 'test-tools') return '/test-tools';
   if (page === 'memory') return '/memory';
   if (page === 'md-viewer') return '/md-viewer';
   if (page === 'settings') return '/settings';
@@ -92,8 +93,10 @@ function navTo(page, options) {
   // 按需加载页面数据
   if (page === 'stats') loadStatsPage();
   if (page === 'docs') loadDocsPage();
+  if (page === 'test-tools') loadTestToolsPage();
   if (page === 'memory') loadMemoryPage();
   if (page === 'md-viewer') loadMdViewerPage();
+  if (page === 'settings') loadGatewayAlertPanel();
   if (page === 'graph' && network) {
     setTimeout(function() { network.redraw(); network.fit(); }, 100);
   }
@@ -193,6 +196,43 @@ function showSettingsToast(message) {
     }
   } catch(e) {}
 })();
+
+function loadGatewayAlertPanel() {
+  var panel = document.getElementById('gatewayAlertPanel');
+  if (!panel) return;
+  panel.innerHTML = '<div style="text-align:center;padding:12px;color:#6b7280;font-size:12px;"><div class="spinner" style="margin:0 auto 8px;"></div>加载告警状态...</div>';
+  fetch('/api/recall-observability').then(function(r) { return r.json(); }).then(function(data) {
+    var alertObj = data && data.gatewayAlert ? data.gatewayAlert : null;
+    if (!alertObj) {
+      panel.innerHTML = '<div class="ga-card"><div class="ga-title">未启用 Recall Observability</div><div class="ga-meta">当前项目未提供 gatewayAlert 数据。</div><button class="ga-refresh" onclick="loadGatewayAlertPanel()">刷新</button></div>';
+      return;
+    }
+    var warned = !!alertObj.alerted;
+    var lampClass = warned ? 'yellow' : 'green';
+    var cardClass = warned ? 'warn' : 'ok';
+    var thresholdPct = Math.round((Number(alertObj.threshold || 0) * 1000)) / 10;
+    var maxRatePct = Math.round((Number(alertObj.maxFallbackRate || 0) * 1000)) / 10;
+    var ops = (alertObj.triggeredOps && alertObj.triggeredOps.length > 0)
+      ? alertObj.triggeredOps.join(', ')
+      : '无';
+    var html = '';
+    html += '<div class="ga-card ' + cardClass + '">';
+    html += '<div class="ga-head">';
+    html += '<div class="ga-title"><span class="ga-lamp ' + lampClass + '"></span>' + (warned ? '告警中' : '正常') + '</div>';
+    html += '<div style="font-size:11px;color:#94a3b8;">阈值: ' + thresholdPct + '%</div>';
+    html += '</div>';
+    html += '<div class="ga-meta">最大回退率: <strong>' + maxRatePct + '%</strong></div>';
+    html += '<div class="ga-meta">触发操作: ' + escHtml(String(ops)) + '</div>';
+    if (warned && alertObj.reason) {
+      html += '<div class="ga-reason">' + escHtml(String(alertObj.reason)) + '</div>';
+    }
+    html += '<button class="ga-refresh" onclick="loadGatewayAlertPanel()">刷新</button>';
+    html += '</div>';
+    panel.innerHTML = html;
+  }).catch(function(err) {
+    panel.innerHTML = '<div class="ga-card"><div class="ga-title">加载失败</div><div class="ga-meta">' + escHtml(err.message || String(err)) + '</div><button class="ga-refresh" onclick="loadGatewayAlertPanel()">重试</button></div>';
+  });
+}
 
 // ========== 通用图谱显示设置 ==========
 var GRAPH_SETTINGS_KEY = 'devplan_graph_settings';

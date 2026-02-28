@@ -100,180 +100,44 @@ import type {
   RecallFeatureFlagsPatch,
   RecallObservability,
 } from './types';
-
-// ============================================================================
-// Constants
-// ============================================================================
-
-/** Entity 类型常量 */
-const ET = {
-  PROJECT: 'devplan-project',
-  DOC: 'devplan-doc',
-  MAIN_TASK: 'devplan-main-task',
-  SUB_TASK: 'devplan-sub-task',
-  MODULE: 'devplan-module',
-  PROMPT: 'devplan-prompt',
-  MEMORY: 'devplan-memory',
-} as const;
-
-/** Relation 类型常量 */
-const RT = {
-  HAS_DOCUMENT: 'has_document',
-  HAS_MAIN_TASK: 'has_main_task',
-  HAS_SUB_TASK: 'has_sub_task',
-  HAS_MODULE: 'has_module',
-  MODULE_HAS_TASK: 'module_has_task',
-  MODULE_HAS_DOC: 'module_has_doc',
-  TASK_HAS_DOC: 'task_has_doc',
-  DOC_HAS_CHILD: 'doc_has_child',
-  TASK_HAS_PROMPT: 'task_has_prompt',
-  HAS_PROMPT: 'has_prompt',
-  HAS_MEMORY: 'has_memory',
-  MEMORY_FROM_TASK: 'memory_from_task',
-  // ---- Phase-37: 记忆网络关系类型 ----
-  /** 记忆 ↔ 记忆 语义关联（双向，带 similarity score 权重） */
-  MEMORY_RELATES: 'memory_relates',
-  /** 文档 → 记忆 来源关系（从文档提取的记忆） */
-  MEMORY_FROM_DOC: 'memory_from_doc',
-  /** 模块 → 记忆 归属关系（模块级记忆） */
-  MODULE_MEMORY: 'module_memory',
-  /** 记忆 → 记忆 替代/演化关系（新记忆替代旧记忆） */
-  MEMORY_SUPERSEDES: 'memory_supersedes',
-  /** 记忆 → 记忆 冲突关系（两条记忆互相矛盾，如 decision 冲突） */
-  MEMORY_CONFLICTS: 'memory_conflicts',
-} as const;
-
-type ResolvedRecallSearchTuning = {
-  rrfK: number;
-  vectorWeight: number;
-  bm25Weight: number;
-  graphWeight: number;
-  bm25TermBoost: number;
-  bm25DomainTerms: string[];
-  bm25UserDictPath?: string;
-};
-
-// ============================================================================
-// Phase-57: Memory Anchor / Flow / Structure Chain Types
-//
-// 本地定义接口，对应 ai_db Phase-122 NAPI 新增方法的返回类型。
-// 当 aifastdb npm 包更新到含 Phase-122 的版本后，可替换为直接 import。
-// ============================================================================
-
-/** 触点类型常量 */
-const ANCHOR_TYPES = {
-  MODULE: 'module',
-  CONCEPT: 'concept',
-  API: 'api',
-  ARCHITECTURE: 'architecture',
-  FEATURE: 'feature',
-  LIBRARY: 'library',
-  PROTOCOL: 'protocol',
-} as const;
-
-/** 变更类型常量 */
-const CHANGE_TYPES = {
-  CREATED: 'created',
-  UPGRADED: 'upgraded',
-  MODIFIED: 'modified',
-  REMOVED: 'removed',
-  DEPRECATED: 'deprecated',
-} as const;
-
-/** 触点信息（对应 Rust AnchorInfo） */
-interface NativeAnchorInfo {
-  id: string;
-  name: string;
-  anchor_type: string;
-  description: string;
-  uri?: string;
-  path?: string;
-  /** L2 目录索引概览（Phase-63，inspired by OpenViking .overview.md） */
-  overview?: string;
-  version: number;
-  status: string;
-  flow_count: number;
-  created_at: number;
-  updated_at: number;
-}
-
-/** 记忆流条目（对应 Rust FlowEntry） */
-interface NativeFlowEntry {
-  id: string;
-  anchor_id: string;
-  version: number;
-  change_type: string;
-  summary: string;
-  detail: string;
-  source_task?: string;
-  prev_entry_id?: string;
-  created_at: number;
-}
-
-/** 记忆流查询过滤器 */
-interface NativeFlowFilter {
-  changeType?: string;
-  minVersion?: number;
-  maxVersion?: number;
-  limit?: number;
-  newestFirst?: boolean;
-}
-
-/** 组件引用 */
-interface NativeComponentRef {
-  anchorId: string;
-  role: string;
-  versionHint?: string;
-}
-
-/** 结构快照 */
-interface NativeStructureSnapshot {
-  id: string;
-  anchor_id: string;
-  flow_entry_id: string;
-  version: number;
-  components: NativeComponentRef[];
-  created_at: number;
-}
-
-/** 结构差异 */
-interface NativeStructureDiff {
-  anchor_id: string;
-  from_version: number;
-  to_version: number;
-  added: NativeComponentRef[];
-  removed: NativeComponentRef[];
-  changed: [NativeComponentRef, NativeComponentRef][];
-  unchanged: NativeComponentRef[];
-}
-
-/** 提取的触点候选 */
-interface NativeExtractedAnchor {
-  name: string;
-  suggested_type: string;
-  confidence: number;
-  offset: number;
-  matched_anchor?: NativeAnchorInfo;
-}
-
-// ============================================================================
-// Helper
-// ============================================================================
-
-function sectionImportance(section: DevPlanSection): number {
-  const m: Record<DevPlanSection, number> = {
-    overview: 1.0, core_concepts: 0.95, api_design: 0.9,
-    file_structure: 0.7, config: 0.7, examples: 0.6,
-    technical_notes: 0.8, api_endpoints: 0.75, milestones: 0.85,
-    changelog: 0.5, custom: 0.6,
-  };
-  return m[section] ?? 0.6;
-}
-
-/** 生成 section+subSection 的唯一 key */
-function sectionKey(section: string, subSection?: string): string {
-  return subSection ? `${section}|${subSection}` : section;
-}
+import {
+  mapGroupToDevPlanType as mapGroupToDevPlanTypeUtil,
+  getCurrentGitCommit as getCurrentGitCommitUtil,
+  isAncestor as isAncestorUtil,
+  progressBar as progressBarUtil,
+  DEFAULT_BM25_DOMAIN_TERMS,
+  resolvePerceptionConfig,
+  resolveRecallSearchTuning as resolveRecallSearchTuningUtil,
+  resolveBm25UserDictPath,
+  migrateWalDirNames,
+  applyBm25TermBoost as applyBm25TermBoostUtil,
+} from './dev-plan-graph-store.utils';
+import {
+  ET,
+  RT,
+  ANCHOR_TYPES,
+  CHANGE_TYPES,
+  sectionImportance,
+  sectionKey,
+  type ResolvedRecallSearchTuning,
+  type NativeAnchorInfo,
+  type NativeFlowEntry,
+  type NativeFlowFilter,
+  type NativeComponentRef,
+  type NativeStructureSnapshot,
+  type NativeStructureDiff,
+  type NativeExtractedAnchor,
+} from './dev-plan-graph-store.shared';
+import {
+  docSectionToMemoryType as docSectionToMemoryTypeUtil,
+  rrfMergeResults as rrfMergeResultsUtil,
+  rrfMergeMemories as rrfMergeMemoriesUtil,
+  literalSearchDocs as literalSearchDocsUtil,
+  rrfFusionThreeWay as rrfFusionThreeWayUtil,
+  runTreeIndexDocRecall as runTreeIndexDocRecallUtil,
+  runVectorDocRecall as runVectorDocRecallUtil,
+} from './dev-plan-graph-store.recall-utils';
+import { MemoryGatewayAdapter, type MemoryGatewayTelemetry } from './memory-gateway-adapter';
 
 // ============================================================================
 // DevPlanGraphStore Implementation
@@ -286,17 +150,6 @@ function sectionKey(section: string, subSection?: string): string {
  * 层级关系（项目→主任务→子任务、模块→任务）映射为图边（Relation）。
  */
 export class DevPlanGraphStore implements IDevPlanStore {
-  private static readonly DEFAULT_BM25_DOMAIN_TERMS = [
-    'WAL',
-    'HNSW',
-    'NAPI',
-    'MCP',
-    'RRF',
-    'BM25',
-    'VibeSynapse',
-    'SocialGraphV2',
-  ];
-
   private graph: SocialGraphV2;
   private projectName: string;
   /** Git 操作的工作目录（多项目路由时指向项目根目录） */
@@ -315,6 +168,8 @@ export class DevPlanGraphStore implements IDevPlanStore {
   private rerankReady: boolean = false;
   /** Phase-54: 重排使用的模型名称 */
   private rerankModel: string = 'gemma3:4b';
+  /** Phase-140: 统一记忆 API 适配器（统一 API 优先，支持回退） */
+  private memoryGatewayAdapter: MemoryGatewayAdapter | null = null;
   /** NAPI 能力探测：memoryTreeSearch 是否可用（避免 wrapper 存在但 native 缺失时报错） */
   private nativeMemoryTreeSearchReady: boolean = false;
   /** NAPI 能力探测：anchorExtractFromText 是否可用 */
@@ -346,7 +201,7 @@ export class DevPlanGraphStore implements IDevPlanStore {
     bm25Weight: 1,
     graphWeight: 1,
     bm25TermBoost: 2,
-    bm25DomainTerms: [...DevPlanGraphStore.DEFAULT_BM25_DOMAIN_TERMS],
+    bm25DomainTerms: [...DEFAULT_BM25_DOMAIN_TERMS],
   };
 
   constructor(projectName: string, config: DevPlanGraphStoreConfig) {
@@ -355,7 +210,7 @@ export class DevPlanGraphStore implements IDevPlanStore {
 
     // ── WAL 目录迁移：旧名 → 语义化新名 ──
     // 必须在 SocialGraphV2 构造之前执行，否则 recover() 会找不到旧数据
-    DevPlanGraphStore.migrateWalDirNames(config.graphPath);
+    migrateWalDirNames(config.graphPath);
 
     // 构建 SocialGraphV2 配置
     // shardCount 由 SocialGraphV2 自动从 shardNames.length 推导（aifastdb >= 2.7.0）
@@ -368,12 +223,12 @@ export class DevPlanGraphStore implements IDevPlanStore {
       typeShardMapping: DEVPLAN_TYPE_SHARD_MAPPING,
       relationShardId: DEVPLAN_RELATION_SHARD_ID,
     };
-    const recallSearchTuning = DevPlanGraphStore.resolveRecallSearchTuning(config.recallSearchTuning);
+    const recallSearchTuning = resolveRecallSearchTuningUtil(config.recallSearchTuning);
 
     // 如果启用语义搜索，配置 SocialGraphV2 的向量搜索
     // 维度自动解析: explicitDimension > perception.dimension > MODEL_DIMENSION_REGISTRY[modelId] > 384
     const perception = config.enableSemanticSearch
-      ? DevPlanGraphStore.resolvePerceptionConfig(config) : null;
+      ? resolvePerceptionConfig(config) : null;
     const dimension = resolveModelDimension(
       perception?.modelId,
       config.embeddingDimension ?? perception?.dimension,
@@ -391,7 +246,7 @@ export class DevPlanGraphStore implements IDevPlanStore {
 
     // Phase-52: 如果启用 Tantivy BM25 全文搜索，配置 textSearch
     if (config.enableTextSearch) {
-      const userDictPath = DevPlanGraphStore.resolveBm25UserDictPath(
+      const userDictPath = resolveBm25UserDictPath(
         config.graphPath,
         recallSearchTuning.bm25DomainTerms,
         recallSearchTuning.bm25UserDictPath,
@@ -456,6 +311,7 @@ export class DevPlanGraphStore implements IDevPlanStore {
     if (config.enableReranking || config.enableTreeIndexRetrieval) {
       this.initLlmReranking(config);
     }
+    this.initMemoryGatewayAdapter(config);
     this.treeIndexMaxNodes = Math.max(3, Math.min(50, Number(config.treeIndexMaxNodes || 10)));
     this.treeIndexRetrievalEnabled = Boolean(config.enableTreeIndexRetrieval) && this.rerankReady;
     if (config.enableTreeIndexRetrieval && !this.treeIndexRetrievalEnabled) {
@@ -509,95 +365,6 @@ export class DevPlanGraphStore implements IDevPlanStore {
   }
 
   /**
-   * Phase-52: 解析 Perception 配置
-   *
-   * 优先级: perceptionConfig > perceptionPreset > 默认 miniLM
-   * 所有预设都启用 autoDownload（首次运行自动下载模型）。
-   */
-  private static resolvePerceptionConfig(config: DevPlanGraphStoreConfig): PerceptionConfig {
-    // 1. 完整配置对象优先
-    if (config.perceptionConfig) {
-      return {
-        ...config.perceptionConfig,
-        autoDownload: config.perceptionConfig.autoDownload ?? true,
-      };
-    }
-
-    // 2. 预设名称
-    if (config.perceptionPreset) {
-      const presetFn = PerceptionPresets[config.perceptionPreset];
-      if (presetFn) {
-        const preset = presetFn();
-        return { ...preset, autoDownload: preset.autoDownload ?? true };
-      }
-      console.warn(
-        `[DevPlan] Unknown perception preset "${config.perceptionPreset}", ` +
-        `available: ${Object.keys(PerceptionPresets).join(', ')}. Falling back to miniLM.`
-      );
-    }
-
-    // 3. 默认 miniLM
-    return { ...PerceptionPresets.miniLM(), autoDownload: true };
-  }
-
-  private static resolveRecallSearchTuning(config?: RecallSearchTuningConfig): ResolvedRecallSearchTuning {
-    const safeNumber = (v: unknown, fallback: number): number => {
-      const n = Number(v);
-      return Number.isFinite(n) && n > 0 ? n : fallback;
-    };
-    const domainTermsRaw = Array.isArray(config?.bm25DomainTerms)
-      ? config!.bm25DomainTerms!
-      : DevPlanGraphStore.DEFAULT_BM25_DOMAIN_TERMS;
-    const bm25DomainTerms = Array.from(
-      new Set(
-        domainTermsRaw
-          .map(t => String(t || '').trim())
-          .filter(Boolean),
-      ),
-    );
-    return {
-      rrfK: Math.floor(safeNumber(config?.rrfK, 60)),
-      vectorWeight: safeNumber(config?.vectorWeight, 1),
-      bm25Weight: safeNumber(config?.bm25Weight, 1),
-      graphWeight: safeNumber(config?.graphWeight, 1),
-      bm25TermBoost: safeNumber(config?.bm25TermBoost, 2),
-      bm25DomainTerms,
-      bm25UserDictPath: config?.bm25UserDictPath,
-    };
-  }
-
-  private static resolveBm25UserDictPath(
-    graphPath: string,
-    domainTerms: string[],
-    preferredPath?: string,
-  ): string | undefined {
-    const preferred = (preferredPath || '').trim();
-    if (preferred) return preferred;
-    if (domainTerms.length === 0) return undefined;
-    const dictDir = path.resolve(graphPath, '..', 'tantivy-dict');
-    fs.mkdirSync(dictDir, { recursive: true });
-    const dictPath = path.join(dictDir, 'user-dict.txt');
-    fs.writeFileSync(dictPath, `${domainTerms.join('\n')}\n`, 'utf8');
-    return dictPath;
-  }
-
-  private getBm25BoostTermsForQuery(query: string): string[] {
-    const q = query.toLowerCase();
-    if (!q) return [];
-    return this.recallSearchTuning.bm25DomainTerms
-      .filter(term => q.includes(term.toLowerCase()));
-  }
-
-  private applyBm25TermBoost(baseScore: number, query: string, haystack: string): number {
-    if (this.recallSearchTuning.bm25TermBoost <= 1) return baseScore;
-    const boostTerms = this.getBm25BoostTermsForQuery(query);
-    if (boostTerms.length === 0) return baseScore;
-    const text = haystack.toLowerCase();
-    if (!boostTerms.some(term => text.includes(term.toLowerCase()))) return baseScore;
-    return baseScore * this.recallSearchTuning.bm25TermBoost;
-  }
-
-  /**
    * 初始化 VibeSynapse Embedding 引擎
    *
    * Phase-52: 支持通过 perceptionPreset / perceptionConfig 配置不同模型。
@@ -605,7 +372,7 @@ export class DevPlanGraphStore implements IDevPlanStore {
    * 初始化失败时降级为纯字面搜索（graceful degradation）。
    */
   private initSynapse(config: DevPlanGraphStoreConfig): void {
-    const perception = DevPlanGraphStore.resolvePerceptionConfig(config);
+    const perception = resolvePerceptionConfig(config);
     // 维度自动解析: explicitDimension > perception.dimension > MODEL_DIMENSION_REGISTRY[modelId] > 384
     // ⚠️ 维度一旦初始化不可变更，否则 HNSW 索引与向量维度不匹配
     const dimension = resolveModelDimension(
@@ -680,6 +447,24 @@ export class DevPlanGraphStore implements IDevPlanStore {
       // 创建 LlmGateway 实例（使用 graph-data 同级的 llm-gateway-data 目录）
       const gwPath = path.resolve(config.graphPath, '..', 'llm-gateway-data');
       this.llmGateway = new LlmGateway(gwPath);
+      // Optional: initialize gateway memory for ai_db-compatible recall/dedup/outbox ops.
+      try {
+        if (config.llmGatewayMemory?.enable && typeof this.llmGateway.enableMemory === 'function') {
+          this.llmGateway.enableMemory({
+            graphDataDir: config.llmGatewayMemory.graphDataDir,
+            enableDedupWindow: config.llmGatewayMemory.enableDedupWindow,
+            dedupWindowMs: config.llmGatewayMemory.dedupWindowMs,
+            dedupScope: config.llmGatewayMemory.dedupScope,
+            enableCursorMemoryProfile: config.llmGatewayMemory.enableCursorMemoryProfile,
+          });
+        }
+      } catch (e) {
+        console.warn(
+          `[DevPlan] LlmGateway.enableMemory initialization failed (non-fatal): ${
+            e instanceof Error ? e.message : String(e)
+          }`
+        );
+      }
 
       // 注册 Ollama Provider（幂等 — 已存在则从 store hydrate）
       try {
@@ -718,6 +503,10 @@ export class DevPlanGraphStore implements IDevPlanStore {
       this.llmGateway = null;
       this.rerankReady = false;
     }
+  }
+
+  private initMemoryGatewayAdapter(config: DevPlanGraphStoreConfig): void {
+    this.memoryGatewayAdapter = new MemoryGatewayAdapter(this.llmGateway, config.memoryGatewayAdapter);
   }
 
   /**
@@ -797,75 +586,6 @@ export class DevPlanGraphStore implements IDevPlanStore {
     }
 
     return results;
-  }
-
-  // ==========================================================================
-  // WAL Directory Migration (旧分片名 → 语义化新名)
-  // ==========================================================================
-
-  /**
-   * WAL 目录迁移 + 分片目录补全。
-   *
-   * 1. 旧名重命名（幂等）：
-   *    - shard_0_entities → shard_0_tasks
-   *    - shard_2_index    → shard_2_docs
-   *    - shard_3_meta     → shard_3_modules
-   *
-   * 2. 确保所有预期的分片目录存在（Phase-36: shard_5_memory）：
-   *    SocialGraphV2 (Rust) 根据磁盘上的目录数确定分片数量，
-   *    如果新增分片目录不存在会导致 index out of bounds panic。
-   *    因此必须在 SocialGraphV2 构造之前创建缺失的目录。
-   *
-   * 该方法必须在 `new SocialGraphV2(config)` 之前调用。
-   */
-  private static migrateWalDirNames(graphPath: string): void {
-    const walBase = path.join(graphPath, 'wal');
-    if (!fs.existsSync(walBase)) return; // 全新安装，无需迁移
-
-    // ── Step 1: 旧名 → 新名 重命名 ──
-    const renames: Array<[string, string]> = [
-      ['shard_0_entities', 'shard_0_tasks'],
-      ['shard_2_index',    'shard_2_docs'],
-      ['shard_3_meta',     'shard_3_modules'],
-    ];
-
-    for (const [oldName, newName] of renames) {
-      const oldDir = path.join(walBase, oldName);
-      const newDir = path.join(walBase, newName);
-
-      if (fs.existsSync(oldDir) && !fs.existsSync(newDir)) {
-        try {
-          fs.renameSync(oldDir, newDir);
-          console.error(`[DevPlan] WAL dir migrated: ${oldName} → ${newName}`);
-        } catch (e) {
-          console.warn(
-            `[DevPlan] Failed to migrate WAL dir ${oldName} → ${newName}: ${
-              e instanceof Error ? e.message : String(e)
-            }`
-          );
-        }
-      }
-    }
-
-    // ── Step 2: 确保所有预期分片目录存在 ──
-    // 当新增分片时（如 shard_5_memory），旧项目缺少对应目录，
-    // 必须提前创建空目录，否则 Rust SocialGraphV2 会 panic。
-    // 分片列表从 shard-config.ts 自动推导，不再硬编码。
-    for (const shardName of DEVPLAN_EXPECTED_SHARD_DIRS) {
-      const shardDir = path.join(walBase, shardName);
-      if (!fs.existsSync(shardDir)) {
-        try {
-          fs.mkdirSync(shardDir, { recursive: true });
-          console.error(`[DevPlan] Created missing shard dir: ${shardName}`);
-        } catch (e) {
-          console.warn(
-            `[DevPlan] Failed to create shard dir ${shardName}: ${
-              e instanceof Error ? e.message : String(e)
-            }`
-          );
-        }
-      }
-    }
   }
 
   // ==========================================================================
@@ -1422,10 +1142,11 @@ export class DevPlanGraphStore implements IDevPlanStore {
           .filter(h => (h.entity.properties as any)?.projectName === this.projectName)
           .map(h => {
             const doc = this.entityToDevPlanDoc(h.entity);
-            const score = this.applyBm25TermBoost(
+            const score = applyBm25TermBoostUtil(
               Number(h.score || 0),
               query,
               `${h.snippet || ''}\n${doc.title}\n${doc.content}`,
+              this.recallSearchTuning,
             );
             return {
               id: h.entityId,
@@ -1437,11 +1158,11 @@ export class DevPlanGraphStore implements IDevPlanStore {
       } catch (e) {
         console.warn(`[DevPlan] Tantivy BM25 search failed: ${e instanceof Error ? e.message : String(e)}. Falling back to literal.`);
         // 降级为朴素字面搜索
-        textResults = this.literalSearch(query).map(d => ({ id: d.id, doc: d }));
+        textResults = literalSearchDocsUtil(query, this.listSections()).map(d => ({ id: d.id, doc: d }));
       }
     } else {
       // 无 Tantivy：使用朴素字面匹配
-      textResults = this.literalSearch(query).map(d => ({ id: d.id, doc: d }));
+      textResults = literalSearchDocsUtil(query, this.listSections()).map(d => ({ id: d.id, doc: d }));
     }
 
     // ---- If no semantic search or literal-only mode ----
@@ -1485,7 +1206,20 @@ export class DevPlanGraphStore implements IDevPlanStore {
     }
 
     // ---- Hybrid Mode: Three-way RRF Fusion (vector + BM25/literal) ----
-    const rrfResults = this.rrfFusionThreeWay(semanticHits, textResults, limit, minScore);
+    const rrfResults = rrfFusionThreeWayUtil(
+      semanticHits,
+      textResults,
+      limit,
+      minScore,
+      this.recallSearchTuning,
+      (id) => {
+        const entity = this.graph.getEntity(id);
+        if (entity && (entity.properties as any)?.projectName === this.projectName) {
+          return this.entityToDevPlanDoc(entity);
+        }
+        return undefined;
+      },
+    );
     // Phase-54: LLM Reranking 作为最终精排步骤
     return maybeRerank(rrfResults);
   }
@@ -2037,7 +1771,7 @@ export class DevPlanGraphStore implements IDevPlanStore {
   // ==========================================================================
 
   completeSubTask(taskId: string): CompleteSubTaskResult {
-    const commitHash = this.getCurrentGitCommit();
+    const commitHash = getCurrentGitCommitUtil(this.gitCwd);
 
     const updatedSubTask = this.updateSubTaskStatus(taskId, 'completed', {
       completedAtCommit: commitHash,
@@ -2187,7 +1921,7 @@ export class DevPlanGraphStore implements IDevPlanStore {
     md += `> 存储引擎: SocialGraphV2\n\n`;
 
     for (const tp of progress.tasks) {
-      const bar = this.progressBar(tp.percent);
+      const bar = progressBarUtil(tp.percent);
       const statusIcon = tp.status === 'completed' ? '✅'
         : tp.status === 'in_progress' ? '🔄' : '⬜';
       md += `${statusIcon} **${tp.title}** [${tp.priority}]\n`;
@@ -3369,7 +3103,7 @@ export class DevPlanGraphStore implements IDevPlanStore {
       results.push({
         id: `doc:${section}${subSection ? '|' + subSection : ''}`,
         projectName: this.projectName,
-        memoryType: this.docSectionToMemoryType(section),
+        memoryType: docSectionToMemoryTypeUtil(section),
         content: contentSnippet + (p.content && p.content.length > 300 ? '...' : ''),
         tags: [section, ...(subSection ? [subSection] : [])],
         relatedTaskId: undefined,
@@ -3885,7 +3619,7 @@ export class DevPlanGraphStore implements IDevPlanStore {
       if (graphExpand && memoryResults.length > 0) {
         const graphExpanded = this.expandMemoriesByGraph(memoryResults, options?.memoryType, limit);
         if (graphExpanded.length > 0) {
-          memoryResults = this.rrfMergeMemories(memoryResults, graphExpanded, limit);
+          memoryResults = rrfMergeMemoriesUtil(memoryResults, graphExpanded, limit, this.recallSearchTuning);
         }
       }
 
@@ -3896,6 +3630,9 @@ export class DevPlanGraphStore implements IDevPlanStore {
 
     if (scope) {
       memoryResults = this.filterMemoriesByScope(memoryResults, scope);
+    }
+    if (options?.deterministicFirst) {
+      memoryResults = this.applyDeterministicRecallFilter(memoryResults, options);
     }
 
     if (docStrategy === 'none' || options?.memoryType) {
@@ -3915,7 +3652,7 @@ export class DevPlanGraphStore implements IDevPlanStore {
       );
       if (treeDocs.length > 0) {
         guidedDocs = guidedDocs.length > 0
-          ? this.rrfMergeResults(guidedDocs, treeDocs, limit)
+          ? rrfMergeResultsUtil(guidedDocs, treeDocs, limit)
           : treeDocs.slice(0, limit);
       }
 
@@ -3940,7 +3677,7 @@ export class DevPlanGraphStore implements IDevPlanStore {
     );
     const mergedDocResults = treeDocResults.length > 0
       ? (docResults.length > 0
-        ? this.rrfMergeResults(docResults, treeDocResults, limit)
+        ? rrfMergeResultsUtil(docResults, treeDocResults, limit)
         : treeDocResults.slice(0, limit))
       : docResults;
     let finalResults: ScoredMemory[];
@@ -3949,7 +3686,7 @@ export class DevPlanGraphStore implements IDevPlanStore {
     } else if (memoryResults.length === 0) {
       finalResults = mergedDocResults.slice(0, limit);
     } else {
-      finalResults = this.rrfMergeResults(memoryResults, mergedDocResults, limit);
+      finalResults = rrfMergeResultsUtil(memoryResults, mergedDocResults, limit);
     }
 
     this.enrichMemoriesWithAnchorInfo(finalResults, depth);
@@ -3966,6 +3703,144 @@ export class DevPlanGraphStore implements IDevPlanStore {
         this.recallObservabilityRaw.lastError = lastError;
       }
     }
+  }
+
+  recallUnifiedViaAdapter(query: string, options?: UnifiedRecallOptions): ScoredMemory[] {
+    if (!this.memoryGatewayAdapter) {
+      return this.recallUnified(query, options);
+    }
+    return this.memoryGatewayAdapter.recallUnified(
+      query,
+      options,
+      (q, opts) => this.recallUnified(q, opts),
+    );
+  }
+
+  private applyDeterministicRecallFilter(
+    results: ScoredMemory[],
+    options: UnifiedRecallOptions,
+  ): ScoredMemory[] {
+    const projectFilter = (options.filterProject || '').trim().toLowerCase();
+    const typeFilter = (options.filterMemoryType || '').toString().trim().toLowerCase();
+    const after = options.filterCreatedAfterMs;
+    const before = options.filterCreatedBeforeMs;
+    return results.filter((m) => {
+      if (projectFilter) {
+        const p = String((m as any).projectName || this.projectName).toLowerCase();
+        if (!p.includes(projectFilter)) return false;
+      }
+      if (typeFilter) {
+        const t = String((m as any).memoryType || '').toLowerCase();
+        if (t !== typeFilter) return false;
+      }
+      const createdAt = Number((m as any).createdAt || 0);
+      if (typeof after === 'number' && createdAt < after) return false;
+      if (typeof before === 'number' && createdAt > before) return false;
+      return true;
+    });
+  }
+
+  private getGatewayOutboxEntriesLegacy(): any[] {
+    if (!this.llmGateway || typeof this.llmGateway.getOutboxEntries !== 'function') {
+      return [];
+    }
+    try {
+      return this.llmGateway.getOutboxEntries();
+    } catch {
+      return [];
+    }
+  }
+
+  getGatewayOutboxEntries(): any[] {
+    if (!this.memoryGatewayAdapter) {
+      return this.getGatewayOutboxEntriesLegacy();
+    }
+    return this.memoryGatewayAdapter.getOutboxEntries(() => this.getGatewayOutboxEntriesLegacy());
+  }
+
+  getGatewayOutboxEntriesViaAdapter(): any[] {
+    return this.getGatewayOutboxEntries();
+  }
+
+  private async retryGatewayOutboxEntryLegacy(entryId: string, forceReady: boolean = true): Promise<any> {
+    if (!this.llmGateway || typeof this.llmGateway.retryOutboxEntry !== 'function') {
+      throw new Error('LlmGateway.retryOutboxEntry unavailable. Please upgrade aifastdb package.');
+    }
+    return this.llmGateway.retryOutboxEntry(entryId, forceReady);
+  }
+
+  async retryGatewayOutboxEntry(entryId: string, forceReady: boolean = true): Promise<any> {
+    if (!this.memoryGatewayAdapter) {
+      return this.retryGatewayOutboxEntryLegacy(entryId, forceReady);
+    }
+    return this.memoryGatewayAdapter.retryOutboxEntry(
+      entryId,
+      forceReady,
+      (id, ready) => this.retryGatewayOutboxEntryLegacy(id, ready),
+    );
+  }
+
+  async retryGatewayOutboxEntryViaAdapter(entryId: string, forceReady: boolean = true): Promise<any> {
+    return this.retryGatewayOutboxEntry(entryId, forceReady);
+  }
+
+  async gatewayMemorizeWithCursorProfile(params: {
+    conversationId: string;
+    userId: string;
+    userContent: string;
+    assistantContent: string;
+    scope?: string;
+    roleId?: string;
+    profile?: string;
+    contentSessionId?: string;
+    memorySessionId?: string;
+    hookPhase?: string;
+    hookName?: string;
+  }): Promise<{ stored: boolean; scoped: boolean }> {
+    if (!this.llmGateway) {
+      throw new Error('LlmGateway unavailable. Please enable reranking/gateway initialization first.');
+    }
+    const binding = {
+      profile: params.profile,
+      contentSessionId: params.contentSessionId,
+      memorySessionId: params.memorySessionId,
+      hookPhase: params.hookPhase,
+      hookName: params.hookName,
+    };
+    const useScoped = Boolean(params.scope || params.roleId);
+    if (useScoped) {
+      if (typeof this.llmGateway.memorizeScopedWithCursorProfile !== 'function') {
+        throw new Error('LlmGateway.memorizeScopedWithCursorProfile unavailable. Please upgrade aifastdb package.');
+      }
+      await this.llmGateway.memorizeScopedWithCursorProfile(
+        params.conversationId,
+        params.userId,
+        params.userContent,
+        params.assistantContent,
+        {
+          scope: params.scope,
+          roleId: params.roleId,
+        },
+        binding,
+      );
+      return { stored: true, scoped: true };
+    }
+    if (typeof this.llmGateway.memorizeWithCursorProfile !== 'function') {
+      throw new Error('LlmGateway.memorizeWithCursorProfile unavailable. Please upgrade aifastdb package.');
+    }
+    await this.llmGateway.memorizeWithCursorProfile(
+      params.conversationId,
+      params.userId,
+      params.userContent,
+      params.assistantContent,
+      binding,
+    );
+    return { stored: true, scoped: false };
+  }
+
+  getMemoryGatewayTelemetry(): MemoryGatewayTelemetry | null {
+    if (!this.memoryGatewayAdapter) return null;
+    return this.memoryGatewayAdapter.getTelemetry();
   }
 
   /**
@@ -4023,6 +3898,27 @@ export class DevPlanGraphStore implements IDevPlanStore {
       alert = true;
       alertReason = `Average recall latency too high: ${avgLatencyMs.toFixed(1)}ms (>500ms)`;
     }
+    const gatewayAdapter = this.memoryGatewayAdapter ? this.memoryGatewayAdapter.getTelemetry() : undefined;
+    const threshold = this.memoryGatewayAdapter?.getFallbackAlertThreshold() ?? 0.2;
+    const opRates = gatewayAdapter ? [
+      { op: 'recallUnified' as const, rate: gatewayAdapter.recallUnified.fallbackRate },
+      { op: 'getOutboxEntries' as const, rate: gatewayAdapter.getOutboxEntries.fallbackRate },
+      { op: 'retryOutboxEntry' as const, rate: gatewayAdapter.retryOutboxEntry.fallbackRate },
+    ] : [];
+    const triggeredOps = opRates.filter((x) => x.rate > threshold).map((x) => x.op);
+    const maxFallbackRate = opRates.length > 0
+      ? Math.max(...opRates.map((x) => x.rate))
+      : 0;
+    const gatewayAlert = gatewayAdapter ? {
+      alerted: triggeredOps.length > 0,
+      threshold,
+      triggeredOps,
+      maxFallbackRate,
+      reason: triggeredOps.length > 0
+        ? `Gateway fallback rate exceeded threshold ${(threshold * 100).toFixed(1)}% on: ${triggeredOps.join(', ')}`
+        : undefined,
+    } : undefined;
+
     return {
       totalCalls: this.recallObservabilityRaw.totalCalls,
       totalFallbacks: this.recallObservabilityRaw.totalFallbacks,
@@ -4032,6 +3928,8 @@ export class DevPlanGraphStore implements IDevPlanStore {
       alert,
       alertReason,
       lastError: this.recallObservabilityRaw.lastError,
+      gatewayAdapter,
+      gatewayAlert,
     };
   }
 
@@ -4047,99 +3945,17 @@ export class DevPlanGraphStore implements IDevPlanStore {
     return this.getRecallObservability();
   }
 
-  private tokenizeQuery(query: string): string[] {
-    const tokens = (query.toLowerCase().match(/[a-z0-9_\-\u4e00-\u9fa5]+/g) || [])
-      .filter(t => t.length >= 2);
-    return Array.from(new Set(tokens));
-  }
-
   private treeIndexSearchDocuments(query: string, limit: number, minScore: number): ScoredMemory[] {
-    if (!this.treeIndexRetrievalEnabled) return [];
-    const docs = this.listSections();
-    const tokens = this.tokenizeQuery(query);
-    if (tokens.length === 0) return [];
-
-    const rawCandidates: Array<{
-      id: string;
-      title: string;
-      content: string;
-      score: number;
-      section: string;
-      subSection?: string;
-      pathLabel: string;
-    }> = [];
-
-    for (const doc of docs) {
-      const lines = (doc.content || '').split('\n');
-      let currentHeading = doc.title;
-      let currentDepth = 1;
-      let buffer: string[] = [];
-      let nodeIdx = 0;
-
-      const pushNode = () => {
-        const block = buffer.join('\n').trim();
-        if (!block) return;
-        const titleLower = currentHeading.toLowerCase();
-        const blockLower = block.toLowerCase();
-        let titleHits = 0;
-        let contentHits = 0;
-        for (const tk of tokens) {
-          if (titleLower.includes(tk)) titleHits += 1;
-          if (blockLower.includes(tk)) contentHits += 1;
-        }
-        if (titleHits === 0 && contentHits === 0) return;
-        const base = titleHits * 3 + contentHits;
-        const normalized = Math.min(1, base / Math.max(3, tokens.length * 2));
-        const depthBonus = 1 / (currentDepth + 1);
-        const score = Math.min(1, normalized * 0.85 + depthBonus * 0.15);
-        const docKey = doc.subSection ? `${doc.section}|${doc.subSection}` : doc.section;
-        rawCandidates.push({
-          id: `doc:${docKey}#tree-${nodeIdx}`,
-          title: `${doc.title} / ${currentHeading}`,
-          content: block.slice(0, 1200),
-          score,
-          section: doc.section,
-          subSection: doc.subSection,
-          pathLabel: currentHeading,
-        });
-        nodeIdx += 1;
-      };
-
-      for (const line of lines) {
-        const m = /^(#{1,6})\s+(.+)$/.exec(line.trim());
-        if (m) {
-          pushNode();
-          buffer = [];
-          currentDepth = m[1].length;
-          currentHeading = m[2].trim();
-        } else {
-          buffer.push(line);
-        }
-      }
-      pushNode();
-    }
-
-    const sorted = rawCandidates
-      .filter(c => minScore <= 0 || c.score >= minScore)
-      .sort((a, b) => b.score - a.score)
-      .slice(0, Math.max(limit, this.treeIndexMaxNodes))
-      .map((c): ScoredMemory => ({
-        id: c.id,
-        projectName: this.projectName,
-        memoryType: this.docSectionToMemoryType(c.section),
-        content: `## ${c.title}\n\n${c.content}`,
-        importance: 0.5,
-        tags: ['tree-index', c.section, ...(c.subSection ? [c.subSection] : [])],
-        hitCount: 0,
-        lastAccessedAt: null,
-        createdAt: Date.now(),
-        updatedAt: Date.now(),
-        score: c.score,
-        sourceKind: 'doc',
-        guidedReasons: [`tree-index:${c.pathLabel}`],
-      }));
-
-    return this.rerankSearchResults(query, sorted, limit).slice(0, limit);
+    return runTreeIndexDocRecallUtil({
+      enabled: this.treeIndexRetrievalEnabled,
+      query,
+      limit,
+      minScore,
+      treeIndexMaxNodes: this.treeIndexMaxNodes,
+      projectName: this.projectName,
+      listDocs: () => this.listSections(),
+      rerank: (q, items, n) => this.rerankSearchResults(q, items, n),
+    });
   }
 
   /**
@@ -4148,104 +3964,18 @@ export class DevPlanGraphStore implements IDevPlanStore {
   private vectorSearchDocuments(query: string, limit: number, minScore: number): ScoredMemory[] {
     const docResults: ScoredMemory[] = [];
     try {
-      const docHits = this.searchSectionsAdvanced(query, {
-        mode: this.semanticSearchReady ? 'hybrid' : 'literal',
-        limit: Math.max(5, Math.floor(limit / 2)),
-        minScore: minScore > 0 ? minScore : undefined,
-        _skipRerank: true,  // Phase-54: 避免双重重排 — recallMemory 会在最终结果上统一重排
-      });
-
-      for (const doc of docHits) {
-        const contentSnippet = (doc.content || '').substring(0, 300);
-        docResults.push({
-          id: `doc:${doc.section}${doc.subSection ? '|' + doc.subSection : ''}`,
-          projectName: this.projectName,
-          memoryType: this.docSectionToMemoryType(doc.section),
-          content: contentSnippet + (doc.content && doc.content.length > 300 ? '...' : ''),
-          tags: [doc.section, ...(doc.subSection ? [doc.subSection] : [])],
-          relatedTaskId: undefined,
-          importance: 0.6,
-          hitCount: 0,
-          lastAccessedAt: null,
-          createdAt: doc.updatedAt || 0,
-          updatedAt: doc.updatedAt || 0,
-          score: doc.score || 0.4,
-          sourceKind: 'doc',
-          docSection: doc.section,
-          docSubSection: doc.subSection || undefined,
-          docTitle: doc.title,
-        });
-      }
+      docResults.push(...runVectorDocRecallUtil({
+        query,
+        limit,
+        minScore,
+        semanticSearchReady: this.semanticSearchReady,
+        projectName: this.projectName,
+        searchDocs: (opts) => this.searchSectionsAdvanced(query, opts),
+      }));
     } catch (e) {
       console.warn(`[DevPlan] Document recall failed: ${e instanceof Error ? e.message : String(e)}`);
     }
     return docResults;
-  }
-
-  /**
-   * 文档 section 类型 → 建议的 memoryType 映射
-   */
-  private docSectionToMemoryType(section: string): MemoryType {
-    const mapping: Record<string, MemoryType> = {
-      overview: 'summary',
-      core_concepts: 'insight',
-      api_design: 'pattern',
-      technical_notes: 'insight',
-      config: 'preference',
-      examples: 'pattern',
-      changelog: 'summary',
-      milestones: 'summary',
-    };
-    return mapping[section] || 'insight';
-  }
-
-  /**
-   * RRF (Reciprocal Rank Fusion) 合并记忆和文档结果
-   *
-   * 记忆权重略高（rank 常数更小），因为记忆是经过提炼的知识。
-   */
-  private rrfMergeResults(
-    memoryResults: ScoredMemory[],
-    docResults: ScoredMemory[],
-    limit: number,
-  ): ScoredMemory[] {
-    const k_memory = 30;  // 记忆 RRF 常数（越小权重越高）
-    const k_doc = 50;     // 文档 RRF 常数
-
-    const scoreMap = new Map<string, { item: ScoredMemory; rrfScore: number }>();
-
-    for (let i = 0; i < memoryResults.length; i++) {
-      const item = memoryResults[i];
-      const rrfScore = 1.0 / (k_memory + i + 1);
-      scoreMap.set(item.id, { item, rrfScore });
-    }
-
-    for (let i = 0; i < docResults.length; i++) {
-      const item = docResults[i];
-      const rrfScore = 1.0 / (k_doc + i + 1);
-      const existing = scoreMap.get(item.id);
-      if (existing) {
-        existing.rrfScore += rrfScore;
-      } else {
-        scoreMap.set(item.id, { item, rrfScore });
-      }
-    }
-
-    // Phase-39: 对记忆类结果施加热度加权（文档不受影响）
-    const merged = Array.from(scoreMap.values())
-      .map(({ item, rrfScore }) => {
-        if (item.sourceKind === 'memory' || !item.sourceKind) {
-          const hotness = this.computeMemoryHotness(item);
-          const hotnessMultiplier = 0.5 + hotness; // [0.5, 1.5]
-          return { item, rrfScore: rrfScore * hotnessMultiplier };
-        }
-        return { item, rrfScore };
-      })
-      .sort((a, b) => b.rrfScore - a.rrfScore)
-      .slice(0, limit)
-      .map(({ item, rrfScore }) => ({ ...item, score: rrfScore }));
-
-    return merged;
   }
 
   /**
@@ -4416,10 +4146,11 @@ export class DevPlanGraphStore implements IDevPlanStore {
         const boostedHits = hits
           .map(h => {
             const p = h.entity.properties as any;
-            const score = this.applyBm25TermBoost(
+            const score = applyBm25TermBoostUtil(
               Number(h.score || 0),
               query,
               `${h.snippet || ''}\n${p?.content || ''}\n${(p?.tags || []).join(' ')}`,
+              this.recallSearchTuning,
             );
             return { entityId: h.entityId, score };
           })
@@ -4725,85 +4456,6 @@ export class DevPlanGraphStore implements IDevPlanStore {
   }
 
   /**
-   * Phase-39: 计算记忆热度分数 — 模拟遗忘曲线
-   *
-   * 综合 hitCount + 时间衰减 + importance，输出 0~1 的热度值。
-   * - 高频访问 + 近期访问 → 热度高
-   * - 长期未访问 → 热度衰减（半衰期 7 天）
-   * - importance 作为基线加成
-   */
-  private computeMemoryHotness(memory: {
-    hitCount: number;
-    lastAccessedAt: number | null;
-    importance: number;
-    createdAt: number;
-  }): number {
-    const now = Date.now();
-    const HALF_LIFE_MS = 7 * 24 * 60 * 60 * 1000; // 7天半衰期
-    const LN2 = Math.LN2;
-
-    // 时间衰减：基于最后访问时间（如无访问则用创建时间）
-    const lastAccess = memory.lastAccessedAt || memory.createdAt;
-    const elapsed = Math.max(0, now - lastAccess);
-    const timeDecay = Math.exp(-(LN2 / HALF_LIFE_MS) * elapsed); // 0~1
-
-    // 频率分数：hitCount 的对数缩放，避免过高值主导
-    const freqScore = Math.min(1, Math.log2(1 + (memory.hitCount || 0)) / 5); // log2(32)/5 = 1.0
-
-    // importance 基线 (0~1)
-    const importanceBase = memory.importance || 0.5;
-
-    // 综合: importance 40% + frequency 30% + recency 30%
-    return importanceBase * 0.4 + freqScore * 0.3 + timeDecay * 0.3;
-  }
-
-  /**
-   * Phase-38 + Phase-39: RRF 融合记忆向量搜索结果和图谱扩展结果
-   *
-   * Phase-39 增强：热度加权融合 — 每条记忆的 RRF 分数乘以热度系数（0.5~1.5），
-   * 高频+近期记忆获得排序提升，冷门记忆自动下沉。
-   */
-  private rrfMergeMemories(
-    vectorResults: ScoredMemory[],
-    graphResults: ScoredMemory[],
-    limit: number,
-  ): ScoredMemory[] {
-    const rrfK = this.recallSearchTuning.rrfK;
-    const vectorWeight = this.recallSearchTuning.vectorWeight;
-    const graphWeight = this.recallSearchTuning.graphWeight;
-
-    const scoreMap = new Map<string, { item: ScoredMemory; rrfScore: number }>();
-
-    for (let i = 0; i < vectorResults.length; i++) {
-      const item = vectorResults[i];
-      const rrfScore = vectorWeight / (rrfK + i + 1);
-      scoreMap.set(item.id, { item, rrfScore });
-    }
-
-    for (let i = 0; i < graphResults.length; i++) {
-      const item = graphResults[i];
-      const rrfScore = graphWeight / (rrfK + i + 1);
-      const existing = scoreMap.get(item.id);
-      if (existing) {
-        existing.rrfScore += rrfScore;
-      } else {
-        scoreMap.set(item.id, { item, rrfScore });
-      }
-    }
-
-    // Phase-39: 热度加权 — hotness 映射到 [0.5, 1.5] 的乘法系数
-    return Array.from(scoreMap.values())
-      .map(({ item, rrfScore }) => {
-        const hotness = this.computeMemoryHotness(item);
-        const hotnessMultiplier = 0.5 + hotness; // [0.5, 1.5]
-        return { item, rrfScore: rrfScore * hotnessMultiplier };
-      })
-      .sort((a, b) => b.rrfScore - a.rrfScore)
-      .slice(0, limit)
-      .map(({ item, rrfScore }) => ({ ...item, score: rrfScore }));
-  }
-
-  /**
    * 列出记忆（支持过滤）
    */
   listMemories(filter?: {
@@ -4914,7 +4566,7 @@ export class DevPlanGraphStore implements IDevPlanStore {
     // 2. 相关记忆（统一召回：同时搜索记忆 + 文档）
     let relevantMemories: ScoredMemory[] = [];
     if (query) {
-      relevantMemories = this.recallUnified(query, { limit, docStrategy: 'vector' });
+      relevantMemories = this.recallUnifiedViaAdapter(query, { limit, docStrategy: 'vector' });
     }
 
     // 3. 项目偏好
@@ -5430,7 +5082,7 @@ export class DevPlanGraphStore implements IDevPlanStore {
   }
 
   generateMemoryCandidates(options?: {
-    source?: 'tasks' | 'docs' | 'both';
+    source?: 'tasks' | 'docs' | 'modules' | 'both';
     taskId?: string;
     section?: string;
     subSection?: string;
@@ -5455,8 +5107,10 @@ export class DevPlanGraphStore implements IDevPlanStore {
     const allEligible: MemoryCandidate[] = [];
     let totalCompletedPhases = 0;
     let totalDocuments = 0;
+    let totalModules = 0;
     let phasesWithMemory = 0;
     let docsWithMemory = 0;
+    let modulesWithMemory = 0;
     let skippedWithMemory = 0;
       const buildSkillInstructions = (
       sourceType: 'task' | 'document',
@@ -5552,6 +5206,60 @@ export class DevPlanGraphStore implements IDevPlanStore {
               '若需高保真 L3，请结合 commit diff 与执行日志，而非仅依赖任务摘要。',
             ],
           },
+        });
+      }
+    }
+
+    // ========== 功能模块来源 ==========
+    if (source === 'modules' || source === 'both') {
+      const modules = this.listModules();
+      totalModules = modules.length;
+
+      for (const mod of modules) {
+        const moduleKey = `module:${mod.moduleId}`;
+        const hasMemory = memoryBySourceId.has(moduleKey) || memoryBySourceId.has(mod.moduleId);
+        if (hasMemory) {
+          modulesWithMemory++;
+          skippedWithMemory++;
+          continue;
+        }
+
+        const moduleTasks = this.listMainTasks({ moduleId: mod.moduleId });
+        const moduleDocs = this.listSections().filter((d) => d.moduleId === mod.moduleId);
+
+        const taskLines = moduleTasks.slice(0, 8).map((t) => `  - ${t.taskId}: ${t.title}`);
+        const docLines = moduleDocs.slice(0, 8).map((d) => {
+          const docKey = d.subSection ? `${d.section}|${d.subSection}` : d.section;
+          return `  - ${docKey}: ${d.title}`;
+        });
+
+        const content = [
+          `## 模块：${mod.name}`,
+          `- 模块ID: ${mod.moduleId}`,
+          `- 状态: ${mod.status}`,
+          mod.description ? `- 描述: ${mod.description}` : '',
+          `- 关联主任务: ${mod.mainTaskCount}`,
+          `- 关联子任务: ${mod.completedSubTaskCount}/${mod.subTaskCount}`,
+          `- 关联文档: ${mod.docCount}`,
+          '',
+          '### 任务概览',
+          taskLines.length > 0 ? taskLines.join('\n') : '  - （无）',
+          '',
+          '### 文档概览',
+          docLines.length > 0 ? docLines.join('\n') : '  - （无）',
+        ].filter(Boolean).join('\n');
+
+        allEligible.push({
+          sourceType: 'module',
+          sourceRef: { sourceId: moduleKey },
+          sourceTitle: mod.name,
+          content,
+          contentL3: content,
+          suggestedMemoryType: 'summary',
+          suggestedImportance: mod.status === 'completed' ? 0.7 : 0.6,
+          suggestedTags: ['module', mod.moduleId, mod.status],
+          hasExistingMemory: false,
+          skillInstructions: buildSkillInstructions('document', moduleKey, mod.name, 'summary', 'core_concepts'),
         });
       }
     }
@@ -5833,8 +5541,10 @@ export class DevPlanGraphStore implements IDevPlanStore {
       stats: {
         totalCompletedPhases,
         totalDocuments,
+        totalModules,
         phasesWithMemory,
         docsWithMemory,
+        modulesWithMemory,
         skippedWithMemory,
         candidatesReturned: candidates.length,
         remaining,
@@ -5943,7 +5653,7 @@ export class DevPlanGraphStore implements IDevPlanStore {
   }
 
   syncWithGit(dryRun: boolean = false): SyncGitResult {
-    const currentHead = this.getCurrentGitCommit();
+    const currentHead = getCurrentGitCommitUtil(this.gitCwd);
 
     if (!currentHead) {
       return {
@@ -5964,7 +5674,7 @@ export class DevPlanGraphStore implements IDevPlanStore {
         if (sub.status !== 'completed' || !sub.completedAtCommit) continue;
         checked++;
 
-        if (!this.isAncestor(sub.completedAtCommit, currentHead)) {
+        if (!isAncestorUtil(sub.completedAtCommit, currentHead, this.gitCwd)) {
           const reason = `Commit ${sub.completedAtCommit} not found in current branch (HEAD: ${currentHead})`;
 
           if (!dryRun) {
@@ -6475,7 +6185,7 @@ export class DevPlanGraphStore implements IDevPlanStore {
               }
             } catch { /* ignore — fall through to group */ }
           }
-          const devPlanType = this.mapGroupToDevPlanType(etStr || n.group);
+          const devPlanType = mapGroupToDevPlanTypeUtil(etStr || n.group);
 
           // Filter out project nodes that don't belong to the current project.
           // The Rust layer returns ALL entities matching the type filter, which may
@@ -6596,23 +6306,6 @@ export class DevPlanGraphStore implements IDevPlanStore {
       // NAPI method not available
     }
     return null;
-  }
-
-  /**
-   * Map Rust NodeGroup name to DevPlan node type
-   */
-  private mapGroupToDevPlanType(group: string | number): DevPlanGraphNode['type'] {
-    // Rust NodeGroup: 0=Person, 1=Company, 2=Tag
-    // But in DevPlan context, entity_type matters more
-    // We rely on the entity's entity_type property
-    if (typeof group === 'string') {
-      if (group.includes('project')) return 'project';
-      if (group.includes('main-task') || group.includes('main_task')) return 'main-task';
-      if (group.includes('sub-task') || group.includes('sub_task')) return 'sub-task';
-      if (group.includes('doc')) return 'document';
-      if (group.includes('module')) return 'module';
-    }
-    return 'sub-task'; // default fallback
   }
 
   // ==========================================================================
@@ -6866,41 +6559,6 @@ export class DevPlanGraphStore implements IDevPlanStore {
     }
   }
 
-  private getCurrentGitCommit(): string | undefined {
-    try {
-      const { execSync } = require('child_process');
-      return execSync('git rev-parse --short HEAD', {
-        encoding: 'utf-8',
-        timeout: 5000,
-        stdio: ['pipe', 'pipe', 'pipe'],
-        cwd: this.gitCwd,
-      }).trim();
-    } catch {
-      return undefined;
-    }
-  }
-
-  private isAncestor(commit: string, target: string): boolean {
-    try {
-      const { execSync } = require('child_process');
-      execSync(`git merge-base --is-ancestor ${commit} ${target}`, {
-        timeout: 5000,
-        stdio: ['pipe', 'pipe', 'pipe'],
-        cwd: this.gitCwd,
-      });
-      return true;
-    } catch {
-      return false;
-    }
-  }
-
-  private progressBar(percent: number): string {
-    const total = 20;
-    const filled = Math.round((percent / 100) * total);
-    const empty = total - filled;
-    return `[${'█'.repeat(filled)}${'░'.repeat(empty)}]`;
-  }
-
   // ==========================================================================
   // Semantic Search Helpers
   // ==========================================================================
@@ -6927,138 +6585,4 @@ export class DevPlanGraphStore implements IDevPlanStore {
     }
   }
 
-  /**
-   * 字面搜索（标题/内容包含查询词）
-   */
-  private literalSearch(query: string): DevPlanDoc[] {
-    const queryLower = query.toLowerCase();
-    return this.listSections().filter(
-      (doc) =>
-        doc.content.toLowerCase().includes(queryLower) ||
-        doc.title.toLowerCase().includes(queryLower)
-    );
-  }
-
-  /**
-   * RRF (Reciprocal Rank Fusion) 融合排序（双路：vector + literal）
-   *
-   * 将语义搜索和字面搜索的结果通过 RRF 公式融合：
-   *   score(d) = Σ 1/(k + rank_i(d))
-   * 其中 k=60 是标准 RRF 常数。
-   */
-  private rrfFusion(
-    semanticHits: VectorSearchHit[],
-    literalResults: DevPlanDoc[],
-    limit: number,
-    minScore: number,
-  ): ScoredDevPlanDoc[] {
-    const RRF_K = 60;
-    const rrfScores = new Map<string, number>();
-    const docMap = new Map<string, DevPlanDoc>();
-
-    // 语义搜索结果贡献
-    for (let i = 0; i < semanticHits.length; i++) {
-      const hit = semanticHits[i];
-      const rrf = 1 / (RRF_K + i + 1);
-      rrfScores.set(hit.entityId, (rrfScores.get(hit.entityId) || 0) + rrf);
-    }
-
-    // 字面搜索结果贡献
-    for (let i = 0; i < literalResults.length; i++) {
-      const doc = literalResults[i];
-      const rrf = 1 / (RRF_K + i + 1);
-      rrfScores.set(doc.id, (rrfScores.get(doc.id) || 0) + rrf);
-      docMap.set(doc.id, doc);
-    }
-
-    // 按 RRF 评分排序
-    const sorted = Array.from(rrfScores.entries())
-      .sort((a, b) => b[1] - a[1]);
-
-    // 组装结果
-    const results: ScoredDevPlanDoc[] = [];
-    for (const [id, score] of sorted) {
-      if (minScore > 0 && score < minScore) continue;
-      if (results.length >= limit) break;
-
-      // 优先从 docMap 获取（字面搜索已解析过的），否则从图中获取
-      let doc = docMap.get(id);
-      if (!doc) {
-        const entity = this.graph.getEntity(id);
-        if (entity && (entity.properties as any)?.projectName === this.projectName) {
-          doc = this.entityToDevPlanDoc(entity);
-        }
-      }
-
-      if (doc) {
-        results.push({ ...doc, score });
-      }
-    }
-
-    return results;
-  }
-
-  /**
-   * Phase-52: 三路 RRF 融合排序 (vector + BM25/literal)
-   *
-   * 当 Tantivy BM25 可用时，textResults 携带 BM25 score；
-   * 否则降级为朴素字面匹配（按出现顺序排名）。
-   *
-   * RRF 公式：score(d) = Σ 1/(k + rank_i(d))
-   * k=60 是标准 RRF 常数。
-   */
-  private rrfFusionThreeWay(
-    semanticHits: VectorSearchHit[],
-    textResults: Array<{ id: string; score?: number; doc?: DevPlanDoc }>,
-    limit: number,
-    minScore: number,
-  ): ScoredDevPlanDoc[] {
-    const rrfK = this.recallSearchTuning.rrfK;
-    const vectorWeight = this.recallSearchTuning.vectorWeight;
-    const bm25Weight = this.recallSearchTuning.bm25Weight;
-    const rrfScores = new Map<string, number>();
-    const docMap = new Map<string, DevPlanDoc>();
-
-    // 通道 1: 语义搜索结果贡献
-    for (let i = 0; i < semanticHits.length; i++) {
-      const hit = semanticHits[i];
-      const rrf = vectorWeight / (rrfK + i + 1);
-      rrfScores.set(hit.entityId, (rrfScores.get(hit.entityId) || 0) + rrf);
-    }
-
-    // 通道 2: BM25 / literal 搜索结果贡献
-    for (let i = 0; i < textResults.length; i++) {
-      const r = textResults[i];
-      const rrf = bm25Weight / (rrfK + i + 1);
-      rrfScores.set(r.id, (rrfScores.get(r.id) || 0) + rrf);
-      if (r.doc) {
-        docMap.set(r.id, r.doc);
-      }
-    }
-
-    // 按 RRF 评分排序
-    const sorted = Array.from(rrfScores.entries())
-      .sort((a, b) => b[1] - a[1]);
-
-    // 组装结果
-    const results: ScoredDevPlanDoc[] = [];
-    for (const [id, score] of sorted) {
-      if (minScore > 0 && score < minScore) continue;
-      if (results.length >= limit) break;
-
-      let doc = docMap.get(id);
-      if (!doc) {
-        const entity = this.graph.getEntity(id);
-        if (entity && (entity.properties as any)?.projectName === this.projectName) {
-          doc = this.entityToDevPlanDoc(entity);
-        }
-      }
-
-      if (doc) {
-        results.push({ ...doc, score });
-      }
-    }
-
-    return results;
-  }
 }
