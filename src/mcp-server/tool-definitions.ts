@@ -116,13 +116,39 @@ export const TOOLS = [
   },
   {
     name: 'devplan_list_sections',
-    description: 'List all document sections in the dev plan for a project.\n列出项目开发计划中的所有文档片段。',
+    description: 'List document sections in the dev plan for a project. Supports pagination (limit/offset), compact mode, sorting, and filtering by section type or moduleId.\n列出项目开发计划中的文档片段。支持分页（limit/offset）、精简模式、排序，以及按文档类型或功能模块过滤。',
     inputSchema: {
       type: 'object' as const,
       properties: {
         projectName: {
           type: 'string',
           description: `Project name (default: "${DEFAULT_PROJECT_NAME}")\n项目名称（默认："${DEFAULT_PROJECT_NAME}"）`,
+        },
+        limit: {
+          type: 'number',
+          description: 'Optional: Maximum number of sections to return. When omitted, returns all sections (may consume many tokens for large projects). Recommended: use limit=20 for initial browsing.\n可选：最大返回文档数。不填则返回全部（大项目可能消耗大量 token）。建议：初次浏览用 limit=20。',
+        },
+        offset: {
+          type: 'number',
+          description: 'Optional: Number of sections to skip (for pagination). Default: 0.\n可选：分页偏移量（跳过前 N 个文档）。默认：0。',
+        },
+        compact: {
+          type: 'boolean',
+          description: 'Optional: If true, return only section + subSection + title (omit id, version, parentDoc, contentPreview, updatedAt). Saves ~50% tokens. Default: false.\n可选：为 true 时仅返回 section + subSection + title，省略其他字段，节省约 50% token。默认：false。',
+        },
+        sort: {
+          type: 'string',
+          enum: ['asc', 'desc'],
+          description: 'Optional: Sort order by updatedAt. "desc" = newest first, "asc" = oldest first. Default: "desc".\n可选：按更新时间排序。"desc"=最新在前，"asc"=最旧在前。默认："desc"。',
+        },
+        section: {
+          type: 'string',
+          enum: ['overview', 'core_concepts', 'api_design', 'file_structure', 'config', 'examples', 'technical_notes', 'api_endpoints', 'milestones', 'changelog', 'custom'],
+          description: 'Optional: Filter by section type.\n可选：按文档类型过滤。',
+        },
+        moduleId: {
+          type: 'string',
+          description: 'Optional: Filter by associated feature module ID.\n可选：按关联功能模块 ID 过滤。',
         },
       },
       required: ['projectName'],
@@ -310,7 +336,7 @@ export const TOOLS = [
   },
   {
     name: 'devplan_list_tasks',
-    description: 'List tasks in the dev plan. Can list main tasks, or sub-tasks of a specific main task. When parentTaskId is omitted but status is provided, aggregates sub-tasks across ALL main tasks matching the status filter.\n列出开发计划中的任务。可列出主任务，或指定主任务下的子任务。省略 parentTaskId 但提供 status 时，跨所有主任务聚合匹配状态的子任务。',
+    description: 'List tasks in the dev plan. Can list main tasks, or sub-tasks of a specific main task. When parentTaskId is omitted but status is provided, aggregates sub-tasks across ALL main tasks matching the status filter. Supports pagination (limit/offset) and compact mode to reduce token consumption.\n列出开发计划中的任务。可列出主任务，或指定主任务下的子任务。省略 parentTaskId 但提供 status 时，跨所有主任务聚合匹配状态的子任务。支持分页（limit/offset）和精简模式以减少 token 消耗。',
     inputSchema: {
       type: 'object' as const,
       properties: {
@@ -336,8 +362,56 @@ export const TOOLS = [
           type: 'string',
           description: 'Optional: Filter by feature module ID\n可选：按功能模块 ID 筛选',
         },
+        limit: {
+          type: 'number',
+          description: 'Optional: Maximum number of tasks to return. Default: all (no limit). Recommended: 20~50 for large projects to save tokens.\n可选：最大返回任务数。默认：全部。建议大项目用 20~50 以节省 token。',
+        },
+        offset: {
+          type: 'number',
+          description: 'Optional: Number of tasks to skip (for pagination). Default: 0.\n可选：跳过的任务数（分页用）。默认：0。',
+        },
+        compact: {
+          type: 'boolean',
+          description: 'Optional: If true, return only taskId + title + status (omit estimatedHours, completedAt, order, totalSubtasks, completedSubtasks). Saves ~40% tokens. Default: false.\n可选：为 true 时仅返回 taskId + title + status，省略其他字段，节省约 40% token。默认：false。',
+        },
+        sort: {
+          type: 'string',
+          enum: ['asc', 'desc'],
+          description: 'Optional: Sort order by task creation order. "desc" = newest first (recommended for getting latest tasks), "asc" = oldest first. Default: "desc".\n可选：排序方式。"desc" = 最新在前（推荐获取最新任务），"asc" = 最早在前。默认："desc"。',
+        },
       },
       required: ['projectName'],
+    },
+  },
+  {
+    name: 'devplan_search_tasks',
+    description: 'Search tasks by keyword in title or taskId. Returns matching main tasks and their sub-tasks. Use this to find specific historical tasks without loading the entire task list. Much more token-efficient than devplan_list_tasks for targeted lookups.\n按关键词搜索任务标题或 taskId。返回匹配的主任务及其子任务。用于查找特定历史任务，无需加载完整列表。比 devplan_list_tasks 更节省 token。',
+    inputSchema: {
+      type: 'object' as const,
+      properties: {
+        projectName: {
+          type: 'string',
+          description: `Project name (default: "${DEFAULT_PROJECT_NAME}")\n项目名称（默认："${DEFAULT_PROJECT_NAME}"）`,
+        },
+        query: {
+          type: 'string',
+          description: 'Search query text. Matches against task title and taskId (case-insensitive). Supports multiple keywords separated by spaces (AND logic).\n搜索查询文本。不区分大小写匹配任务标题和 taskId。支持空格分隔多关键词（AND 逻辑）。',
+        },
+        scope: {
+          type: 'string',
+          enum: ['all', 'active', 'completed'],
+          description: 'Optional: Search scope. "all" = all tasks, "active" = pending + in_progress, "completed" = completed only. Default: "all".\n可选：搜索范围。"all"=全部，"active"=待处理+进行中，"completed"=仅已完成。默认："all"。',
+        },
+        limit: {
+          type: 'number',
+          description: 'Optional: Maximum number of matching main tasks to return. Default: 20.\n可选：最大返回匹配主任务数。默认：20。',
+        },
+        includeSubTasks: {
+          type: 'boolean',
+          description: 'Optional: If true, also return sub-tasks of matching main tasks. Default: false.\n可选：为 true 时同时返回匹配主任务的子任务。默认：false。',
+        },
+      },
+      required: ['projectName', 'query'],
     },
   },
   {
@@ -617,7 +691,7 @@ export const TOOLS = [
   },
   {
     name: 'devplan_search_sections',
-    description: 'Search document sections with support for literal, semantic, or hybrid (RRF fusion) search modes. Requires "graph" engine with enableSemanticSearch in .devplan/config.json for semantic/hybrid modes. Falls back to literal search when semantic search is unavailable.\n搜索文档片段，支持字面匹配、语义搜索或混合搜索（RRF 融合）模式。语义/混合模式需要 graph 引擎且在 .devplan/config.json 中启用 enableSemanticSearch。语义搜索不可用时自动回退为字面搜索。',
+    description: 'Search document sections with support for literal, semantic, or hybrid (RRF fusion) search modes. Can also filter by moduleId to search only documents belonging to a specific feature module. Requires "graph" engine with enableSemanticSearch in .devplan/config.json for semantic/hybrid modes. Falls back to literal search when semantic search is unavailable.\n搜索文档片段，支持字面匹配、语义搜索或混合搜索（RRF 融合）模式。可通过 moduleId 过滤仅搜索特定功能模块关联的文档。语义/混合模式需要 graph 引擎且在 .devplan/config.json 中启用 enableSemanticSearch。语义搜索不可用时自动回退为字面搜索。',
     inputSchema: {
       type: 'object' as const,
       properties: {
@@ -641,6 +715,10 @@ export const TOOLS = [
         minScore: {
           type: 'number',
           description: 'Minimum relevance score threshold (0~1, default: 0)\n最低相关性评分阈值（0~1，默认 0）',
+        },
+        moduleId: {
+          type: 'string',
+          description: 'Optional: Filter results by associated feature module ID. Only returns documents linked to this module.\n可选：按功能模块 ID 过滤结果。仅返回关联到该模块的文档。',
         },
       },
       required: ['projectName', 'query'],
@@ -1867,4 +1945,15 @@ export interface ToolArgs {
   resume?: boolean;
   /** Phase-59: batch_status 是否清理缓存文件 */
   clear?: boolean;
+  // ---- Phase-160: 任务列表分页+精简+搜索 ----
+  /** devplan_list_tasks: 分页偏移量 */
+  offset?: number;
+  /** devplan_list_tasks: 精简模式（仅返回 taskId + title + status） */
+  compact?: boolean;
+  /** devplan_list_tasks: 排序方式 (asc=旧的在前, desc=新的在前) */
+  sort?: string;
+  /** devplan_search_tasks: 搜索范围 */
+  // scope 已在上方声明（与 recall_unified 共用）
+  /** devplan_search_tasks: 是否包含子任务 */
+  includeSubTasks?: boolean;
 }

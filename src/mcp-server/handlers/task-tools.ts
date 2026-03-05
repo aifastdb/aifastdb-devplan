@@ -272,84 +272,172 @@ export async function handleTaskToolCall(name: string, args: ToolArgs, deps: { g
       }
 
       const plan = getDevPlan(args.projectName);
+      const compact = args.compact === true;
+      const limit = typeof args.limit === 'number' ? args.limit : undefined;
+      const offset = typeof args.offset === 'number' ? args.offset : 0;
+      // Phase-160B: sort 默认 desc（最新在前），方便获取最新任务和最大编号
+      const sortDesc = args.sort !== 'asc';
+
+      // Helper: apply sort + slice to an array
+      const applySortAndSlice = <T>(arr: T[]): T[] => {
+        const sorted = sortDesc ? [...arr].reverse() : arr;
+        return limit !== undefined ? sorted.slice(offset, offset + limit) : sorted.slice(offset);
+      };
 
       if (args.parentTaskId) {
         // Mode 1: List sub-tasks of a specific main task
         const subTasks = plan.listSubTasks(args.parentTaskId, {
           status: args.status as TaskStatus | undefined,
         });
+        const total = subTasks.length;
+        const sliced = applySortAndSlice(subTasks);
         return JSON.stringify({
           projectName: args.projectName,
           parentTaskId: args.parentTaskId,
-          count: subTasks.length,
-          subTasks: subTasks.map(st => ({
-            taskId: st.taskId,
-            title: st.title,
-            status: st.status,
-            estimatedHours: st.estimatedHours,
-            completedAt: st.completedAt,
-            order: st.order,
-          })),
+          count: sliced.length,
+          total,
+          sort: sortDesc ? 'desc' : 'asc',
+          ...(limit !== undefined || offset > 0 ? { offset, limit: limit ?? null, hasMore: offset + sliced.length < total } : {}),
+          subTasks: sliced.map(st => compact
+            ? { taskId: st.taskId, title: st.title, status: st.status }
+            : {
+              taskId: st.taskId,
+              title: st.title,
+              status: st.status,
+              estimatedHours: st.estimatedHours,
+              completedAt: st.completedAt,
+              order: st.order,
+            }),
         });
       } else if (args.status && !args.priority && !args.moduleId) {
         // Mode 2: Aggregate sub-tasks across ALL main tasks matching the status filter
         const mainTasks = plan.listMainTasks();
-        const allSubTasks: Array<{
-          taskId: string;
-          title: string;
-          status: string;
-          estimatedHours?: number;
-          completedAt?: number | null;
-          parentTaskId: string;
-          parentTitle: string;
-          order?: number;
-        }> = [];
+        const allSubTasks: Array<Record<string, unknown>> = [];
         for (const mt of mainTasks) {
           const subs = plan.listSubTasks(mt.taskId, {
             status: args.status as TaskStatus | undefined,
           });
           for (const sub of subs) {
-            allSubTasks.push({
-              taskId: sub.taskId,
-              title: sub.title,
-              status: sub.status,
-              estimatedHours: sub.estimatedHours,
-              completedAt: sub.completedAt,
-              parentTaskId: mt.taskId,
-              parentTitle: mt.title,
-              order: sub.order,
-            });
+            allSubTasks.push(compact
+              ? { taskId: sub.taskId, title: sub.title, status: sub.status, parentTaskId: mt.taskId }
+              : {
+                taskId: sub.taskId,
+                title: sub.title,
+                status: sub.status,
+                estimatedHours: sub.estimatedHours,
+                completedAt: sub.completedAt,
+                parentTaskId: mt.taskId,
+                parentTitle: mt.title,
+                order: sub.order,
+              });
           }
         }
+        const total = allSubTasks.length;
+        const sliced = applySortAndSlice(allSubTasks);
         return JSON.stringify({
           projectName: args.projectName,
           status: args.status,
-          count: allSubTasks.length,
-          subTasks: allSubTasks,
+          count: sliced.length,
+          total,
+          sort: sortDesc ? 'desc' : 'asc',
+          ...(limit !== undefined || offset > 0 ? { offset, limit: limit ?? null, hasMore: offset + sliced.length < total } : {}),
+          subTasks: sliced,
         });
       } else {
         // Mode 3: List main tasks (supports moduleId filter)
-        const mainTasks = plan.listMainTasks({
+        const allMainTasks = plan.listMainTasks({
           status: args.status as TaskStatus | undefined,
           priority: args.priority as TaskPriority | undefined,
           moduleId: args.moduleId,
         });
+        const total = allMainTasks.length;
+        // Phase-160B: latestTaskId — 始终取 order 最大的任务 ID（原始升序数组最后一个）
+        const latestTaskId = allMainTasks.length > 0 ? allMainTasks[allMainTasks.length - 1].taskId : null;
+        const sliced = applySortAndSlice(allMainTasks);
         return JSON.stringify({
           projectName: args.projectName,
-          count: mainTasks.length,
-          mainTasks: mainTasks.map(mt => ({
-            taskId: mt.taskId,
-            title: mt.title,
-            priority: mt.priority,
-            status: mt.status,
-            totalSubtasks: mt.totalSubtasks,
-            completedSubtasks: mt.completedSubtasks,
-            estimatedHours: mt.estimatedHours,
-            completedAt: mt.completedAt,
-            order: mt.order,
-          })),
+          count: sliced.length,
+          total,
+          latestTaskId,
+          sort: sortDesc ? 'desc' : 'asc',
+          ...(limit !== undefined || offset > 0 ? { offset, limit: limit ?? null, hasMore: offset + sliced.length < total } : {}),
+          mainTasks: sliced.map(mt => compact
+            ? { taskId: mt.taskId, title: mt.title, status: mt.status }
+            : {
+              taskId: mt.taskId,
+              title: mt.title,
+              priority: mt.priority,
+              status: mt.status,
+              totalSubtasks: mt.totalSubtasks,
+              completedSubtasks: mt.completedSubtasks,
+              estimatedHours: mt.estimatedHours,
+              completedAt: mt.completedAt,
+              order: mt.order,
+            }),
         });
       }
+    }
+
+
+    case 'devplan_search_tasks': {
+      if (!args.projectName || !args.query) {
+        throw new McpError(ErrorCode.InvalidParams, 'Missing required: projectName, query');
+      }
+
+      const plan = getDevPlan(args.projectName);
+      const searchQuery = args.query.toLowerCase();
+      const keywords = searchQuery.split(/\s+/).filter(Boolean);
+      const searchLimit = typeof args.limit === 'number' ? args.limit : 20;
+      const searchScope = (args.scope as string) || 'all';
+      const includeSubTasks = args.includeSubTasks === true;
+
+      // Get all main tasks and filter by scope
+      const allMainTasks = plan.listMainTasks();
+      const scopedTasks = allMainTasks.filter(mt => {
+        if (searchScope === 'active') return mt.status === 'pending' || mt.status === 'in_progress';
+        if (searchScope === 'completed') return mt.status === 'completed';
+        return true; // 'all'
+      });
+
+      // Search: match ALL keywords in title or taskId (AND logic)
+      const matchedTasks = scopedTasks.filter(mt => {
+        const haystack = `${mt.taskId} ${mt.title} ${mt.description || ''}`.toLowerCase();
+        return keywords.every(kw => haystack.includes(kw));
+      });
+
+      // Limit results
+      const limited = matchedTasks.slice(0, searchLimit);
+
+      // Build response
+      const results: Array<Record<string, unknown>> = limited.map(mt => {
+        const entry: Record<string, unknown> = {
+          taskId: mt.taskId,
+          title: mt.title,
+          priority: mt.priority,
+          status: mt.status,
+          totalSubtasks: mt.totalSubtasks,
+          completedSubtasks: mt.completedSubtasks,
+        };
+        if (includeSubTasks) {
+          const subs = plan.listSubTasks(mt.taskId);
+          entry.subTasks = subs.map(s => ({
+            taskId: s.taskId,
+            title: s.title,
+            status: s.status,
+          }));
+        }
+        return entry;
+      });
+
+      return JSON.stringify({
+        projectName: args.projectName,
+        query: args.query,
+        scope: searchScope,
+        matchCount: matchedTasks.length,
+        returnedCount: results.length,
+        hasMore: matchedTasks.length > searchLimit,
+        results,
+      });
     }
 
 

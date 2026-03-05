@@ -81,21 +81,56 @@ export async function handleSectionToolCall(name: string, args: ToolArgs, deps: 
       }
 
       const plan = getDevPlan(args.projectName);
-      const sections = plan.listSections();
+      let sections = plan.listSections();
+      const compact = args.compact === true;
+      const limit = typeof args.limit === 'number' ? args.limit : undefined;
+      const offset = typeof args.offset === 'number' ? args.offset : 0;
+      const sortOrder = (args.sort === 'asc') ? 'asc' : 'desc'; // default desc (newest first)
+
+      // Phase-161: Filters
+      if (args.section) {
+        sections = sections.filter(s => s.section === args.section);
+      }
+      if (args.moduleId) {
+        sections = sections.filter(s => s.moduleId === args.moduleId);
+      }
+
+      // Phase-161: Sort by updatedAt
+      sections.sort((a, b) => {
+        const aTime = a.updatedAt || 0;
+        const bTime = b.updatedAt || 0;
+        return sortOrder === 'desc' ? (bTime - aTime) : (aTime - bTime);
+      });
+
+      const total = sections.length;
+      const sliced = limit !== undefined ? sections.slice(offset, offset + limit) : sections.slice(offset);
 
       return JSON.stringify({
         projectName: args.projectName,
-        count: sections.length,
-        sections: sections.map(s => ({
-          id: s.id,
-          section: s.section,
-          subSection: s.subSection || null,
-          title: s.title,
-          version: s.version,
-          parentDoc: s.parentDoc || null,
-          contentPreview: s.content.slice(0, 200) + (s.content.length > 200 ? '...' : ''),
-          updatedAt: s.updatedAt,
-        })),
+        count: sliced.length,
+        total,
+        sort: sortOrder,
+        ...(limit !== undefined ? { limit, offset } : {}),
+        ...(args.section ? { filterSection: args.section } : {}),
+        ...(args.moduleId ? { filterModuleId: args.moduleId } : {}),
+        sections: sliced.map(s => compact
+          ? {
+              section: s.section,
+              subSection: s.subSection || null,
+              title: s.title,
+            }
+          : {
+              id: s.id,
+              section: s.section,
+              subSection: s.subSection || null,
+              title: s.title,
+              version: s.version,
+              moduleId: s.moduleId || null,
+              parentDoc: s.parentDoc || null,
+              contentPreview: s.content.slice(0, 200) + (s.content.length > 200 ? '...' : ''),
+              updatedAt: s.updatedAt,
+            }
+        ),
       });
     }
 
@@ -115,18 +150,30 @@ export async function handleSectionToolCall(name: string, args: ToolArgs, deps: 
 
       const plan = getDevPlan(args.projectName);
       const searchMode = (args.mode as SearchMode) || 'hybrid';
-      const searchLimit = args.limit || 10;
+      const searchModuleId = args.moduleId; // Phase-161: optional moduleId filter
+      // Phase-161: request more results if moduleId filter will reduce them
+      const searchLimit = searchModuleId ? Math.max((args.limit || 10) * 3, 30) : (args.limit || 10);
+      const finalLimit = args.limit || 10;
       const searchMinScore = args.minScore || 0;
 
       // 判断是否支持高级搜索
       const isSemanticEnabled = plan.isSemanticSearchEnabled?.() ?? false;
 
+      // Phase-161: Helper to apply moduleId post-filter
+      const applyModuleFilter = <T extends { moduleId?: string }>(items: T[]): T[] => {
+        if (!searchModuleId) return items;
+        return items.filter(r => r.moduleId === searchModuleId);
+      };
+
       if (plan.searchSectionsAdvanced) {
-        const results = plan.searchSectionsAdvanced(args.query, {
+        let results = plan.searchSectionsAdvanced(args.query, {
           mode: searchMode,
           limit: searchLimit,
           minScore: searchMinScore,
         });
+
+        // Phase-161: Post-filter by moduleId
+        results = applyModuleFilter(results).slice(0, finalLimit);
 
         return JSON.stringify({
           projectName: args.projectName,
@@ -134,12 +181,14 @@ export async function handleSectionToolCall(name: string, args: ToolArgs, deps: 
           mode: searchMode,
           semanticSearchEnabled: isSemanticEnabled,
           actualMode: isSemanticEnabled ? searchMode : 'literal',
+          ...(searchModuleId ? { filterModuleId: searchModuleId } : {}),
           count: results.length,
           results: results.map(r => ({
             id: r.id,
             section: r.section,
             subSection: r.subSection || null,
             title: r.title,
+            moduleId: r.moduleId || null,
             score: r.score ?? null,
             contentPreview: r.content.slice(0, 300) + (r.content.length > 300 ? '...' : ''),
             updatedAt: r.updatedAt,
@@ -147,19 +196,24 @@ export async function handleSectionToolCall(name: string, args: ToolArgs, deps: 
         });
       } else {
         // 回退到基础搜索（document 引擎）
-        const results = plan.searchSections(args.query, searchLimit);
+        let results = plan.searchSections(args.query, searchLimit);
+        // Phase-161: Post-filter by moduleId
+        const filtered = applyModuleFilter(results).slice(0, finalLimit);
+
         return JSON.stringify({
           projectName: args.projectName,
           query: args.query,
           mode: 'literal',
           semanticSearchEnabled: false,
           actualMode: 'literal',
-          count: results.length,
-          results: results.map(r => ({
+          ...(searchModuleId ? { filterModuleId: searchModuleId } : {}),
+          count: filtered.length,
+          results: filtered.map(r => ({
             id: r.id,
             section: r.section,
             subSection: r.subSection || null,
             title: r.title,
+            moduleId: r.moduleId || null,
             score: null,
             contentPreview: r.content.slice(0, 300) + (r.content.length > 300 ? '...' : ''),
             updatedAt: r.updatedAt,
