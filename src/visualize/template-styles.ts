@@ -485,11 +485,7 @@ export function getStyles(): string {
     .docs-item-more { display: none; align-items: center; justify-content: center; width: 20px; height: 20px; border-radius: 4px; background: transparent; border: none; color: #6b7280; font-size: 14px; cursor: pointer; flex-shrink: 0; transition: all 0.15s; padding: 0; line-height: 1; letter-spacing: 1px; }
     .docs-item:hover .docs-item-more { display: flex; }
     .docs-item-more:hover { background: rgba(99,102,241,0.25); color: #a5b4fc; }
-    .docs-paging-bar { border-top: 1px solid #374151; padding: 8px 10px 10px; flex-shrink: 0; }
-    .docs-load-more-btn { width: 100%; height: 30px; border-radius: 6px; border: 1px solid #374151; background: rgba(55,65,81,0.35); color: #d1d5db; font-size: 12px; cursor: pointer; transition: all 0.15s; }
-    .docs-load-more-btn:hover { border-color: #4b5563; background: rgba(75,85,99,0.45); }
-    .docs-load-more-btn:disabled { opacity: 0.55; cursor: not-allowed; }
-    .docs-paging-info { margin-top: 6px; font-size: 11px; color: #6b7280; text-align: center; }
+    /* Phase-158: 分页加载样式已移除 — 统一使用 /api/docs/all 一次加载 */
 
     .doc-manage-overlay { position: fixed; top: 0; left: 0; right: 0; bottom: 0; background: rgba(0,0,0,0.5); z-index: 9000; display: none; align-items: center; justify-content: center; }
     .doc-manage-overlay.active { display: flex; }

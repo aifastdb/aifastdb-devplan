@@ -201,10 +201,14 @@ function showStatsModal(nodeType) {
 
 // ========== 全局文档列表弹层 (Phase-18: 与文档浏览页共用同一组件) ==========
 
-/** 显示文档弹层 — 复用文档浏览页的 UI 样式和搜索功能 */
+/** 显示文档弹层 — 复用文档浏览页的 UI 样式和搜索功能
+ *  Phase-158: 缓存命中时跳过 loading spinner，直接渲染列表
+ */
 function showDocModal() {
   document.getElementById('statsModalTitle').textContent = '📄 文档库';
-  document.getElementById('statsModalCount').textContent = '';
+
+  // Phase-158: 判断是否有可用缓存
+  var hasCached = docsLoaded && docsData.length > 0 && !docsDataIsPartial;
 
   // 在 modal body 中渲染搜索栏 + 文档列表容器（复用文档浏览页 CSS 类名）
   var bodyHtml = '';
@@ -216,23 +220,32 @@ function showDocModal() {
   bodyHtml += '</div></div>';
   // 文档分组列表容器
   bodyHtml += '<div id="docModalGroupList" style="padding:8px 0;">';
-  bodyHtml += '<div style="text-align:center;padding:40px;color:#6b7280;font-size:12px;"><div class="spinner" style="margin:0 auto 12px;width:24px;height:24px;border-width:3px;"></div>加载文档列表...</div>';
+  if (!hasCached) {
+    bodyHtml += '<div style="text-align:center;padding:40px;color:#6b7280;font-size:12px;"><div class="spinner" style="margin:0 auto 12px;width:24px;height:24px;border-width:3px;"></div>加载文档列表...</div>';
+  }
   bodyHtml += '</div>';
 
   document.getElementById('statsModalBody').innerHTML = bodyHtml;
   updateStatsModalPosition();
   document.getElementById('statsModalOverlay').classList.add('active');
 
-  // 加载文档数据（全局共享，已加载则直接使用缓存）
-  loadDocsData(function(data, err) {
-    if (err) {
-      var list = document.getElementById('docModalGroupList');
-      if (list) list.innerHTML = '<div style="text-align:center;padding:40px;color:#f87171;font-size:12px;">加载失败: ' + err.message + '</div>';
-      return;
-    }
+  if (hasCached) {
+    // Phase-158: 缓存命中 → 跳过网络请求，直接渲染（渐进式）
     document.getElementById('statsModalCount').textContent = '(' + docsData.length + ')';
     renderDocsList(docsData, 'docModalGroupList', 'globalDocSelect');
-  });
+  } else {
+    // 缓存未命中 → 加载数据
+    document.getElementById('statsModalCount').textContent = '';
+    loadDocsData(function(data, err) {
+      if (err) {
+        var list = document.getElementById('docModalGroupList');
+        if (list) list.innerHTML = '<div style="text-align:center;padding:40px;color:#f87171;font-size:12px;">加载失败: ' + err.message + '</div>';
+        return;
+      }
+      document.getElementById('statsModalCount').textContent = '(' + docsData.length + ')';
+      renderDocsList(docsData, 'docModalGroupList', 'globalDocSelect');
+    });
+  }
 }
 
 /** 文档弹层搜索过滤 */

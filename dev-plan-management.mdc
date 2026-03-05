@@ -1,0 +1,235 @@
+---
+description: ai_db 项目的 DevPlan 配置。包含项目标识、文档层级、开发阶段、强制规则。通用的 DevPlan 工作流规则由用户级全局规则提供。
+globs: []
+alwaysApply: true
+mcpServers: aifastdb-devplan
+---
+
+# ai_db 项目 — DevPlan 配置
+
+> **MCP Server**: `aifastdb-devplan`（独立项目，源码位于 `D:\Project\git\aifastdb-devplan`）  
+> 通用的 DevPlan 工作流（触发词识别、阶段工作流、完成流程等）由用户级全局 Cursor Rule 提供（`C:\Users\daxue\.cursor\rules\dev-plan-management.mdc`）。
+
+## 项目标识
+
+```
+projectName = "ai_db"
+```
+
+## 文档层级
+
+| 层级 | 文件 | 用途 | 大小 |
+|------|------|------|------|
+| Layer 1 (鸟瞰) | [ai_db-overview.md](mdc:docs/data/ai_db-overview.md) | AI 首选阅读，< 500 行，一次读完 | ~360 行 |
+| Layer 2 (详细) | [FEDERATED_DB_DEVELOPMENT_PLAN.md](mdc:docs/data/FEDERATED_DB_DEVELOPMENT_PLAN.md) | 完整设计文档，分段读取 | 8000+ 行 |
+| Layer 3 (实时) | `.devplan/ai_db/` | MCP 工具查询任务状态 | — |
+
+## 快捷操作
+
+```
+devplan_get_progress(projectName: "ai_db")
+devplan_list_tasks(projectName: "ai_db")
+devplan_list_tasks(projectName: "ai_db", parentTaskId: "phase-15")
+devplan_list_tasks(projectName: "ai_db", status: "pending")
+devplan_complete_task(projectName: "ai_db", taskId: "T15.1")
+devplan_sync_git(projectName: "ai_db", dryRun: true)
+devplan_list_sections(projectName: "ai_db")
+devplan_get_section(projectName: "ai_db", section: "overview")
+devplan_export_markdown(projectName: "ai_db", scope: "tasks")
+devplan_list_modules(projectName: "ai_db")
+devplan_save_prompt(projectName: "ai_db", content: "用户 Prompt", relatedTaskId: "phase-X")
+devplan_list_prompts(projectName: "ai_db")
+devplan_memory_save(projectName: "ai_db", content: "...", memoryType: "decision")
+devplan_memory_recall(projectName: "ai_db", query: "...")
+devplan_memory_list(projectName: "ai_db")
+devplan_memory_context(projectName: "ai_db")
+devplan_memory_generate(projectName: "ai_db", limit: 5)  // AI 批量生成记忆
+```
+
+## 开发阶段概览
+
+| 阶段 | 状态 | 说明 |
+|------|------|------|
+| 阶段一~六 | ✅ 已完成 | 核心框架 + 跨库查询 + REST API + 前端 + 性能优化 |
+| 阶段七~八 | ✅ 已完成 | Store Trait + Federation 主入口 (异构存储) |
+| 阶段 7A/7B/8C | ✅ 已完成 | 修复巩固 + 生产能力 + 收尾补全 |
+| 阶段九~十一 | ✅ 已完成 | 跨库索引 + 查询计划器 + 跨库事务 |
+| 阶段十二~十三 | ✅ 已完成 | NAPI 绑定 + TypeScript 适配 |
+| 阶段十四 | ✅ 已完成 | 向量存储支持 (24/24) |
+| 阶段十五 | ✅ 已完成 | 记录级所有权与可见性控制 + 系统保护 (17/17) |
+
+---
+
+## 🔴 强制规则 1：修改代码时必须创建/关联 DevPlan 任务
+
+当用户要求对 `ai_db` 项目进行**代码修改、功能开发、Bug 修复**时，**必须**执行以下工作流：
+
+### 工作流
+
+1. **查看当前任务状态**：先调用 `devplan_list_tasks(projectName: "ai_db")` 查看是否有 `in_progress` 阶段
+2. **创建或关联任务**（二选一）：
+   - 如果修改属于已有的 `in_progress` 阶段 → 在该阶段下添加子任务
+   - 如果是独立的修改/功能 → 创建新的主任务（`devplan_create_main_task`）+ 子任务（`devplan_add_sub_task`）
+3. **完成后标记**：代码修改完成 + 编译通过后 → 调用 `devplan_complete_task` 标记子任务完成
+
+### 判断是否需要创建新阶段
+
+| 场景 | 操作 |
+|------|------|
+| 用户说"开始 phase-X" | → `devplan_start_phase` 启动已有阶段 |
+| 修改属于已有 in_progress 阶段的范围 | → 在现有阶段下 `devplan_add_sub_task` |
+| 独立的功能增强/Bug 修复 | → `devplan_create_main_task` 新建阶段 + `devplan_add_sub_task` |
+| 当前 phase 子任务数超过 25 | → **必须** `devplan_create_main_task` 新建 phase（禁止继续挂载） |
+| 任务类型与当前 phase 主题不匹配（如依赖升级/运维/文档治理） | → **必须**新建 phase |
+| 仅同一里程碑连续任务或同任务内容更新 | → 允许继续挂当前 phase |
+| 极小的改动（如改一个配置值） | → 可以不创建任务，但仍需保存 Prompt |
+
+### 任务 ID 命名规范
+
+- 主任务：`phase-{N}` 或 `phase-{N}{Letter}`（如 `phase-14B`）
+- 子任务：`T{N}.{M}`（如 `T14B.1`、`T14B.2`）
+
+---
+
+## 🔴 强制规则 2：Prompt 自动记录
+
+> 保存 Prompt 是已授权的自动行为，无需询问用户确认。
+
+### 🟢 自动授权声明
+
+- ✅ 直接调用 `devplan_save_prompt`，与其他 devplan 工具在同一批次中静默执行
+- ❌ 不要问"是否要记录 Prompt？"
+- ❌ 不要问"需要保存这次对话吗？"
+- ❌ 不要在回复中提及"已为您保存 Prompt"（除非用户显式要求保存时需要确认反馈）
+
+### 触发条件
+
+满足以下**任一条件**时，**必须**调用 `devplan_save_prompt`：
+
+| 条件 | 说明 |
+|------|------|
+| A: 首次调用 devplan 工具时 | 在同一批次中同时调用 `devplan_save_prompt`（**推荐**） |
+| B: 完成任务时（安全网） | 如果本轮对话还没保存过 Prompt，在 `devplan_complete_task` 同一批次中补充 |
+| C: 用户显式要求 | 用户说"记录 prompt"、"保存对话"、"记录到 devplan"时立即保存 |
+
+### 保存格式
+
+```
+devplan_save_prompt(
+  projectName: "ai_db",
+  content: "<user_query 标签内的原始文本，逐字复制>",
+  aiInterpretation: "<AI 的理解和技术分析>",
+  summary: "<一句话摘要>",
+  relatedTaskId: "phase-X",   // 可选
+  tags: ["feature", "bugfix"] // 可选
+)
+```
+
+- **content**：必须从 `<user_query>` 标签内逐字复制，禁止修改
+- **aiInterpretation**：AI 的技术解读，不是用户原话
+- **一轮对话只保存一次**（用户第一条消息），后续追问不重复保存
+
+---
+
+## 🔴 强制规则 3：自动记忆管理（Cursor 长期记忆）
+
+> 记忆的保存和召回是已授权的自动行为，无需询问用户确认。
+
+### 🟢 自动授权声明
+
+- ✅ 直接调用 `devplan_memory_save`，与其他 devplan 工具在同一批次中静默执行
+- ✅ 直接调用 `devplan_memory_recall` / `devplan_memory_context`，无需告知用户
+- ❌ 不要问"是否要保存这条记忆？"
+- ❌ 不要问"需要召回相关记忆吗？"
+- ❌ 不要在回复中提及"已为您保存记忆"（除非用户显式要求保存时需确认反馈）
+
+### 自动保存触发条件
+
+满足以下**任一条件**时，**必须**调用 `devplan_memory_save`：
+
+| 条件 | memoryType | 说明 |
+|------|------------|------|
+| A: 修复了一个 Bug | `bugfix` | 在 `devplan_complete_task` 同一批次中保存：Bug 根因 + 修复方案 |
+| B: 做出了架构/设计决策 | `decision` | 选择了技术方案 A 而非 B 时，保存决策理由 |
+| C: 发现重要技术洞察 | `insight` | 兼容性问题、性能特征、API 陷阱等 |
+| D: 完成一个 Phase | `summary` | 阶段摘要：关键成果 + 修改范围 |
+| E: 用户说"记住"/"remember" | 按内容分类 | 用户显式要求保存 |
+| F: 识别到代码模式/约定 | `pattern` | 首次发现项目中的命名规则、代码结构模式 |
+
+### 自动召回触发条件
+
+满足以下**任一条件**时，**应**调用记忆召回：
+
+| 条件 | 工具 | 说明 |
+|------|------|------|
+| A: 新会话开始 | `devplan_memory_context` | 在首次 devplan 工具调用同一批次中，获取项目上下文 |
+| B: 遇到可能解决过的问题 | `devplan_memory_recall` | 搜索 bugfix/insight 记忆 |
+| C: 讨论架构设计 | `devplan_memory_recall` | 搜索 decision 记忆，避免推翻之前的决策 |
+| D: 需要了解项目约定 | `devplan_memory_recall` | 搜索 preference/pattern 记忆 |
+
+### 保存格式
+
+```
+devplan_memory_save(
+  projectName: "ai_db",
+  content: "<简洁描述，1~3 句话>",
+  memoryType: "bugfix",         // decision/pattern/bugfix/insight/preference/summary
+  importance: 0.8,              // 0~1, 默认 0.5
+  tags: ["sharding", "fix"],    // 可选分类标签
+  relatedTaskId: "phase-24"     // 可选关联任务
+)
+```
+
+### 注意事项
+
+- **同一轮对话中同类型记忆只保存一次**（避免重复）
+- **content 要精炼**：1~3 句话概括，不要复制大段代码
+- **importance 合理评估**：Bug 修复 0.8~1.0，架构决策 0.7~0.9，模式 0.5~0.7
+
+### 🔴 批量记忆生成（AI 提炼工作流）
+
+> **触发词**：用户说"批量生成记忆" / "全量导入记忆" / "一键导入记忆" / "从文档生成记忆" / "从任务生成记忆" / "batch generate memories"
+
+**工作流（自动循环，不要等用户二次确认）：**
+
+```
+循环 {
+  result = devplan_memory_generate(projectName: "ai_db", limit: 5)
+  if (result.candidates.length === 0) → 报告完成 → 结束
+
+  for each candidate:
+    // 阅读 candidate.content → AI 提炼 1~3 句精华
+    // 判断 memoryType（不要盲目用 suggestedMemoryType）
+    // 一个候选项可生成多条记忆
+    // 跳过价值不高的内容（如 changelog、纯列表）
+    devplan_memory_save(
+      projectName: "ai_db",
+      content: "<AI 提炼后的精华>",
+      memoryType: "<AI 判断>",
+      importance: <AI 评估>,
+      tags: candidate.suggestedTags,
+      relatedTaskId: candidate.sourceType === 'task' ? candidate.sourceId : undefined
+    )
+
+  if (result.stats.remaining > 0) → 继续循环
+  else → 报告完成 → 结束
+}
+```
+
+---
+
+## 注意事项
+
+1. **优先读概览文件**：初次了解项目时，先读 [ai_db-overview.md](mdc:docs/data/ai_db-overview.md)（< 500 行），再按需深入 [FEDERATED_DB_DEVELOPMENT_PLAN.md](mdc:docs/data/FEDERATED_DB_DEVELOPMENT_PLAN.md) 的具体章节
+2. **数据存储位置**：本项目的 devplan 数据存储在 `D:\Project\git\ai_db\.devplan\ai_db\`（多项目路由）
+3. **通过 MCP 操作任务**：任务状态管理使用 `devplan_*` 系列 MCP 工具，不要手动编辑 JSONL 文件
+4. **完成任务后同步**：完成代码实现后，调用 `devplan_complete_task` 持久化状态（自动锚定 Git commit）
+5. **Git 回滚后检查**：如果执行了 `git reset` 或切换分支，运行 `devplan_sync_git` 检查任务状态一致性
+6. **概览文件需手动更新**：当有重大架构变更、新增阶段或新 API 时，同步更新 [ai_db-overview.md](mdc:docs/data/ai_db-overview.md)
+
+## 执行模式（自动推进）
+
+- 当阶段已启动并同步了 Cursor TodoList 后，采用**自动推进模式**：
+  - 完成当前子任务后，自动将其标记为 `completed`（`devplan_complete_task` + TodoList 完成）。
+  - 自动将下一个顺序子任务切换为 `in_progress` 并继续执行。
+  - 整个阶段执行过程中**不需要询问用户是否继续**，默认持续推进直到该阶段全部子任务完成或用户显式打断。

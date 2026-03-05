@@ -155,17 +155,41 @@ function createStore(project: string, basePath: string): IDevPlanStore {
 // ============================================================================
 
 /**
- * 为每次 API 请求创建新的 store 实例，以确保读取磁盘上最新的 WAL 数据。
+ * Phase-157: 服务端 store TTL 缓存。
  *
  * 背景：MCP 工具在另一个进程中更新任务状态（写入 WAL 文件），
- * 如果复用启动时创建的 store，内存中的数据不会自动同步磁盘变化，
- * 导致 /api/graph 和 /api/progress 返回过时数据。
+ * 如果无限复用同一个 store，内存中的数据不会自动同步磁盘变化。
+ * 但每次 API 请求都重建 SocialGraphV2 代价较高（需解析全部 WAL）。
  *
- * 由于项目图谱页面的 API 调用频率很低（仅刷新/加载时），
- * 每次重新创建 store 的性能开销完全可以接受。
+ * 策略：短时 TTL 缓存（默认 5 秒），同一窗口内密集的并行 API 调用
+ * （如 /api/graph + /api/progress + /api/docs/all 同时请求）复用同一个 store，
+ * 超过 TTL 后下次请求自动重建以获取最新数据。
+ *
+ * 写操作（POST /api/doc/save 等）使用 createFreshStore() 直接创建新实例，
+ * 并在完成后 invalidate 缓存（写后读一致性）。
  */
+const STORE_CACHE_TTL_MS = 5_000; // 5 seconds
+let _cachedStore: IDevPlanStore | null = null;
+let _cachedStoreAt = 0;
+
+/** 读操作优先：TTL 内复用 store，超时自动重建 */
+function getCachedStore(projectName: string, basePath: string): IDevPlanStore {
+  const now = Date.now();
+  if (_cachedStore && (now - _cachedStoreAt) < STORE_CACHE_TTL_MS) {
+    return _cachedStore;
+  }
+  _cachedStore = createDevPlan(projectName, basePath, 'graph');
+  _cachedStoreAt = now;
+  return _cachedStore;
+}
+
+/** 写操作：创建全新 store + invalidate 缓存 */
 function createFreshStore(projectName: string, basePath: string): IDevPlanStore {
-  return createDevPlan(projectName, basePath, 'graph');
+  const store = createDevPlan(projectName, basePath, 'graph');
+  // 写操作后 invalidate 缓存，确保下次读取获取最新数据
+  _cachedStore = null;
+  _cachedStoreAt = 0;
+  return store;
 }
 
 function getCurrentPhaseSnapshot(projectName: string): PhaseSnapshot | undefined {
@@ -365,7 +389,7 @@ function startServer(projectName: string, basePath: string, port: number): void 
 
         case '/api/graph': {
           // 每次请求重新创建 store，确保读取最新数据
-          const store = createFreshStore(projectName, basePath);
+          const store = getCachedStore(projectName, basePath);
           const includeDocuments = url.searchParams.get('includeDocuments') !== 'false';
           const includeModules = url.searchParams.get('includeModules') !== 'false';
           const includeNodeDegree = url.searchParams.get('includeNodeDegree') !== 'false';
@@ -395,7 +419,7 @@ function startServer(projectName: string, basePath: string, port: number): void 
 
         case '/api/progress': {
           // 每次请求重新创建 store，确保读取最新数据
-          const store = createFreshStore(projectName, basePath);
+          const store = getCachedStore(projectName, basePath);
           const progress = store.getProgress();
           // 附加模块和文档计数（分层加载模式下 graph.nodes 不含全部类型，需从此处获取真实数量）
           const sections = store.listSections();
@@ -464,7 +488,7 @@ function startServer(projectName: string, basePath: string, port: number): void 
 
         case '/api/prompts': {
           // 列出所有 Prompt 日志
-          const store = createFreshStore(projectName, basePath);
+          const store = getCachedStore(projectName, basePath);
           let prompts: any[] = [];
           try {
             if (typeof store.listPrompts === 'function') {
@@ -480,7 +504,7 @@ function startServer(projectName: string, basePath: string, port: number): void 
 
         case '/api/main-task': {
           // 获取单条主任务最新数据（用于主任务弹层行内刷新）
-          const store = createFreshStore(projectName, basePath);
+          const store = getCachedStore(projectName, basePath);
           const taskId = url.searchParams.get('taskId');
           if (!taskId) {
             res.writeHead(400, { 'Content-Type': 'application/json; charset=utf-8' });
@@ -572,7 +596,7 @@ function startServer(projectName: string, basePath: string, port: number): void 
 
         case '/api/stats': {
           // 详细统计数据 — 用于仪表盘页面
-          const store = createFreshStore(projectName, basePath);
+          const store = getCachedStore(projectName, basePath);
           const progress = store.getProgress();
           const sections = store.listSections();
           const modules = store.listModules();
@@ -684,7 +708,7 @@ function startServer(projectName: string, basePath: string, port: number): void 
         }
 
         case '/api/recall-observability': {
-          const store = createFreshStore(projectName, basePath);
+          const store = getCachedStore(projectName, basePath);
           let observability: any = null;
           if (typeof (store as any).getRecallObservability === 'function') {
             observability = (store as any).getRecallObservability();
@@ -701,7 +725,7 @@ function startServer(projectName: string, basePath: string, port: number): void 
 
         case '/api/memories': {
           // 列出所有记忆（用于记忆浏览页面）
-          const memStore = createFreshStore(projectName, basePath);
+          const memStore = getCachedStore(projectName, basePath);
           let memories: any[] = [];
           if (typeof (memStore as any).listMemories === 'function') {
             const memoryType = url.searchParams.get('memoryType') || undefined;
@@ -716,7 +740,7 @@ function startServer(projectName: string, basePath: string, port: number): void 
 
         case '/api/memories/generate': {
           // 从文档/任务中生成记忆候选项
-          const genStore = createFreshStore(projectName, basePath);
+          const genStore = getCachedStore(projectName, basePath);
           if (typeof (genStore as any).generateMemoryCandidates !== 'function') {
             res.writeHead(400, { 'Content-Type': 'application/json; charset=utf-8' });
             res.end(JSON.stringify({ error: 'generateMemoryCandidates not supported (requires graph engine)' }));
@@ -931,7 +955,7 @@ function startServer(projectName: string, basePath: string, port: number): void 
 
         case '/api/docs': {
           // 列出所有文档片段（不含内容，用于文档浏览页面左侧列表）
-          const store = createFreshStore(projectName, basePath);
+          const store = getCachedStore(projectName, basePath);
           const allSections = store.listSections();
           const docList = allSections.map((s: any) => ({
             section: s.section,
@@ -959,7 +983,7 @@ function startServer(projectName: string, basePath: string, port: number): void 
 
         case '/api/docs/paged': {
           // 文档分页列表（最小改造版）：page/limit（1-based page）
-          const store = createFreshStore(projectName, basePath);
+          const store = getCachedStore(projectName, basePath);
           const rawPage = parseInt(url.searchParams.get('page') || '1', 10);
           const rawLimit = parseInt(url.searchParams.get('limit') || '50', 10);
           const page = Number.isFinite(rawPage) && rawPage > 0 ? rawPage : 1;
@@ -996,9 +1020,52 @@ function startServer(projectName: string, basePath: string, port: number): void 
           break;
         }
 
+        case '/api/docs/all': {
+          // Phase-157: 全量文档（含 content + relatedTasks）— 一次加载，前端缓存
+          const store = getCachedStore(projectName, basePath);
+          const allSections = store.listSections();
+          const fullDocs = allSections.map((s: any) => {
+            const detail = store.getSection(s.section, s.subSection || undefined);
+            let relatedTasks: any[] = [];
+            if (store.getDocRelatedTasks) {
+              relatedTasks = store.getDocRelatedTasks(s.section, s.subSection || undefined).map((mt: any) => ({
+                id: mt.id,
+                taskId: mt.taskId,
+                title: mt.title,
+                status: mt.status,
+                priority: mt.priority,
+              }));
+            }
+            return {
+              section: s.section,
+              subSection: s.subSection || null,
+              title: s.title,
+              version: s.version || null,
+              moduleId: s.moduleId || null,
+              parentDoc: s.parentDoc || null,
+              childDocs: s.childDocs || [],
+              updatedAt: s.updatedAt || null,
+              content: detail?.content || '',
+              relatedTasks,
+            };
+          });
+          // 统一排序：更新时间倒序 → key 字典序
+          fullDocs.sort((a: any, b: any) => {
+            const ta = typeof a.updatedAt === 'number' ? a.updatedAt : 0;
+            const tb = typeof b.updatedAt === 'number' ? b.updatedAt : 0;
+            if (tb !== ta) return tb - ta;
+            const ka = `${a.section}|${a.subSection || ''}|${a.title || ''}`;
+            const kb = `${b.section}|${b.subSection || ''}|${b.title || ''}`;
+            return ka.localeCompare(kb);
+          });
+          res.writeHead(200, { 'Content-Type': 'application/json; charset=utf-8' });
+          res.end(JSON.stringify({ docs: fullDocs, total: fullDocs.length }));
+          break;
+        }
+
         case '/api/doc': {
           // 获取文档内容 — 按 section + subSection 查询
-          const store = createFreshStore(projectName, basePath);
+          const store = getCachedStore(projectName, basePath);
           const section = url.searchParams.get('section');
           const subSection = url.searchParams.get('subSection') || undefined;
 
@@ -1152,7 +1219,7 @@ function startServer(projectName: string, basePath: string, port: number): void 
             break;
           }
 
-          const store = createFreshStore(projectName, basePath);
+          const store = getCachedStore(projectName, basePath);
           const q = query.trim();
           const qLower = q.toLowerCase();
 
@@ -1228,7 +1295,7 @@ function startServer(projectName: string, basePath: string, port: number): void 
 
         case '/api/auto/next-action': {
           // GET /api/auto/next-action — 获取下一步该执行什么动作（executor 轮询）
-          const store = createFreshStore(projectName, basePath);
+          const store = getCachedStore(projectName, basePath);
           const nextAction = getAutopilotNextAction(store);
           res.writeHead(200, { 'Content-Type': 'application/json; charset=utf-8' });
           res.end(JSON.stringify(nextAction));
@@ -1237,7 +1304,7 @@ function startServer(projectName: string, basePath: string, port: number): void 
 
         case '/api/auto/current-phase': {
           // GET /api/auto/current-phase — 获取当前进行中阶段及全部子任务状态
-          const store = createFreshStore(projectName, basePath);
+          const store = getCachedStore(projectName, basePath);
           const status = getAutopilotStatus(store);
 
           if (!status.hasActivePhase || !status.activePhase) {
@@ -1402,7 +1469,7 @@ function startServer(projectName: string, basePath: string, port: number): void 
 
         case '/api/auto/status': {
           // GET /api/auto/status — 获取完整的 autopilot 状态（含心跳信息）
-          const store = createFreshStore(projectName, basePath);
+          const store = getCachedStore(projectName, basePath);
           const status = getAutopilotStatus(store);
           const heartbeatInfo = getLastHeartbeat(projectName);
 
@@ -1424,7 +1491,7 @@ function startServer(projectName: string, basePath: string, port: number): void 
 
         case '/api/auto/next-action': {
           // GET — 获取下一步该执行什么动作（供 executor 轮询）
-          const store = createFreshStore(projectName, basePath);
+          const store = getCachedStore(projectName, basePath);
           const nextAction = getAutopilotNextAction(store);
           res.writeHead(200, { 'Content-Type': 'application/json; charset=utf-8' });
           res.end(JSON.stringify(nextAction));
@@ -1433,7 +1500,7 @@ function startServer(projectName: string, basePath: string, port: number): void 
 
         case '/api/auto/current-phase': {
           // GET — 获取当前进行中阶段及全部子任务状态
-          const store = createFreshStore(projectName, basePath);
+          const store = getCachedStore(projectName, basePath);
           const status = getAutopilotStatus(store);
 
           if (!status.hasActivePhase || !status.activePhase) {
@@ -1580,7 +1647,7 @@ function startServer(projectName: string, basePath: string, port: number): void 
           // Returns a page of { nodes, edges, totalNodes, totalEdges, hasMore }
           // Now calls Rust SocialGraphV2.exportGraphPaginated() via NAPI
           // instead of full-loading + in-memory slicing.
-          const pagedStore = createFreshStore(projectName, basePath);
+          const pagedStore = getCachedStore(projectName, basePath);
           const offset = parseInt(url.searchParams.get('offset') || '0', 10);
           const limit = parseInt(url.searchParams.get('limit') || '5000', 10);
           const includeDocuments = url.searchParams.get('includeDocuments') !== 'false';
@@ -1659,7 +1726,7 @@ function startServer(projectName: string, basePath: string, port: number): void 
           // GET /api/graph/binary
           // Returns ArrayBuffer with compact binary format (5x smaller than JSON)
           // Client can parse directly as TypedArray, no JSON.parse needed.
-          const binaryStore = createFreshStore(projectName, basePath);
+          const binaryStore = getCachedStore(projectName, basePath);
           if ((binaryStore as any).exportGraphCompact) {
             try {
               const buf = (binaryStore as any).exportGraphCompact();
@@ -1702,7 +1769,7 @@ function startServer(projectName: string, basePath: string, port: number): void 
           // GET /api/graph/clusters
           // Returns pre-aggregated entity group summaries.
           // Ideal for low-zoom cluster views — no need to transfer all nodes.
-          const clusterStore = createFreshStore(projectName, basePath);
+          const clusterStore = getCachedStore(projectName, basePath);
           if ((clusterStore as any).getEntityGroupSummary) {
             try {
               const agg = (clusterStore as any).getEntityGroupSummary();
@@ -1842,7 +1909,7 @@ function startServer(projectName: string, basePath: string, port: number): void 
             break;
           }
 
-          const verifyStore = createFreshStore(projectName, basePath);
+          const verifyStore = getCachedStore(projectName, basePath);
           if (typeof (verifyStore as any).listMemories !== 'function') {
             res.writeHead(400, { 'Content-Type': 'application/json; charset=utf-8' });
             res.end(JSON.stringify({ error: 'listMemories not supported (requires graph engine)' }));
@@ -2224,7 +2291,7 @@ function startServer(projectName: string, basePath: string, port: number): void 
             // Phase-78C: 获取修复后向量计数（新 store 恢复后验证持久化是否成功）
             let vectorCountAfterReload = -1;
             try {
-              const checkStore = createFreshStore(projectName, basePath);
+              const checkStore = getCachedStore(projectName, basePath);
               const cg = (checkStore as any).graph;
               if (cg && typeof cg.vectorCount === 'function') {
                 vectorCountAfterReload = cg.vectorCount();

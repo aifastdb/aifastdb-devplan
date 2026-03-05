@@ -38,6 +38,9 @@ projectName = "aifastdb-devplan"
 | 用户说"开始 phase-X" | → `devplan_start_phase` 启动已有阶段 |
 | 修改属于已有 in_progress 阶段的范围 | → 在现有阶段下 `devplan_add_sub_task` |
 | 独立的功能增强/Bug 修复 | → `devplan_create_main_task` 新建阶段 + `devplan_add_sub_task` |
+| 当前 phase 子任务数超过 25 | → **必须** `devplan_create_main_task` 新建 phase（禁止继续挂载） |
+| 任务类型与当前 phase 主题不匹配（如依赖升级/运维/文档治理） | → **必须**新建 phase |
+| 仅同一里程碑连续任务或同任务内容更新 | → 允许继续挂当前 phase |
 | 极小的改动（如改一个配置值） | → 可以不创建任务，但仍需保存 Prompt |
 
 ### 任务 ID 命名规范

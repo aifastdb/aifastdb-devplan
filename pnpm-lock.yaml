@@ -8,12 +8,15 @@ importers:
 
   .:
     dependencies:
+      '@aifastdb/test-tools-hub':
+        specifier: file:./packages/test-tools-hub
+        version: file:packages/test-tools-hub
       '@modelcontextprotocol/sdk':
         specifier: ^1.0.0
         version: 1.26.0(zod@3.25.76)
       aifastdb:
-        specifier: file:../ai_db/packages/node
-        version: file:../ai_db/packages/node
+        specifier: ^3.3.9
+        version: 3.3.9
     devDependencies:
       '@types/node':
         specifier: ^20.11.0
@@ -32,6 +35,11 @@ importers:
         version: 5.9.3
 
 packages:
+
+  '@aifastdb/test-tools-hub@file:packages/test-tools-hub':
+    resolution: {directory: packages/test-tools-hub, type: directory}
+    engines: {node: '>=18'}
+    hasBin: true
 
   '@babel/code-frame@7.29.0':
     resolution: {integrity: sha512-9NhCeYjq9+3uxgdtp20LSiJXJvN0FeCtNGpJxuMFZ1Kv3cWUNb6DOhJwUvcVCzKGR66cw4njwM6hrJLqgOwbcw==}
@@ -375,8 +383,8 @@ packages:
     resolution: {integrity: sha512-kja8j7PjmncONqaTsB8fQ+wE2mSU2DJ9D4XKoJ5PFWIdRMa6SLSN1ff4mOr4jCbfRSsxR4keIiySJU0N9T5hIQ==}
     engines: {node: '>= 8.0.0'}
 
-  aifastdb@file:../ai_db/packages/node:
-    resolution: {directory: ../ai_db/packages/node, type: directory}
+  aifastdb@3.3.9:
+    resolution: {integrity: sha512-QgZvYaJUishuFa9cAxQhNZ7DgLeHUXYzxIydkFHemanSQF49/jep5b+7Wqcw/pcLXjnYfxaIyABv7HU/P0PhJA==}
     engines: {node: '>= 18'}
     hasBin: true
 
@@ -1674,6 +1682,8 @@ packages:
 
 snapshots:
 
+  '@aifastdb/test-tools-hub@file:packages/test-tools-hub': {}
+
   '@babel/code-frame@7.29.0':
     dependencies:
       '@babel/helper-validator-identifier': 7.28.5
@@ -2171,7 +2181,7 @@ snapshots:
     dependencies:
       humanize-ms: 1.2.1
 
-  aifastdb@file:../ai_db/packages/node:
+  aifastdb@3.3.9:
     dependencies:
       '@modelcontextprotocol/sdk': 1.26.0(zod@3.25.76)
       openai: 4.104.0(zod@3.25.76)

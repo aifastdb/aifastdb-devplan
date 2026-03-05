@@ -191,10 +191,7 @@ export function getHTML(projectName: string): string {
           <div class="docs-group-list" id="docsGroupList">
             <div style="text-align:center;padding:40px;color:#6b7280;font-size:12px;">加载中...</div>
           </div>
-          <div class="docs-paging-bar" id="docsPagingBar">
-            <button class="docs-load-more-btn" id="docsLoadMoreBtn" onclick="loadMoreDocs()">加载更多</button>
-            <div class="docs-paging-info" id="docsPagingInfo"></div>
-          </div>
+          <!-- Phase-158: 分页加载栏已移除，统一使用 /api/docs/all 一次加载 -->
         </div>
         <!-- Right: Document Content / Chat -->
         <div class="docs-content">

@@ -120,6 +120,8 @@ function loadDataTiered() {
     updateTieredIndicator();
     // 分层模式: 子任务和文档尚未加载，在图例上给出视觉提示
     markUnloadedTypeLegends();
+    // Phase-159: 后台预加载文档列表数据，点击文档统计时零延迟
+    if (typeof loadDocsData === 'function') setTimeout(function() { loadDocsData(); }, 100);
   }).catch(function(err) {
     log('分层加载失败: ' + err.message + ', 回退全量加载', false);
     // Fallback: full load
@@ -156,6 +158,8 @@ function loadDataFull() {
     renderStats(progressRes, graphRes);
     renderGraph();
     updateTieredIndicator();
+    // Phase-159: 后台预加载文档列表数据，点击文档统计时零延迟
+    if (typeof loadDocsData === 'function') setTimeout(function() { loadDocsData(); }, 100);
   }).catch(function(err) {
     log('数据获取失败: ' + err.message, false);
     document.getElementById('loading').innerHTML = '<div style="text-align:center"><div style="font-size:48px;margin-bottom:16px;">⚠️</div><p style="color:#f87171;">数据加载失败: ' + err.message + '</p><button class="refresh-btn" onclick="loadData()" style="margin-top:12px;">重试</button></div>';

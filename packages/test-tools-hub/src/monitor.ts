@@ -74,6 +74,50 @@ function readTailLines(filePath: string, maxLines = 120): string[] {
   return raw.split(/\r?\n/).filter(Boolean).slice(-maxLines);
 }
 
+interface ActiveProcessInfo {
+  name: string;
+  pid: number;
+  commandLine: string;
+  workingSetBytes?: number;
+}
+
+function getActiveProcessDetails(): ActiveProcessInfo[] {
+  try {
+    if (os.platform() === 'win32') {
+      const raw = execSync(
+        'powershell -NoProfile -Command "Get-CimInstance Win32_Process | Select-Object Name,ProcessId,CommandLine,WorkingSetSize | ConvertTo-Json -Compress"',
+        { encoding: 'utf8' },
+      ).trim();
+      if (!raw) return [];
+      const parsed = JSON.parse(raw);
+      const arr = Array.isArray(parsed) ? parsed : [parsed];
+      return arr.map((x: any) => ({
+        name: String(x.Name || ''),
+        pid: Number(x.ProcessId || 0),
+        commandLine: String(x.CommandLine || ''),
+        workingSetBytes: Number(x.WorkingSetSize || 0),
+      }));
+    }
+    const raw = execSync('ps -A -o pid=,comm=,args=', { encoding: 'utf8' });
+    return raw
+      .split(/\r?\n/)
+      .map((line) => line.trim())
+      .filter(Boolean)
+      .map((line) => {
+        const m = line.match(/^(\d+)\s+(\S+)\s*(.*)$/);
+        if (!m) return null;
+        return {
+          pid: Number(m[1]),
+          name: String(m[2] || ''),
+          commandLine: String(m[3] || ''),
+        } as ActiveProcessInfo;
+      })
+      .filter((x): x is ActiveProcessInfo => !!x);
+  } catch {
+    return [];
+  }
+}
+
 function getProcessSnapshot(): { cargoCount: number; rustcCount: number; benchCount: number } {
   try {
     if (os.platform() === 'win32') {
@@ -136,7 +180,6 @@ function inferAiDbBenchFromLog(
   const hasCompleted = /Phase-165 SHA256 Dedup Benchmark|SHA256 Dedup Benchmark/i.test(text);
   const hasAborted = /ABORTED by safety guard/i.test(text);
   const hasPreparing = /Preparing\s+\d+\s+image records/i.test(text);
-  const hasCompiling = /Compiling\s+/i.test(text);
   const hasRunning = /Running\s+benches\\/i.test(text) || /running 0 tests/i.test(text);
 
   let state = 'idle';
@@ -147,20 +190,20 @@ function inferAiDbBenchFromLog(
   } else if (hasCompleted) {
     state = 'completed';
     progress = 100;
-  } else if (hasPreparing) {
+  } else if (hasPreparing || hasRunning || proc.benchCount > 0) {
     state = 'preparing_data';
-    progress = 70;
-  } else if (hasCompiling || proc.rustcCount > 0) {
-    state = 'compiling';
-    progress = 35;
-  } else if (hasRunning || proc.benchCount > 0 || proc.cargoCount > 0) {
-    state = 'running';
-    progress = 85;
+    progress = 0;
+  } else {
+    // Compile/build phase is represented by cargo_build_monitor only.
+    state = 'waiting_build';
+    progress = 0;
   }
 
-  if (state !== 'completed' && state !== 'aborted' && staleSeconds >= staleSecondsThreshold) {
+  if (
+    (state === 'preparing_data' || state === 'running') &&
+    staleSeconds >= staleSecondsThreshold
+  ) {
     if (proc.benchCount > 0) state = 'running_no_output';
-    else if (proc.cargoCount > 0 || proc.rustcCount > 0) state = 'compiling_no_output';
     else state = 'stalled';
   }
 
@@ -178,8 +221,9 @@ function inferAiDbBenchFromLog(
   }
 
   if (!hasCompleted && !hasAborted && totalImages > 0 && inserted > 0) {
-    const ingestPct = Math.min(99, Math.floor((inserted * 100) / totalImages));
+    const ingestPct = Math.min(99, Math.max(1, Math.floor((inserted * 100) / totalImages)));
     progress = Math.max(progress, ingestPct);
+    state = 'running';
   }
 
   const metrics: Record<string, string> = {};
@@ -196,6 +240,70 @@ function inferAiDbBenchFromLog(
     if (m) metrics[key] = m[1].trim();
   }
   return { state, progress, inserted, totalImages, metrics };
+}
+
+function inferBuildMonitor(
+  lines: string[],
+  staleSeconds: number,
+  staleSecondsThreshold: number,
+  tool: TestToolDefinition,
+): {
+  state: string;
+  progress: number;
+  cargoCount: number;
+  rustcCount: number;
+  maxRustcWsMb: number;
+  matchedProcesses: ActiveProcessInfo[];
+} {
+  const text = lines.join('\n');
+  const keywords = (tool.commandKeywords || []).map((x) => String(x).toLowerCase()).filter(Boolean);
+  const all = getActiveProcessDetails();
+  const matched = all.filter((p) => {
+    const name = p.name.toLowerCase();
+    const cmd = p.commandLine.toLowerCase();
+    const isBuildProc = name === 'cargo.exe' || name === 'rustc.exe' || name === 'cargo' || name === 'rustc';
+    if (!isBuildProc) return false;
+    if (!keywords.length) return true;
+    return keywords.some((kw) => cmd.includes(kw));
+  });
+
+  const cargoCount = matched.filter((p) => p.name.toLowerCase().startsWith('cargo')).length;
+  const rustcProcs = matched.filter((p) => p.name.toLowerCase().startsWith('rustc'));
+  const rustcCount = rustcProcs.length;
+  const maxRustcWsMb = rustcProcs.reduce((m, p) => Math.max(m, Math.floor((p.workingSetBytes || 0) / (1024 * 1024))), 0);
+
+  const hasCompiling = /Compiling\s+/i.test(text);
+  const hasFinished = /Finished\s+`bench`\s+profile/i.test(text) || /Finished\s+`release`\s+profile/i.test(text);
+  const hasRunning = /Running\s+benches\\/i.test(text) || /Running\s+target/i.test(text);
+
+  let state = 'build_idle';
+  let progress = 0;
+  if (hasRunning) {
+    state = 'build_handoff_to_run';
+    progress = 90;
+  } else if (rustcCount > 0 || hasCompiling) {
+    state = 'compile_active';
+    progress = 45;
+  } else if (cargoCount > 0) {
+    state = 'build_planning';
+    progress = 20;
+  } else if (hasFinished && !hasRunning) {
+    state = 'build_completed';
+    progress = 100;
+  }
+
+  if ((state === 'compile_active' || state === 'build_planning') && staleSeconds >= staleSecondsThreshold) {
+    state = 'compile_no_output';
+  }
+
+  return {
+    state,
+    progress,
+    cargoCount,
+    rustcCount,
+    maxRustcWsMb,
+    matchedProcesses: matched.slice(0, 20),
+  };
 }
 
 export async function collectToolStatus(
@@ -233,6 +341,49 @@ export async function collectToolStatus(
           inserted: inferred.inserted,
           totalImages: inferred.totalImages,
           metrics: inferred.metrics,
+          tail: lines,
+        },
+      };
+    } catch (err) {
+      return {
+        tool,
+        reachable: false,
+        checkedAt: getNowIso(),
+        state: 'unreachable',
+        progress: 0,
+        phase,
+        error: err instanceof Error ? err.message : String(err),
+      };
+    }
+  }
+
+  if (tool.kind === 'cargo_build_monitor') {
+    try {
+      const logPath = String(tool.logPath || '');
+      const lines = logPath ? readTailLines(logPath, 140) : [];
+      const stat = logPath && fs.existsSync(logPath) ? fs.statSync(logPath) : null;
+      const staleSeconds = stat ? Math.max(0, Math.floor((Date.now() - stat.mtimeMs) / 1000)) : 0;
+      const staleSecondsThreshold = Number(tool.staleSecondsThreshold || 300);
+      const inferred = inferBuildMonitor(lines, staleSeconds, staleSecondsThreshold, tool);
+      return {
+        tool,
+        reachable: true,
+        checkedAt: getNowIso(),
+        state: inferred.state,
+        progress: inferred.progress,
+        phase,
+        raw: {
+          logPath: logPath || null,
+          logExists: !!stat,
+          logSizeBytes: stat ? stat.size : 0,
+          logLastModified: stat ? stat.mtime.toISOString() : null,
+          staleSeconds,
+          process: {
+            cargoCount: inferred.cargoCount,
+            rustcCount: inferred.rustcCount,
+            maxRustcWsMb: inferred.maxRustcWsMb,
+          },
+          matchedProcesses: inferred.matchedProcesses,
           tail: lines,
         },
       };

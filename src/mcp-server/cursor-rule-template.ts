@@ -45,6 +45,14 @@ devplan_list_modules(projectName: "${projectName}")
 |------|------|------|
 | （使用 devplan_list_tasks 查看最新状态） | | |
 
+## 强制拆分阶段规则（Phase Guardrails）
+
+| 场景 | 操作 |
+|------|------|
+| 当前 phase 子任务数超过 25 | → **必须**新建 phase（\`devplan_create_main_task\`） |
+| 任务类型与当前 phase 主题不匹配（如依赖升级/运维/文档治理） | → **必须**新建 phase |
+| 仅同一里程碑连续任务或同任务内容更新 | → 允许继续挂当前 phase |
+
 ## 注意事项
 
 1. **优先读概览文件**：初次了解项目时，先读概览文件（< 500 行），再按需深入完整设计文档

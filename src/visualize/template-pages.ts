@@ -8,13 +8,18 @@ export function getPagesScript(): string {
   return `
 // ========== Docs Browser ==========
 var docsLoaded = false;
-var docsData = [];       // 全部文档列表
+var docsData = [];       // 全部文档列表（元数据，不含 content）
 var currentDocKey = '';  // 当前选中文档的 key (section|subSection)
-var docsDataIsPartial = false; // true 表示当前 docsData 为分页子集
-var docsPageState = { page: 0, limit: 50, total: 0, hasMore: false, loading: false };
+var docsDataIsPartial = false; // Phase-158 兼容标志
 var docsCacheUpdatedAt = 0;
-var DOCS_CACHE_TTL_MS = 60000;
-var docsSilentRefreshing = false;
+var DOCS_CACHE_TTL_MS = 300000; // Phase-159: 5分钟缓存（从 60s 延长）
+
+// Phase-157: 统一文档内容缓存（docKey → full doc object with content）
+var docContentCache = {};
+var docContentCacheUpdatedAt = 0;
+
+// Phase-159: 内容预加载状态
+var _docsContentPreloading = false;
 
 /** 根据 docKey 从 docsData 中查找文档标题 */
 function findDocTitle(docKey) {
@@ -42,144 +47,69 @@ var SECTION_ICONS = {
   milestones: '▸', changelog: '▸', custom: '▸'
 };
 
-/** 加载文档数据（全局共享，仅请求一次） */
+/** 加载文档数据（全局共享，仅请求一次）
+ *  Phase-159: 改为 /api/docs（轻量，不含 content），列表秒加载。
+ *  内容通过 _preloadDocsContent() 异步后台填充 docContentCache。
+ */
 function loadDocsData(callback) {
   if (docsLoaded && docsData.length > 0 && !docsDataIsPartial) {
     if (callback) callback(docsData, null);
     return;
   }
+  // Phase-159: 使用轻量 /api/docs（不含 content，仅元数据）
   fetch('/api/docs').then(function(r) { return r.json(); }).then(function(data) {
-    docsData = data.docs || [];
+    var allDocs = data.docs || [];
+    docsData = allDocs;
     docsLoaded = true;
     docsDataIsPartial = false;
+    docsCacheUpdatedAt = Date.now();
+
     if (callback) callback(docsData, null);
+
+    // Phase-159: 列表渲染后，后台异步预加载文档内容
+    _preloadDocsContent();
   }).catch(function(err) {
     if (callback) callback(null, err);
   });
 }
 
-function fetchDocsPage(page, callback) {
-  var url = '/api/docs/paged?page=' + page + '&limit=' + docsPageState.limit;
-  fetch(url).then(function(r) {
-    if (!r.ok) throw new Error('HTTP ' + r.status);
-    return r.json();
-  }).then(function(data) {
-    if (callback) callback(data, null);
-  }).catch(function(err) {
-    if (callback) callback(null, err);
+/** Phase-159: 后台异步预加载全部文档内容到 docContentCache */
+function _preloadDocsContent() {
+  if (_docsContentPreloading) return;
+  // 如果内容缓存已经新鲜（5分钟内），跳过
+  if (docContentCacheUpdatedAt > 0 && (Date.now() - docContentCacheUpdatedAt) <= DOCS_CACHE_TTL_MS) return;
+  _docsContentPreloading = true;
+  fetch('/api/docs/all').then(function(r) { return r.json(); }).then(function(data) {
+    var allDocs = data.docs || [];
+    docContentCache = {};
+    for (var i = 0; i < allDocs.length; i++) {
+      var d = allDocs[i];
+      var key = d.section + (d.subSection ? '|' + d.subSection : '');
+      docContentCache[key] = d;
+    }
+    docContentCacheUpdatedAt = Date.now();
+    _docsContentPreloading = false;
+  }).catch(function() {
+    _docsContentPreloading = false;
   });
 }
+
+// Phase-158: fetchDocsPage 已移除 — 现在统一使用 /api/docs/all
 
 function hasFreshDocsCache() {
-  return docsPageState.page > 0 &&
+  return docsLoaded &&
     docsData.length > 0 &&
     (Date.now() - docsCacheUpdatedAt) <= DOCS_CACHE_TTL_MS;
 }
 
-function applyFirstPageData(data) {
-  docsData = (data && data.docs) ? data.docs : [];
-  docsPageState.page = data.page || 1;
-  docsPageState.limit = data.limit || docsPageState.limit;
-  docsPageState.total = data.total || docsData.length;
-  docsPageState.hasMore = !!data.hasMore;
-  docsLoaded = true;
-  docsDataIsPartial = true;
-  docsCacheUpdatedAt = Date.now();
-}
-
-function silentRefreshDocsFirstPage() {
-  if (docsSilentRefreshing) return;
-  docsSilentRefreshing = true;
-  fetchDocsPage(1, function(data, err) {
-    docsSilentRefreshing = false;
-    if (err) return; // 静默刷新失败不打断当前浏览
-
-    applyFirstPageData(data);
-    var searchInput = document.getElementById('docsSearch');
-    var searching = !!(searchInput && (searchInput.value || '').trim());
-    if (!searching) {
-      renderDocsList(docsData);
-    } else {
-      filterDocs();
-    }
-    updateDocsLoadMoreUI(searching);
-  });
-}
-
-function updateDocsLoadMoreUI(forceHide) {
-  var bar = document.getElementById('docsPagingBar');
-  var btn = document.getElementById('docsLoadMoreBtn');
-  var info = document.getElementById('docsPagingInfo');
-  if (!bar || !btn || !info) return;
-  if (forceHide) {
-    bar.style.display = 'none';
-    return;
-  }
-
-  bar.style.display = 'block';
-  var loaded = docsData.length;
-  var total = docsPageState.total || loaded;
-  info.textContent = '已加载 ' + loaded + ' / ' + total;
-
-  if (docsPageState.loading) {
-    btn.disabled = true;
-    btn.textContent = '加载中...';
-    return;
-  }
-  if (!docsPageState.hasMore) {
-    btn.disabled = true;
-    btn.textContent = '已全部加载';
-    return;
-  }
-  btn.disabled = false;
-  btn.textContent = '加载更多';
-}
-
-function loadMoreDocs() {
-  if (docsPageState.loading || docsSilentRefreshing || !docsPageState.hasMore) return;
-  docsPageState.loading = true;
-  updateDocsLoadMoreUI(false);
-  fetchDocsPage(docsPageState.page + 1, function(data, err) {
-    docsPageState.loading = false;
-    if (err) {
-      var info = document.getElementById('docsPagingInfo');
-      if (info) info.textContent = '加载失败: ' + err.message;
-      updateDocsLoadMoreUI(false);
-      return;
-    }
-    var pageDocs = (data && data.docs) ? data.docs : [];
-    var keySet = {};
-    for (var i = 0; i < docsData.length; i++) keySet[docItemKey(docsData[i])] = true;
-    for (var j = 0; j < pageDocs.length; j++) {
-      var k = docItemKey(pageDocs[j]);
-      if (!keySet[k]) {
-        docsData.push(pageDocs[j]);
-        keySet[k] = true;
-      }
-    }
-
-    docsPageState.page = data.page || (docsPageState.page + 1);
-    docsPageState.limit = data.limit || docsPageState.limit;
-    docsPageState.total = data.total || docsData.length;
-    docsPageState.hasMore = !!data.hasMore;
-    docsLoaded = true;
-    docsDataIsPartial = true;
-    docsCacheUpdatedAt = Date.now();
-
-    var searchInput = document.getElementById('docsSearch');
-    var searching = !!(searchInput && (searchInput.value || '').trim());
-    if (!searching) {
-      renderDocsList(docsData);
-    } else {
-      filterDocs();
-    }
-    updateDocsLoadMoreUI(searching);
-  });
-}
+// Phase-158: applyFirstPageData / silentRefreshDocsFirstPage / updateDocsLoadMoreUI / loadMoreDocs 已移除
+// 现在统一使用 /api/docs/all 一次加载全部文档，分页加载逻辑不再需要
 
 function loadDocsPage() {
   var list = document.getElementById('docsGroupList');
-  if (hasFreshDocsCache()) {
+
+  // Phase-157: 有完整缓存时直接渲染，无需再请求
+  if (hasFreshDocsCache() && !docsDataIsPartial) {
     var searchInput = document.getElementById('docsSearch');
     var searching = !!(searchInput && (searchInput.value || '').trim());
     if (!searching) {
@@ -187,30 +117,60 @@ function loadDocsPage() {
     } else {
       filterDocs();
     }
-    updateDocsLoadMoreUI(searching);
-    silentRefreshDocsFirstPage();
     return;
   }
 
+  // Phase-159: Stale-while-revalidate — 有旧数据时先显示旧数据，后台刷新
+  if (docsLoaded && docsData.length > 0) {
+    var searchInput2 = document.getElementById('docsSearch');
+    var searching2 = !!(searchInput2 && (searchInput2.value || '').trim());
+    if (!searching2) {
+      renderDocsList(docsData);
+    } else {
+      filterDocs();
+    }
+    // 后台静默刷新列表
+    _silentRefreshDocsList();
+    return;
+  }
+
+  // 首次加载 — 使用轻量 /api/docs（不含 content，秒加载）
   docsData = [];
   docsLoaded = false;
-  docsDataIsPartial = true;
   docsCacheUpdatedAt = 0;
-  docsPageState = { page: 0, limit: 50, total: 0, hasMore: false, loading: true };
   if (list) list.innerHTML = '<div style="text-align:center;padding:40px;color:#6b7280;font-size:12px;"><div class="spinner" style="margin:0 auto 12px;width:24px;height:24px;border-width:3px;"></div>加载文档列表...</div>';
-  updateDocsLoadMoreUI(false);
 
-  fetchDocsPage(1, function(data, err) {
-    docsPageState.loading = false;
-    if (err) {
-      if (list) list.innerHTML = '<div style="text-align:center;padding:40px;color:#f87171;font-size:12px;">加载失败: ' + err.message + '<br><span style="cursor:pointer;color:#818cf8;text-decoration:underline;" onclick="docsLoaded=false;loadDocsPage();">重试</span></div>';
-      updateDocsLoadMoreUI(true);
-      return;
-    }
-    applyFirstPageData(data);
+  fetch('/api/docs').then(function(r) {
+    if (!r.ok) throw new Error('HTTP ' + r.status);
+    return r.json();
+  }).then(function(data) {
+    var allDocs = (data && data.docs) ? data.docs : [];
+    docsData = allDocs;
+    docsLoaded = true;
+    docsDataIsPartial = false;
+    docsCacheUpdatedAt = Date.now();
+
     renderDocsList(docsData);
-    updateDocsLoadMoreUI(false);
+
+    // Phase-159: 列表渲染后，后台异步预加载文档内容
+    _preloadDocsContent();
+  }).catch(function(err) {
+    if (list) list.innerHTML = '<div style="text-align:center;padding:40px;color:#f87171;font-size:12px;">加载失败: ' + escHtml(err.message) + '<br><span style="cursor:pointer;color:#818cf8;text-decoration:underline;" onclick="docsLoaded=false;loadDocsPage();">重试</span></div>';
   });
+}
+
+/** Phase-159: 后台静默刷新文档列表（stale-while-revalidate） */
+function _silentRefreshDocsList() {
+  fetch('/api/docs').then(function(r) { return r.json(); }).then(function(data) {
+    var allDocs = (data && data.docs) ? data.docs : [];
+    docsData = allDocs;
+    docsLoaded = true;
+    docsDataIsPartial = false;
+    docsCacheUpdatedAt = Date.now();
+    // 不重新渲染列表，避免闪烁（数据通常没变，变了的话下次交互会自然更新）
+    // 同时刷新内容缓存
+    _preloadDocsContent();
+  }).catch(function() { /* 静默失败 */ });
 }
 
 /** 获取文档的 key（唯一标识） */
@@ -221,7 +181,37 @@ function docItemKey(item) {
 /** 记录哪些父文档处于折叠状态（key → true 表示折叠） */
 var docsCollapsedState = {};
 
-/** 将文档列表按 section 分组渲染，支持 parentDoc 层级
+/** 渲染单个文档分组的 HTML（内部辅助函数）
+ *  @returns HTML 字符串
+ */
+function renderDocGroupHtml(sec, items, allDocs, childrenMap, selectFn) {
+  var secName = SECTION_NAMES[sec] || sec;
+  var secIcon = SECTION_ICONS[sec] || '▸';
+
+  // 计算此分组下文档总数（含子文档）
+  var totalCount = 0;
+  for (var ci = 0; ci < allDocs.length; ci++) {
+    if (allDocs[ci].section === sec) totalCount++;
+  }
+
+  var html = '<div class="docs-group" data-section="' + sec + '">';
+  html += '<div class="docs-group-title" onclick="toggleDocsGroup(this)">';
+  html += '<span class="docs-group-arrow">▼</span>';
+  html += '<span>' + secName + '</span>';
+  html += '<span class="docs-group-count">' + totalCount + '</span>';
+  html += '</div>';
+  html += '<div class="docs-group-items">';
+
+  for (var ii = 0; ii < items.length; ii++) {
+    html += renderDocItemWithChildren(items[ii], childrenMap, secIcon, selectFn);
+  }
+
+  html += '</div></div>';
+  return html;
+}
+
+/** 将文档列表按 section 分组渲染，支持 parentDoc 层级 + 渐进式渲染
+ *  Phase-158: 大文档列表先渲染首批 ~30 条文档（立即可见），剩余分批追加
  *  @param docs      - 文档数组
  *  @param targetId  - 渲染目标容器 ID (默认 'docsGroupList')
  *  @param selectFn  - 点击文档时调用的函数名 (默认 'selectDoc')
@@ -296,35 +286,52 @@ function renderDocsList(docs, targetId, selectFn) {
     return;
   }
 
-  var html = '';
-  for (var gi = 0; gi < groupOrder.length; gi++) {
-    var sec = groupOrder[gi];
-    var items = groups[sec];
-    var secName = SECTION_NAMES[sec] || sec;
-    var secIcon = SECTION_ICONS[sec] || '▸';
+  // Phase-158: 渐进式渲染 — 先渲染前 ~30 条文档的分组，剩余异步追加
+  var FIRST_BATCH_ITEMS = 30;
+  var itemCount = 0;
+  var firstBatchEnd = groupOrder.length; // 默认全部渲染（小列表不分批）
 
-    // 计算此分组下文档总数（含子文档）
-    var totalCount = 0;
-    for (var ci = 0; ci < docs.length; ci++) {
-      if (docs[ci].section === sec) totalCount++;
+  if (docs.length > FIRST_BATCH_ITEMS) {
+    for (var gi = 0; gi < groupOrder.length; gi++) {
+      itemCount += (groups[groupOrder[gi]] || []).length;
+      if (itemCount >= FIRST_BATCH_ITEMS && gi < groupOrder.length - 1) {
+        firstBatchEnd = gi + 1;
+        break;
+      }
     }
-
-    html += '<div class="docs-group" data-section="' + sec + '">';
-    html += '<div class="docs-group-title" onclick="toggleDocsGroup(this)">';
-    html += '<span class="docs-group-arrow">▼</span>';
-    html += '<span>' + secName + '</span>';
-    html += '<span class="docs-group-count">' + totalCount + '</span>';
-    html += '</div>';
-    html += '<div class="docs-group-items">';
-
-    for (var ii = 0; ii < items.length; ii++) {
-      html += renderDocItemWithChildren(items[ii], childrenMap, secIcon, selectFn);
-    }
-
-    html += '</div></div>';
   }
 
+  // 首批立即渲染
+  var html = '';
+  for (var gi = 0; gi < firstBatchEnd; gi++) {
+    var sec = groupOrder[gi];
+    html += renderDocGroupHtml(sec, groups[sec], docs, childrenMap, selectFn);
+  }
   list.innerHTML = html;
+
+  // 剩余分组异步追加（每批最多 5 个分组，避免长帧）
+  if (firstBatchEnd < groupOrder.length) {
+    var remaining = groupOrder.slice(firstBatchEnd);
+    var BATCH_SIZE = 5;
+    (function appendBatch(start) {
+      if (start >= remaining.length) return;
+      var end = Math.min(start + BATCH_SIZE, remaining.length);
+      setTimeout(function() {
+        var batchHtml = '';
+        for (var bi = start; bi < end; bi++) {
+          var sec = remaining[bi];
+          batchHtml += renderDocGroupHtml(sec, groups[sec], docs, childrenMap, selectFn);
+        }
+        // 使用临时容器插入 DOM，避免 innerHTML 覆盖已有内容
+        var temp = document.createElement('div');
+        temp.innerHTML = batchHtml;
+        while (temp.firstChild) {
+          list.appendChild(temp.firstChild);
+        }
+        appendBatch(end);
+      }, 0);
+    })(0);
+  }
 }
 
 /** 递归渲染文档项及其子文档
@@ -430,10 +437,8 @@ function clearDocsSearch(searchId, clearBtnId, targetId, selectFn) {
 function filterDocs(searchId, targetId, selectFn) {
   var input = document.getElementById(searchId || 'docsSearch');
   var query = (input ? input.value || '' : '').toLowerCase().trim();
-  var isMainDocsSearch = !searchId || searchId === 'docsSearch';
   if (!query) {
     renderDocsList(docsData, targetId, selectFn);
-    if (isMainDocsSearch) updateDocsLoadMoreUI(false);
     return;
   }
   var filtered = [];
@@ -445,7 +450,6 @@ function filterDocs(searchId, targetId, selectFn) {
     }
   }
   renderDocsList(filtered, targetId, selectFn);
-  if (isMainDocsSearch) updateDocsLoadMoreUI(true);
 }
 
 // ========== Document Management Modal ==========
@@ -518,6 +522,7 @@ function confirmDeleteDoc() {
       closeDocManageModal();
       // 从本地数据中移除
       docsData = docsData.filter(function(d) { return docItemKey(d) !== _docManageKey; });
+      delete docContentCache[_docManageKey]; // Phase-159: 同步清除内容缓存
       renderDocsList(docsData);
       // 如果当前正在查看被删除的文档，清空右侧内容
       if (currentDocKey === _docManageKey) {
@@ -560,12 +565,18 @@ function selectDoc(docKey) {
   var contentView = document.getElementById('docsContentView');
   contentView.style.display = 'flex';
 
-  // 显示加载状态
+  // Phase-157: 缓存命中 → 零延迟渲染
+  var cached = docContentCache[docKey];
+  if (cached && cached.content !== undefined) {
+    renderDocContent(cached, section, subSection);
+    return;
+  }
+
+  // 缓存未命中 → 显示加载状态 + 请求 API
   document.getElementById('docsContentTitle').textContent = '加载中...';
   document.getElementById('docsContentMeta').innerHTML = '';
   document.getElementById('docsContentInner').innerHTML = '<div style="text-align:center;padding:40px;color:#6b7280;"><div class="spinner" style="margin:0 auto 12px;width:24px;height:24px;border-width:3px;"></div></div>';
 
-  // 请求文档内容
   var url = '/api/doc?section=' + encodeURIComponent(section);
   if (subSection) url += '&subSection=' + encodeURIComponent(subSection);
 
@@ -573,6 +584,8 @@ function selectDoc(docKey) {
     if (!r.ok) throw new Error('HTTP ' + r.status);
     return r.json();
   }).then(function(doc) {
+    // 回填缓存
+    docContentCache[docKey] = doc;
     renderDocContent(doc, section, subSection);
   }).catch(function(err) {
     document.getElementById('docsContentTitle').textContent = '加载失败';
@@ -1047,8 +1060,9 @@ function submitAddDoc() {
     if (!outcome || outcome.cancelled) return;
     // 成功
     hideAddDocForm();
-    // 刷新文档列表
+    // 刷新文档列表 + 内容缓存
     docsLoaded = false;
+    docContentCacheUpdatedAt = 0; // Phase-159: 强制内容缓存过期
     loadDocsData(function(data) {
       renderDocsList(docsData);
       // 自动选中刚添加的文档
@@ -1242,6 +1256,7 @@ function startBatchImport(mdFiles) {
     // 刷新文档列表
     if (successCount > 0) {
       docsLoaded = false;
+      docContentCacheUpdatedAt = 0; // Phase-159: 强制内容缓存过期
       loadDocsData(function() {
         renderDocsList(docsData);
       });
@@ -1565,7 +1580,7 @@ function loadTestToolsPage() {
     if (currentPage === 'test-tools') {
       refreshTestTools();
     }
-  }, 4000);
+  }, 10000);
 }
 
 function refreshTestTools() {
@@ -1613,6 +1628,17 @@ function fmtNum(n) {
   return x.toLocaleString('en-US');
 }
 
+function formatProgressWithCount(it) {
+  var pct = Number(it && it.progress || 0);
+  var raw = it && it.raw ? it.raw : null;
+  var inserted = raw && raw.inserted != null ? Number(raw.inserted) : NaN;
+  var total = raw && raw.totalImages != null ? Number(raw.totalImages) : NaN;
+  if (isFinite(inserted) && isFinite(total) && total > 0) {
+    return pct + '% (' + fmtNum(inserted) + '/' + fmtNum(total) + ')';
+  }
+  return pct + '%';
+}
+
 function renderTestToolsPage(data) {
   var summary = document.getElementById('testToolsSummary');
   var content = document.getElementById('testToolsContent');
@@ -1626,7 +1652,14 @@ function renderTestToolsPage(data) {
   for (var i = 0; i < items.length; i++) {
     var st = String(items[i].state || '');
     if (items[i].reachable) reachable++;
-    if (st === 'running' || st === 'compiling' || st === 'preparing_data') running++;
+    if (
+      st === 'running' ||
+      st === 'compiling' ||
+      st === 'preparing_data' ||
+      st === 'compile_active' ||
+      st === 'build_planning' ||
+      st === 'build_handoff_to_run'
+    ) running++;
     if (st === 'stalled' || st === 'aborted' || st === 'unreachable') stalled++;
     if (st === 'completed') completed++;
   }
@@ -1669,7 +1702,7 @@ function renderTestToolsPage(data) {
       '<td style="padding:8px;">' + escHtml((it.tool && it.tool.name) || '-') + '</td>' +
       '<td style="padding:8px;color:#9fb0d1;">' + escHtml((it.tool && it.tool.projectName) || '-') + '</td>' +
       '<td style="padding:8px;color:' + stateColor + ';font-weight:600;">' + escHtml(state) + '</td>' +
-      '<td style="padding:8px;">' + Number(it.progress || 0) + '%</td>' +
+      '<td style="padding:8px;">' + formatProgressWithCount(it) + '</td>' +
       '<td style="padding:8px;color:#9fb0d1;">' + escHtml(phase) + '</td>' +
       '<td style="padding:8px;">' + openAction + '</td>' +
       '</tr>';

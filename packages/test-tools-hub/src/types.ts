@@ -1,4 +1,4 @@
-export type TestToolKind = 'http_json_status' | 'ai_db_bench_local';
+export type TestToolKind = 'http_json_status' | 'ai_db_bench_local' | 'cargo_build_monitor';
 
 export interface TestToolDefinition {
   id: string;
@@ -11,6 +11,8 @@ export interface TestToolDefinition {
   enabled?: boolean;
   timeoutMs?: number;
   staleSecondsThreshold?: number;
+  // Optional command line keywords for process filtering (e.g. ["multimodal_dedup_bench"])
+  commandKeywords?: string[];
   tags?: string[];
 }
 

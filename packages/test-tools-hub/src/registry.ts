@@ -16,6 +16,19 @@ export const DEFAULT_REGISTRY: TestToolRegistry = {
       staleSecondsThreshold: 300,
       tags: ['benchmark', 'dedup', 'ai_db'],
     },
+    {
+      id: 'ai_db-build-monitor',
+      name: 'ai_db cargo/rustc build monitor',
+      projectName: 'ai_db',
+      description: 'Reusable build-stage monitor for benchmark pre-build and compile phases',
+      kind: 'cargo_build_monitor',
+      logPath: 'D:/Project/git/ai_db/multimodal_dedup_bench_1m.log',
+      commandKeywords: ['multimodal_dedup_bench'],
+      enabled: true,
+      timeoutMs: 3000,
+      staleSecondsThreshold: 300,
+      tags: ['build', 'compile', 'ai_db'],
+    },
   ],
 };
 
