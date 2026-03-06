@@ -57,7 +57,8 @@ function loadDocsData(callback) {
     return;
   }
   // Phase-159: 使用轻量 /api/docs（不含 content，仅元数据）
-  fetch('/api/docs').then(function(r) { return r.json(); }).then(function(data) {
+  // Phase-160: 添加 cache: 'no-store' 确保绕过浏览器缓存
+  fetch('/api/docs', { cache: 'no-store' }).then(function(r) { return r.json(); }).then(function(data) {
     var allDocs = data.docs || [];
     docsData = allDocs;
     docsLoaded = true;
@@ -79,7 +80,7 @@ function _preloadDocsContent() {
   // 如果内容缓存已经新鲜（5分钟内），跳过
   if (docContentCacheUpdatedAt > 0 && (Date.now() - docContentCacheUpdatedAt) <= DOCS_CACHE_TTL_MS) return;
   _docsContentPreloading = true;
-  fetch('/api/docs/all').then(function(r) { return r.json(); }).then(function(data) {
+  fetch('/api/docs/all', { cache: 'no-store' }).then(function(r) { return r.json(); }).then(function(data) {
     var allDocs = data.docs || [];
     docContentCache = {};
     for (var i = 0; i < allDocs.length; i++) {
@@ -140,7 +141,8 @@ function loadDocsPage() {
   docsCacheUpdatedAt = 0;
   if (list) list.innerHTML = '<div style="text-align:center;padding:40px;color:#6b7280;font-size:12px;"><div class="spinner" style="margin:0 auto 12px;width:24px;height:24px;border-width:3px;"></div>加载文档列表...</div>';
 
-  fetch('/api/docs').then(function(r) {
+  // Phase-160: 添加 cache: 'no-store' 确保绕过浏览器缓存
+  fetch('/api/docs', { cache: 'no-store' }).then(function(r) {
     if (!r.ok) throw new Error('HTTP ' + r.status);
     return r.json();
   }).then(function(data) {
@@ -159,15 +161,35 @@ function loadDocsPage() {
   });
 }
 
-/** Phase-159: 后台静默刷新文档列表（stale-while-revalidate） */
+/** Phase-159: 后台静默刷新文档列表（stale-while-revalidate）
+ *  Phase-160: 检测数据变化（数量或最新更新时间）并自动重新渲染列表
+ */
 function _silentRefreshDocsList() {
-  fetch('/api/docs').then(function(r) { return r.json(); }).then(function(data) {
+  var prevCount = docsData.length;
+  var prevNewest = 0;
+  for (var pi = 0; pi < docsData.length; pi++) {
+    if ((docsData[pi].updatedAt || 0) > prevNewest) prevNewest = docsData[pi].updatedAt || 0;
+  }
+  fetch('/api/docs', { cache: 'no-store' }).then(function(r) { return r.json(); }).then(function(data) {
     var allDocs = (data && data.docs) ? data.docs : [];
     docsData = allDocs;
     docsLoaded = true;
     docsDataIsPartial = false;
     docsCacheUpdatedAt = Date.now();
-    // 不重新渲染列表，避免闪烁（数据通常没变，变了的话下次交互会自然更新）
+    // Phase-160: 检测是否有变化（文档数量或最新更新时间不同）
+    var newNewest = 0;
+    for (var ni = 0; ni < allDocs.length; ni++) {
+      if ((allDocs[ni].updatedAt || 0) > newNewest) newNewest = allDocs[ni].updatedAt || 0;
+    }
+    if (allDocs.length !== prevCount || newNewest !== prevNewest) {
+      var searchInput = document.getElementById('docsSearch');
+      var searching = !!(searchInput && (searchInput.value || '').trim());
+      if (!searching) {
+        renderDocsList(docsData);
+      } else {
+        filterDocs();
+      }
+    }
     // 同时刷新内容缓存
     _preloadDocsContent();
   }).catch(function() { /* 静默失败 */ });
@@ -224,12 +246,22 @@ function renderDocsList(docs, targetId, selectFn) {
   // 建立 parentDoc → children 映射，区分顶级和子文档
   var childrenMap = {};  // parentDocKey → [child items]
   var childKeySet = {};  // 属于子文档的 key 集合
+  // Phase-160: 先建立所有文档的 key 集合，用于校验 parentDoc 是否有效
+  var allDocKeys = {};
+  for (var i = 0; i < docs.length; i++) {
+    allDocKeys[docItemKey(docs[i])] = true;
+  }
   for (var i = 0; i < docs.length; i++) {
     var d = docs[i];
     if (d.parentDoc) {
-      if (!childrenMap[d.parentDoc]) childrenMap[d.parentDoc] = [];
-      childrenMap[d.parentDoc].push(d);
-      childKeySet[docItemKey(d)] = true;
+      // Phase-160: 校验 parentDoc 指向的父文档是否存在
+      // 如果父文档不存在（孤儿文档），将其作为顶级文档处理
+      if (allDocKeys[d.parentDoc]) {
+        if (!childrenMap[d.parentDoc]) childrenMap[d.parentDoc] = [];
+        childrenMap[d.parentDoc].push(d);
+        childKeySet[docItemKey(d)] = true;
+      }
+      // else: parentDoc 无效，不加入 childKeySet，后续作为顶级文档渲染
     }
   }
 

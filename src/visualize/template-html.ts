@@ -666,6 +666,22 @@ export function getHTML(projectName: string): string {
                       <span class="s3d-toggle-label">节点文字标签 <span style="font-size:10px;color:#6b7280;margin-left:4px;">(在节点下方显示名称)</span></span>
                       <label class="s3d-toggle"><input type="checkbox" id="s3dShowLabels" checked onchange="update3DSetting('showLabels',this.checked)"><span class="s3d-toggle-slider"></span></label>
                     </div>
+                    <div class="s3d-group" style="margin-top:6px;padding-top:8px;border-top:1px solid rgba(99,102,241,0.12);">
+                      <div style="font-size:11px;color:#94a3b8;margin-bottom:8px;">🎨 3D 视觉效果预设</div>
+                      <div class="s3d-layout-radios" style="display:flex;gap:8px;">
+                        <label style="flex:1;display:flex;align-items:center;gap:6px;padding:8px 10px;background:rgba(99,102,241,0.08);border:1px solid rgba(99,102,241,0.2);border-radius:8px;cursor:pointer;font-size:12px;color:#e2e8f0;transition:all 0.2s;">
+                          <input type="radio" name="s3dVisualEffect" value="classic" onchange="update3DEffectPreset('classic')" style="accent-color:#6366f1;">
+                          <span>Classic</span>
+                        </label>
+                        <label style="flex:1;display:flex;align-items:center;gap:6px;padding:8px 10px;background:rgba(99,102,241,0.08);border:1px solid rgba(99,102,241,0.2);border-radius:8px;cursor:pointer;font-size:12px;color:#e2e8f0;transition:all 0.2s;">
+                          <input type="radio" name="s3dVisualEffect" value="blur" onchange="update3DEffectPreset('blur')" style="accent-color:#6366f1;">
+                          <span>Blur Effect</span>
+                        </label>
+                      </div>
+                      <div class="s3d-desc" style="font-size:10px;color:#64748b;margin-top:6px;">
+                        Classic 保留现有 DevPlan 风格；Blur Effect 启用独立的发光节点与浮动控件视觉。
+                      </div>
+                    </div>
                     <div class="s3d-toggle-row">
                       <span class="s3d-toggle-label">流动粒子特效</span>
                       <label class="s3d-toggle"><input type="checkbox" id="s3dParticles" checked onchange="update3DSetting('particles',this.checked)"><span class="s3d-toggle-slider"></span></label>

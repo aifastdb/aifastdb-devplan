@@ -958,6 +958,7 @@ function startServer(projectName: string, basePath: string, port: number): void 
           const store = getCachedStore(projectName, basePath);
           const allSections = store.listSections();
           const docList = allSections.map((s: any) => ({
+            id: s.id || null,
             section: s.section,
             subSection: s.subSection || null,
             title: s.title,
@@ -991,6 +992,7 @@ function startServer(projectName: string, basePath: string, port: number): void 
 
           const allSections = store.listSections();
           const docList = allSections.map((s: any) => ({
+            id: s.id || null,
             section: s.section,
             subSection: s.subSection || null,
             title: s.title,
@@ -1037,6 +1039,7 @@ function startServer(projectName: string, basePath: string, port: number): void 
               }));
             }
             return {
+              id: s.id || null,
               section: s.section,
               subSection: s.subSection || null,
               title: s.title,

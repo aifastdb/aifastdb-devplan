@@ -429,6 +429,7 @@ var S3D_DEFAULTS = {
   orbitFlatten: 0.6,      // Z 轴压平力度 (0=不压平/球壳, 1=完全压平/圆盘)
   showOrbits: true,       // 显示轨道环线
   showLabels: true,       // 显示节点文字标签
+  visualEffect: 'classic', // 3D 视觉预设: classic | blur (兼容旧值 influencer)
   sizeProject: 50,
   sizeModule: 25,
   sizeMainTask: 15,
@@ -478,7 +479,29 @@ function update3DSetting(key, value) {
     if (typeof value === 'number') valEl.textContent = value.toFixed ? (Number.isInteger(value) ? value : value.toFixed(key === 'alphaDecay' ? 3 : 2)) : value;
     else valEl.textContent = value;
   }
+  if (USE_3D && key === 'showLabels' && typeof loadData === 'function') {
+    showSettingsToast('✅ 标签显示设置已更新，正在重新加载...');
+    setTimeout(function() { loadData(); }, 220);
+    return;
+  }
   showSettingsToast('✅ 3D 参数已保存，刷新项目图谱页面生效');
+}
+
+function update3DEffectPreset(mode) {
+  if (mode === 'influencer') mode = 'blur'; // 兼容旧调用
+  if (mode !== 'classic' && mode !== 'blur') mode = 'classic';
+  var settings = get3DSettings();
+  var prev = settings.visualEffect || 'classic';
+  if (prev === 'influencer') prev = 'blur';
+  settings.visualEffect = mode;
+  save3DSettings(settings);
+
+  if (prev !== mode && USE_3D && typeof loadData === 'function') {
+    showSettingsToast('✅ 3D 视觉效果切换为 ' + (mode === 'blur' ? 'Blur Effect' : 'Classic') + '，正在重新加载...');
+    setTimeout(function() { loadData(); }, 280);
+    return;
+  }
+  showSettingsToast('✅ 3D 视觉效果已切换为 ' + (mode === 'blur' ? 'Blur Effect' : 'Classic'));
 }
 
 // 兼容旧调用: 重定向到统一颜色管理
@@ -574,6 +597,13 @@ function init3DSettingsUI() {
   // Show/hide orbital-specific settings
   var orbitalSettings = document.getElementById('s3dOrbitalSettings');
   if (orbitalSettings) orbitalSettings.style.display = s.layoutMode === 'orbital' ? 'block' : 'none';
+
+  // Visual effect preset
+  var effect = (s.visualEffect === 'blur' || s.visualEffect === 'influencer') ? 'blur' : 'classic';
+  var effectRadios = document.querySelectorAll('input[name="s3dVisualEffect"]');
+  for (var j = 0; j < effectRadios.length; j++) {
+    effectRadios[j].checked = (effectRadios[j].value === effect);
+  }
 }
 
 // Initialize 3D settings UI on page load

@@ -113,6 +113,11 @@ function get3DNodeColor(node) {
 }
 
 function get3DLinkColor(link) {
+  var _s = get3DSettings();
+  var _eff = _s.visualEffect;
+  if (_eff === 'influencer') _eff = 'blur'; // 兼容旧值
+  // Blur Effect: 对齐 AI_Influencers_X 的默认灰白细线
+  if (_eff === 'blur') return 'rgba(255,255,255,0.07)';
   var label = link._label || '';
   if (label === 'has_main_task') return 'rgba(147,197,253,0.18)';
   if (label === 'has_sub_task')  return 'rgba(129,140,248,0.12)';
@@ -181,6 +186,37 @@ function createRingTexture(color, size) {
 
 // 缓存 glow 纹理 (避免每个节点重复创建)
 var _glowTextureCache = {};
+// 缓存标签纹理 (label + color)
+var _labelTextureCache = {};
+
+function trimLabelText(text, maxLen) {
+  if (!text) return '';
+  var s = String(text);
+  if (s.length <= maxLen) return s;
+  return s.slice(0, Math.max(1, maxLen - 1)) + '…';
+}
+
+function createLabelTexture(text, color) {
+  var key = String(text) + '|' + String(color || '#e5e7eb');
+  if (_labelTextureCache[key]) return _labelTextureCache[key];
+  var canvas = document.createElement('canvas');
+  canvas.width = 512;
+  canvas.height = 128;
+  var ctx = canvas.getContext('2d');
+  ctx.clearRect(0, 0, canvas.width, canvas.height);
+  ctx.font = 'bold 40px Arial, sans-serif';
+  ctx.textAlign = 'center';
+  ctx.textBaseline = 'middle';
+  ctx.strokeStyle = 'rgba(0,0,0,0.75)';
+  ctx.lineWidth = 10;
+  ctx.strokeText(text, 256, 64);
+  ctx.fillStyle = color || '#e5e7eb';
+  ctx.fillText(text, 256, 64);
+  var tex = new THREE.CanvasTexture(canvas);
+  tex.needsUpdate = true;
+  _labelTextureCache[key] = tex;
+  return tex;
+}
 
 // Phase-75: 边类型 → 高亮色映射 (提升为全局，供增量注入使用)
 var LINK_3D_HIGHLIGHT_COLORS = {
@@ -205,6 +241,7 @@ function render3DGraph(container, visibleNodes, visibleEdges) {
 
   // ── 从自定义设置加载参数 ──
   var _s3d = get3DSettings();
+  var _effectPreset = (_s3d.visualEffect === 'blur' || _s3d.visualEffect === 'influencer') ? 'blur' : 'classic';
   // 重新加载颜色和大小（确保使用最新设置）
   NODE_3D_COLORS = load3DColorsFromSettings();
   NODE_3D_SIZES = load3DSizesFromSettings();
@@ -368,42 +405,65 @@ function render3DGraph(container, visibleNodes, visibleEdges) {
       // ── 创建容器 Group ──
       var group = new THREE.Group();
 
-      // ── 节点几何体 (核心实体) ──
+      // ── 节点几何体 + 视觉预设 ──
       var coreMesh;
-      if (t === 'module') {
-        var size = 10;
-        var geo = new THREE.BoxGeometry(size, size, size);
-        var mat = new THREE.MeshLambertMaterial({ color: color, transparent: true, opacity: _s3d.nodeOpacity, emissive: color, emissiveIntensity: 0.3 });
-        coreMesh = new THREE.Mesh(geo, mat);
-      } else if (t === 'project') {
-        var geo = new THREE.OctahedronGeometry(14);
-        var mat = new THREE.MeshLambertMaterial({ color: color, transparent: true, opacity: _s3d.nodeOpacity, emissive: color, emissiveIntensity: 0.4 });
-        coreMesh = new THREE.Mesh(geo, mat);
-      } else if (t === 'document') {
-        var geo = new THREE.BoxGeometry(7, 8.5, 2);
-        var mat = new THREE.MeshLambertMaterial({ color: color, transparent: true, opacity: _s3d.nodeOpacity * 0.92, emissive: color, emissiveIntensity: 0.25 });
-        coreMesh = new THREE.Mesh(geo, mat);
+      if (_effectPreset === 'blur') {
+        // Influencer 预设: 多层球体发光（参考 AI_Influencers_X）
+        var nodeSize = { 'project': 10, 'module': 8, 'main-task': 6, 'sub-task': 4.4, 'document': 4.8, 'memory': 4.6 }[t] || 4.2;
+        var layerCount = 12;
+        for (var li = layerCount - 1; li >= 0; li--) {
+          var lt = li / layerCount;
+          var lscale = 1.0 + (lt * 1.0);
+          var lopacity = 0.05 + (Math.pow(1 - lt, 3) * 0.32);
+          var layerGeo = new THREE.SphereGeometry(nodeSize * lscale, 18, 16);
+          var layerMat = new THREE.MeshBasicMaterial({
+            color: color,
+            transparent: true,
+            opacity: lopacity,
+            depthWrite: false
+          });
+          group.add(new THREE.Mesh(layerGeo, layerMat));
+        }
+        var blurCoreGeo = new THREE.SphereGeometry(nodeSize * 0.82, 16, 14);
+        var blurCoreMat = new THREE.MeshBasicMaterial({
+          color: color,
+          transparent: true,
+          opacity: Math.min(1, _s3d.nodeOpacity + 0.06)
+        });
+        coreMesh = new THREE.Mesh(blurCoreGeo, blurCoreMat);
+        group.add(coreMesh);
       } else {
-        // 主任务 / 子任务 → 球体
-        var radius = t === 'main-task' ? 5.5 : 3.5;
-        var geo = new THREE.SphereGeometry(radius, 16, 12);
-        var mat = new THREE.MeshLambertMaterial({ color: color, transparent: true, opacity: _s3d.nodeOpacity, emissive: color, emissiveIntensity: 0.3 });
-        coreMesh = new THREE.Mesh(geo, mat);
-      }
-      group.add(coreMesh);
+        // Classic 预设: 现有 DevPlan 视觉
+        if (t === 'module') {
+          var size = 10;
+          var geo = new THREE.BoxGeometry(size, size, size);
+          var mat = new THREE.MeshLambertMaterial({ color: color, transparent: true, opacity: _s3d.nodeOpacity, emissive: color, emissiveIntensity: 0.3 });
+          coreMesh = new THREE.Mesh(geo, mat);
+        } else if (t === 'project') {
+          var geo = new THREE.OctahedronGeometry(14);
+          var mat = new THREE.MeshLambertMaterial({ color: color, transparent: true, opacity: _s3d.nodeOpacity, emissive: color, emissiveIntensity: 0.4 });
+          coreMesh = new THREE.Mesh(geo, mat);
+        } else if (t === 'document') {
+          var geo = new THREE.BoxGeometry(7, 8.5, 2);
+          var mat = new THREE.MeshLambertMaterial({ color: color, transparent: true, opacity: _s3d.nodeOpacity * 0.92, emissive: color, emissiveIntensity: 0.25 });
+          coreMesh = new THREE.Mesh(geo, mat);
+        } else {
+          // 主任务 / 子任务 → 球体
+          var radius = t === 'main-task' ? 5.5 : 3.5;
+          var geo = new THREE.SphereGeometry(radius, 16, 12);
+          var mat = new THREE.MeshLambertMaterial({ color: color, transparent: true, opacity: _s3d.nodeOpacity, emissive: color, emissiveIntensity: 0.3 });
+          coreMesh = new THREE.Mesh(geo, mat);
+        }
+        group.add(coreMesh);
 
-      // ── 发光光晕 Sprite (Glow Aura) ──
-      if (true) {
+        // ── 发光光晕 Sprite (Glow Aura) ──
         var glowSize = { 'project': 60, 'module': 40, 'main-task': 26, 'sub-task': 18, 'document': 22 }[t] || 16;
-
-        // 获取或创建缓存的 glow texture
         var cacheKey = color + '_' + glowSize;
         if (!_glowTextureCache[cacheKey]) {
           var canvas = createGlowTexture(color, 128);
           _glowTextureCache[cacheKey] = new THREE.CanvasTexture(canvas);
         }
         var glowTex = _glowTextureCache[cacheKey];
-
         var spriteMat = new THREE.SpriteMaterial({
           map: glowTex,
           transparent: true,
@@ -414,6 +474,31 @@ function render3DGraph(container, visibleNodes, visibleEdges) {
         var sprite = new THREE.Sprite(spriteMat);
         sprite.scale.set(glowSize, glowSize, 1);
         group.add(sprite);
+      }
+
+      // ── showLabels: 真实 3D 标签渲染 (Sprite Billboard) ──
+      if (_s3d.showLabels) {
+        var maxLabelLen = _effectPreset === 'blur' ? 26 : 20;
+        var labelText = trimLabelText(n.label || n.id, maxLabelLen);
+        if (labelText) {
+          var isHugeGraph = nodes3d.length > 1500;
+          var isLowPriorityType = (t === 'sub-task' || t === 'document' || t === 'memory');
+          if (!(isHugeGraph && isLowPriorityType && !isHighlighted)) {
+            var labelTex = createLabelTexture(labelText, '#e5e7eb');
+            var labelMat = new THREE.SpriteMaterial({
+              map: labelTex,
+              transparent: true,
+              opacity: isHighlighted ? 1 : 0.84,
+              depthWrite: false
+            });
+            var labelSprite = new THREE.Sprite(labelMat);
+            var labelScale = _effectPreset === 'blur' ? 28 : 22;
+            labelSprite.scale.set(labelScale, labelScale * 0.28, 1);
+            var yOffset = { 'project': 18, 'module': 14, 'main-task': 10, 'sub-task': 8, 'document': 9, 'memory': 9 }[t] || 8;
+            labelSprite.position.set(0, -yOffset, 0);
+            group.add(labelSprite);
+          }
+        }
       }
 
       // ── in_progress 主任务: 呼吸脉冲光效 (参考 vis-network 发光效果) ──
@@ -592,6 +677,79 @@ function render3DGraph(container, visibleNodes, visibleEdges) {
            .linkDirectionalParticles(graph3d.linkDirectionalParticles())
            .linkDirectionalParticleWidth(graph3d.linkDirectionalParticleWidth())
            .linkDirectionalParticleColor(graph3d.linkDirectionalParticleColor());
+  }
+
+  function mount3DFloatingControls(effectPreset) {
+    var old = container.querySelector('.s3d-float-controls');
+    if (old && old.parentNode) old.parentNode.removeChild(old);
+    if (effectPreset !== 'blur') return;
+
+    var wrap = document.createElement('div');
+    wrap.className = 's3d-float-controls';
+    wrap.style.position = 'absolute';
+    wrap.style.bottom = '20px';
+    wrap.style.left = '50%';
+    wrap.style.transform = 'translateX(-50%)';
+    wrap.style.zIndex = '36';
+    wrap.style.display = 'flex';
+    wrap.style.background = 'rgba(0,0,0,0.4)';
+    wrap.style.backdropFilter = 'blur(8px)';
+    wrap.style.border = '1px solid rgba(255,255,255,0.12)';
+    wrap.style.borderRadius = '10px';
+    wrap.style.overflow = 'hidden';
+    wrap.style.boxShadow = '0 6px 24px rgba(0,0,0,0.35)';
+
+    function mkBtn(text, title, onClick, withRightBorder) {
+      var btn = document.createElement('button');
+      btn.type = 'button';
+      btn.textContent = text;
+      btn.title = title;
+      btn.style.padding = '8px 14px';
+      btn.style.background = 'transparent';
+      btn.style.color = '#fff';
+      btn.style.border = 'none';
+      if (withRightBorder) btn.style.borderRight = '1px solid rgba(255,255,255,0.12)';
+      btn.style.cursor = 'pointer';
+      btn.style.fontSize = '14px';
+      btn.onmouseenter = function() { btn.style.background = 'rgba(255,255,255,0.1)'; };
+      btn.onmouseleave = function() { btn.style.background = 'transparent'; };
+      btn.onclick = onClick;
+      return btn;
+    }
+
+    var zoomOutBtn = mkBtn('−', '缩小', function() {
+      try {
+        var cam = graph3d.camera();
+        if (!cam) return;
+        var dist = cam.position.length();
+        var nd = dist * 1.35;
+        var dir = cam.position.clone().normalize();
+        cam.position.copy(dir.multiplyScalar(nd));
+      } catch(e) {}
+    }, true);
+
+    var resetBtn = mkBtn('⟲', '重置视角', function() {
+      try { graph3d.zoomToFit(700); } catch(e) {}
+      update3DHighlight(null);
+      refresh3DStyles();
+      closePanel();
+    }, true);
+
+    var zoomInBtn = mkBtn('+', '放大', function() {
+      try {
+        var cam = graph3d.camera();
+        if (!cam) return;
+        var dist = cam.position.length();
+        var nd = dist * 0.72;
+        var dir = cam.position.clone().normalize();
+        cam.position.copy(dir.multiplyScalar(nd));
+      } catch(e) {}
+    }, false);
+
+    wrap.appendChild(zoomOutBtn);
+    wrap.appendChild(resetBtn);
+    wrap.appendChild(zoomInBtn);
+    container.appendChild(wrap);
   }
 
   // ── 增强场景光照 (mitbunny 风格: 柔和环境光 + 点光源) ──
@@ -996,6 +1154,9 @@ function render3DGraph(container, visibleNodes, visibleEdges) {
       console.warn('Outlier correction error:', e);
     }
   }, 5000); // 5 秒后执行（等力导向基本稳定）
+
+  // Blur Effect 预设: 底部浮动控件
+  mount3DFloatingControls(_effectPreset);
 
   // 创建兼容性 network wrapper（供其他代码使用 network.fit/destroy 等）
   network = {
