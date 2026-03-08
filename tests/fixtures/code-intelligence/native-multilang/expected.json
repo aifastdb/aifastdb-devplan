@@ -1,0 +1,148 @@
+{
+  "stats": {
+    "fileCount": 4,
+    "communityCount": 2,
+    "processCount": 2
+  },
+  "requiredNodeIds": [
+    "file:src/python/helpers.py",
+    "file:src/python/service.py",
+    "file:src/go/helper.go",
+    "file:src/go/main.go",
+    "community:src/go",
+    "community:src/python",
+    "process:src/go",
+    "process:src/python",
+    "symbol:class:src/python/helpers.py:PyRunner",
+    "symbol:method:src/python/helpers.py:PyRunner.run",
+    "symbol:function:src/python/helpers.py:py_helper",
+    "symbol:class:src/python/service.py:ConcretePyRunner",
+    "symbol:method:src/python/service.py:ConcretePyRunner.run",
+    "symbol:function:src/python/service.py:bootstrap_py",
+    "symbol:struct:src/go/main.go:GoRunner",
+    "symbol:method:src/go/main.go:GoRunner.Run",
+    "symbol:function:src/go/main.go:BootstrapGo",
+    "symbol:function:src/go/helper.go:HelperCall"
+  ],
+  "requiredImports": [
+    ["file:src/python/service.py", "file:src/python/helpers.py"],
+    ["file:src/go/main.go", "file:src/go/helper.go"]
+  ],
+  "requiredEdges": [
+    {
+      "from": "symbol:class:src/python/service.py:ConcretePyRunner",
+      "to": "symbol:class:src/python/helpers.py:PyRunner",
+      "label": "EXTENDS"
+    },
+    {
+      "from": "symbol:method:src/python/helpers.py:PyRunner.run",
+      "to": "symbol:function:src/python/helpers.py:py_helper",
+      "label": "CALLS"
+    },
+    {
+      "from": "symbol:method:src/python/service.py:ConcretePyRunner.run",
+      "to": "symbol:function:src/python/helpers.py:py_helper",
+      "label": "CALLS"
+    },
+    {
+      "from": "symbol:function:src/python/service.py:bootstrap_py",
+      "to": "symbol:method:src/python/service.py:ConcretePyRunner.run",
+      "label": "CALLS"
+    },
+    {
+      "from": "symbol:method:src/go/main.go:GoRunner.Run",
+      "to": "symbol:function:src/go/helper.go:HelperCall",
+      "label": "CALLS"
+    },
+    {
+      "from": "symbol:function:src/go/main.go:BootstrapGo",
+      "to": "symbol:method:src/go/main.go:GoRunner.Run",
+      "label": "CALLS"
+    }
+  ],
+  "nodePropertyChecks": [
+    {
+      "nodeId": "symbol:method:src/python/service.py:ConcretePyRunner.run",
+      "propertiesInclude": {
+        "kind": "method",
+        "language": "python",
+        "ownerId": "symbol:class:src/python/service.py:ConcretePyRunner",
+        "ownerKind": "class"
+      }
+    },
+    {
+      "nodeId": "symbol:method:src/go/main.go:GoRunner.Run",
+      "propertiesInclude": {
+        "kind": "method",
+        "language": "go",
+        "ownerId": "symbol:struct:src/go/main.go:GoRunner",
+        "ownerKind": "struct"
+      }
+    }
+  ],
+  "clusterIds": [
+    "community:src/go",
+    "community:src/python"
+  ],
+  "processIds": [
+    "process:src/go",
+    "process:src/python"
+  ],
+  "queryChecks": [
+    {
+      "query": "ConcretePyRunner.run",
+      "topNodeId": "symbol:method:src/python/service.py:ConcretePyRunner.run"
+    },
+    {
+      "query": "GoRunner.Run",
+      "topNodeId": "symbol:method:src/go/main.go:GoRunner.Run"
+    }
+  ],
+  "contextChecks": [
+    {
+      "symbol": "ConcretePyRunner.run",
+      "symbolId": "symbol:method:src/python/service.py:ConcretePyRunner.run",
+      "neighborIds": [
+        "file:src/python/service.py",
+        "symbol:class:src/python/service.py:ConcretePyRunner",
+        "symbol:function:src/python/helpers.py:py_helper",
+        "symbol:function:src/python/service.py:bootstrap_py"
+      ],
+      "edgeLabels": ["CALLS", "MEMBER_OF"]
+    },
+    {
+      "symbol": "GoRunner.Run",
+      "symbolId": "symbol:method:src/go/main.go:GoRunner.Run",
+      "neighborIds": [
+        "file:src/go/main.go",
+        "symbol:struct:src/go/main.go:GoRunner",
+        "symbol:function:src/go/helper.go:HelperCall",
+        "symbol:function:src/go/main.go:BootstrapGo"
+      ],
+      "edgeLabels": ["CALLS", "MEMBER_OF"]
+    }
+  ],
+  "impactChecks": [
+    {
+      "target": "ConcretePyRunner",
+      "direction": "downstream",
+      "limit": 20,
+      "seedId": "symbol:class:src/python/service.py:ConcretePyRunner",
+      "mustIncludeNodeIds": [
+        "symbol:class:src/python/helpers.py:PyRunner"
+      ],
+      "riskLevelOneOf": ["low", "medium", "high"]
+    },
+    {
+      "target": "GoRunner.Run",
+      "direction": "downstream",
+      "limit": 20,
+      "seedId": "symbol:method:src/go/main.go:GoRunner.Run",
+      "mustIncludeNodeIds": [
+        "symbol:function:src/go/helper.go:HelperCall",
+        "symbol:struct:src/go/main.go:GoRunner"
+      ],
+      "riskLevelOneOf": ["low", "medium", "high"]
+    }
+  ]
+}

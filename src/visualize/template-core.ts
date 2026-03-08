@@ -32,8 +32,8 @@ function updateStatsModalPosition() {
 }
 
 var currentPage = 'graph';
-var pageMap = { graph: 'pageGraph', stats: 'pageStats', docs: 'pageDocs', 'test-tools': 'pageTestTools', memory: 'pageMemory', 'md-viewer': 'pageMdViewer', settings: 'pageSettings' };
-var routePages = { '/': 'graph', '/graph': 'graph', '/stats': 'stats', '/docs': 'docs', '/test-tools': 'test-tools', '/memory': 'memory', '/md-viewer': 'md-viewer', '/settings': 'settings' };
+var pageMap = { graph: 'pageGraph', stats: 'pageStats', docs: 'pageDocs', 'code-intel': 'pageCodeIntel', 'test-tools': 'pageTestTools', memory: 'pageMemory', 'md-viewer': 'pageMdViewer', settings: 'pageSettings' };
+var routePages = { '/': 'graph', '/graph': 'graph', '/stats': 'stats', '/docs': 'docs', '/code-intel': 'code-intel', '/test-tools': 'test-tools', '/memory': 'memory', '/md-viewer': 'md-viewer', '/settings': 'settings' };
 
 function getPageFromPath(pathname) {
   if (!pathname) return 'graph';
@@ -44,6 +44,7 @@ function getPathFromPage(page) {
   if (page === 'graph') return '/graph';
   if (page === 'stats') return '/stats';
   if (page === 'docs') return '/docs';
+  if (page === 'code-intel') return '/code-intel';
   if (page === 'test-tools') return '/test-tools';
   if (page === 'memory') return '/memory';
   if (page === 'md-viewer') return '/md-viewer';
@@ -93,6 +94,7 @@ function navTo(page, options) {
   // 按需加载页面数据
   if (page === 'stats') loadStatsPage();
   if (page === 'docs') loadDocsPage();
+  if (page === 'code-intel') loadCodeIntelPage();
   if (page === 'test-tools') loadTestToolsPage();
   if (page === 'memory') loadMemoryPage();
   if (page === 'md-viewer') loadMdViewerPage();

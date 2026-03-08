@@ -1,0 +1,20 @@
+{
+  "stats": {
+    "fileCount": 2,
+    "communityCount": 1,
+    "processCount": 1
+  },
+  "requiredNodeIds": [
+    "file:src/providers/openai.rs",
+    "file:src/providers/traits.rs",
+    "community:src/providers",
+    "process:src/providers",
+    "symbol:type:src/providers/traits.rs:StreamResult"
+  ],
+  "clusterIds": [
+    "community:src/providers"
+  ],
+  "processIds": [
+    "process:src/providers"
+  ]
+}

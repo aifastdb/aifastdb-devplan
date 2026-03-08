@@ -1,0 +1,224 @@
+{
+  "stats": {
+    "fileCount": 5,
+    "communityCount": 3,
+    "processCount": 3
+  },
+  "requiredNodeIds": [
+    "file:src/alpha/a.ts",
+    "file:src/alpha/b.ts",
+    "file:src/beta/c.ts",
+    "file:src/rust/mod.rs",
+    "file:src/rust/engine.rs",
+    "community:src/alpha",
+    "community:src/beta",
+    "community:src/rust",
+    "process:src/alpha",
+    "process:src/beta",
+    "process:src/rust",
+    "symbol:class:src/alpha/a.ts:AlphaService",
+    "symbol:class:src/alpha/a.ts:AdvancedAlphaService",
+    "symbol:method:src/alpha/a.ts:AlphaService.run",
+    "symbol:field:src/alpha/a.ts:AdvancedAlphaService.mode",
+    "symbol:method:src/alpha/a.ts:AdvancedAlphaService.runAdvanced",
+    "symbol:function:src/alpha/a.ts:alphaMain",
+    "symbol:function:src/alpha/b.ts:alphaWorker",
+    "symbol:function:src/beta/c.ts:betaTask",
+    "symbol:trait:src/rust/mod.rs:NativeRunner",
+    "symbol:method:src/rust/mod.rs:NativeRunner.run",
+    "symbol:struct:src/rust/engine.rs:NativeEngine",
+    "symbol:method:src/rust/engine.rs:NativeEngine.run",
+    "symbol:method:src/rust/engine.rs:NativeEngine.status",
+    "symbol:function:src/rust/mod.rs:bootstrap_native",
+    "symbol:function:src/rust/engine.rs:run_native"
+  ],
+  "requiredImports": [
+    ["file:src/alpha/a.ts", "file:src/beta/c.ts"],
+    ["file:src/alpha/b.ts", "file:src/alpha/a.ts"],
+    ["file:src/rust/mod.rs", "file:src/rust/engine.rs"]
+  ],
+  "requiredEdges": [
+    {
+      "from": "symbol:class:src/alpha/a.ts:AdvancedAlphaService",
+      "to": "symbol:class:src/alpha/a.ts:AlphaService",
+      "label": "EXTENDS"
+    },
+    {
+      "from": "symbol:class:src/alpha/a.ts:AdvancedAlphaService",
+      "to": "symbol:interface:src/alpha/a.ts:AlphaConfig",
+      "label": "IMPLEMENTS"
+    },
+    {
+      "from": "symbol:method:src/alpha/a.ts:AlphaService.run",
+      "to": "symbol:function:src/alpha/a.ts:alphaMain",
+      "label": "CALLS"
+    },
+    {
+      "from": "symbol:method:src/alpha/a.ts:AdvancedAlphaService.runAdvanced",
+      "to": "symbol:function:src/alpha/a.ts:alphaMain",
+      "label": "CALLS"
+    },
+    {
+      "from": "symbol:struct:src/rust/engine.rs:NativeEngine",
+      "to": "symbol:trait:src/rust/mod.rs:NativeRunner",
+      "label": "IMPLEMENTS"
+    },
+    {
+      "from": "symbol:method:src/rust/engine.rs:NativeEngine.status",
+      "to": "symbol:function:src/rust/engine.rs:run_native",
+      "label": "CALLS"
+    }
+  ],
+  "nodePropertyChecks": [
+    {
+      "nodeId": "symbol:class:src/alpha/a.ts:AlphaService",
+      "propertiesInclude": {
+        "kind": "class",
+        "exported": true
+      }
+    },
+    {
+      "nodeId": "symbol:method:src/alpha/a.ts:AlphaService.run",
+      "propertiesInclude": {
+        "kind": "method",
+        "ownerId": "symbol:class:src/alpha/a.ts:AlphaService",
+        "ownerKind": "class",
+        "visibility": "public"
+      }
+    },
+    {
+      "nodeId": "symbol:class:src/alpha/a.ts:AdvancedAlphaService",
+      "propertiesInclude": {
+        "kind": "class",
+        "exported": true
+      }
+    },
+    {
+      "nodeId": "symbol:method:src/alpha/a.ts:AdvancedAlphaService.runAdvanced",
+      "propertiesInclude": {
+        "kind": "method",
+        "ownerId": "symbol:class:src/alpha/a.ts:AdvancedAlphaService",
+        "ownerKind": "class",
+        "visibility": "public"
+      }
+    },
+    {
+      "nodeId": "symbol:function:src/alpha/a.ts:alphaHelper",
+      "propertiesInclude": {
+        "kind": "function",
+        "declaration": "variable",
+        "exported": true
+      }
+    },
+    {
+      "nodeId": "symbol:trait:src/rust/mod.rs:NativeRunner",
+      "propertiesInclude": {
+        "kind": "trait",
+        "exported": true,
+        "visibility": "public"
+      }
+    },
+    {
+      "nodeId": "symbol:method:src/rust/mod.rs:NativeRunner.run",
+      "propertiesInclude": {
+        "kind": "method",
+        "ownerId": "symbol:trait:src/rust/mod.rs:NativeRunner",
+        "ownerKind": "trait",
+        "declaration": "trait_method"
+      }
+    },
+    {
+      "nodeId": "symbol:method:src/rust/engine.rs:NativeEngine.run",
+      "propertiesInclude": {
+        "kind": "method",
+        "ownerId": "symbol:struct:src/rust/engine.rs:NativeEngine",
+        "ownerKind": "struct",
+        "declaration": "trait_impl_method",
+        "implTrait": "NativeRunner",
+        "implTarget": "NativeEngine"
+      }
+    },
+    {
+      "nodeId": "symbol:method:src/rust/engine.rs:NativeEngine.status",
+      "propertiesInclude": {
+        "kind": "method",
+        "ownerId": "symbol:struct:src/rust/engine.rs:NativeEngine",
+        "ownerKind": "struct",
+        "declaration": "impl_method",
+        "visibility": "public"
+      }
+    }
+  ],
+  "clusterIds": [
+    "community:src/alpha",
+    "community:src/beta",
+    "community:src/rust"
+  ],
+  "processIds": [
+    "process:src/alpha",
+    "process:src/beta",
+    "process:src/rust"
+  ],
+  "queryChecks": [
+    {
+      "query": "alphaMain",
+      "topNodeId": "symbol:function:src/alpha/a.ts:alphaMain",
+      "reasonIncludes": ["exact label match"]
+    },
+    {
+      "query": "AdvancedAlphaService",
+      "topNodeId": "symbol:class:src/alpha/a.ts:AdvancedAlphaService"
+    }
+  ],
+  "contextChecks": [
+    {
+      "symbol": "alphaMain",
+      "symbolId": "symbol:function:src/alpha/a.ts:alphaMain",
+      "neighborIds": [
+        "file:src/alpha/a.ts",
+        "symbol:function:src/alpha/a.ts:alphaHelper",
+        "symbol:function:src/alpha/b.ts:alphaWorker",
+        "symbol:function:src/beta/c.ts:betaTask",
+        "symbol:method:src/alpha/a.ts:AlphaService.run",
+        "symbol:method:src/alpha/a.ts:AdvancedAlphaService.runAdvanced"
+      ],
+      "edgeLabels": ["CALLS", "DEFINES"]
+    },
+    {
+      "symbol": "AdvancedAlphaService.runAdvanced",
+      "symbolId": "symbol:method:src/alpha/a.ts:AdvancedAlphaService.runAdvanced",
+      "neighborIds": [
+        "file:src/alpha/a.ts",
+        "symbol:class:src/alpha/a.ts:AdvancedAlphaService",
+        "symbol:function:src/alpha/a.ts:alphaMain"
+      ],
+      "edgeLabels": ["CALLS", "MEMBER_OF"]
+    }
+  ],
+  "impactChecks": [
+    {
+      "target": "src/alpha/a.ts",
+      "direction": "downstream",
+      "limit": 20,
+      "seedId": "file:src/alpha/a.ts",
+      "mustIncludeNodeIds": [
+        "community:src/alpha",
+        "process:src/alpha",
+        "file:src/beta/c.ts",
+        "symbol:function:src/alpha/a.ts:alphaMain"
+      ],
+      "riskLevelOneOf": ["medium", "high"]
+    },
+    {
+      "target": "AdvancedAlphaService",
+      "direction": "downstream",
+      "limit": 20,
+      "seedId": "symbol:class:src/alpha/a.ts:AdvancedAlphaService",
+      "mustIncludeNodeIds": [
+        "symbol:class:src/alpha/a.ts:AlphaService",
+        "symbol:interface:src/alpha/a.ts:AlphaConfig"
+      ],
+      "riskLevelOneOf": ["low", "medium", "high"]
+    }
+  ]
+}

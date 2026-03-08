@@ -1,0 +1,164 @@
+{
+  "stats": {
+    "fileCount": 4,
+    "communityCount": 2,
+    "processCount": 2
+  },
+  "requiredNodeIds": [
+    "file:src/java/demo/App.java",
+    "file:src/java/demo/support/Helper.java",
+    "file:src/kotlin/demo/App.kt",
+    "file:src/kotlin/demo/support/kHelper.kt",
+    "community:src/java",
+    "community:src/kotlin",
+    "process:src/java",
+    "process:src/kotlin",
+    "symbol:interface:src/java/demo/App.java:Runner",
+    "symbol:method:src/java/demo/App.java:Runner.run",
+    "symbol:class:src/java/demo/App.java:ConcreteRunner",
+    "symbol:method:src/java/demo/App.java:ConcreteRunner.run",
+    "symbol:class:src/java/demo/App.java:Entry",
+    "symbol:method:src/java/demo/App.java:Entry.bootstrapJava",
+    "symbol:class:src/java/demo/support/Helper.java:Helper",
+    "symbol:method:src/java/demo/support/Helper.java:Helper.helper",
+    "symbol:interface:src/kotlin/demo/App.kt:KRunner",
+    "symbol:method:src/kotlin/demo/App.kt:KRunner.run",
+    "symbol:class:src/kotlin/demo/App.kt:KRunnerBase",
+    "symbol:method:src/kotlin/demo/App.kt:KRunnerBase.baseCall",
+    "symbol:class:src/kotlin/demo/App.kt:ConcreteKRunner",
+    "symbol:method:src/kotlin/demo/App.kt:ConcreteKRunner.run",
+    "symbol:function:src/kotlin/demo/App.kt:bootstrapKotlin",
+    "symbol:function:src/kotlin/demo/support/kHelper.kt:kHelper"
+  ],
+  "requiredImports": [
+    ["file:src/java/demo/App.java", "file:src/java/demo/support/Helper.java"],
+    ["file:src/kotlin/demo/App.kt", "file:src/kotlin/demo/support/kHelper.kt"]
+  ],
+  "requiredEdges": [
+    {
+      "from": "symbol:class:src/java/demo/App.java:ConcreteRunner",
+      "to": "symbol:interface:src/java/demo/App.java:Runner",
+      "label": "IMPLEMENTS"
+    },
+    {
+      "from": "symbol:method:src/java/demo/App.java:ConcreteRunner.run",
+      "to": "symbol:method:src/java/demo/support/Helper.java:Helper.helper",
+      "label": "CALLS"
+    },
+    {
+      "from": "symbol:method:src/java/demo/App.java:Entry.bootstrapJava",
+      "to": "symbol:method:src/java/demo/App.java:ConcreteRunner.run",
+      "label": "CALLS"
+    },
+    {
+      "from": "symbol:class:src/kotlin/demo/App.kt:ConcreteKRunner",
+      "to": "symbol:class:src/kotlin/demo/App.kt:KRunnerBase",
+      "label": "EXTENDS"
+    },
+    {
+      "from": "symbol:class:src/kotlin/demo/App.kt:ConcreteKRunner",
+      "to": "symbol:interface:src/kotlin/demo/App.kt:KRunner",
+      "label": "IMPLEMENTS"
+    },
+    {
+      "from": "symbol:method:src/kotlin/demo/App.kt:KRunnerBase.baseCall",
+      "to": "symbol:function:src/kotlin/demo/support/kHelper.kt:kHelper",
+      "label": "CALLS"
+    },
+    {
+      "from": "symbol:method:src/kotlin/demo/App.kt:ConcreteKRunner.run",
+      "to": "symbol:function:src/kotlin/demo/support/kHelper.kt:kHelper",
+      "label": "CALLS"
+    },
+    {
+      "from": "symbol:function:src/kotlin/demo/App.kt:bootstrapKotlin",
+      "to": "symbol:method:src/kotlin/demo/App.kt:ConcreteKRunner.run",
+      "label": "CALLS"
+    }
+  ],
+  "nodePropertyChecks": [
+    {
+      "nodeId": "symbol:method:src/java/demo/App.java:ConcreteRunner.run",
+      "propertiesInclude": {
+        "kind": "method",
+        "language": "java",
+        "ownerId": "symbol:class:src/java/demo/App.java:ConcreteRunner",
+        "ownerKind": "class"
+      }
+    },
+    {
+      "nodeId": "symbol:method:src/kotlin/demo/App.kt:ConcreteKRunner.run",
+      "propertiesInclude": {
+        "kind": "method",
+        "language": "kotlin",
+        "ownerId": "symbol:class:src/kotlin/demo/App.kt:ConcreteKRunner",
+        "ownerKind": "class"
+      }
+    }
+  ],
+  "clusterIds": [
+    "community:src/java",
+    "community:src/kotlin"
+  ],
+  "processIds": [
+    "process:src/java",
+    "process:src/kotlin"
+  ],
+  "queryChecks": [
+    {
+      "query": "ConcreteRunner.run",
+      "topNodeId": "symbol:method:src/java/demo/App.java:ConcreteRunner.run"
+    },
+    {
+      "query": "ConcreteKRunner.run",
+      "topNodeId": "symbol:method:src/kotlin/demo/App.kt:ConcreteKRunner.run"
+    }
+  ],
+  "contextChecks": [
+    {
+      "symbol": "ConcreteRunner.run",
+      "symbolId": "symbol:method:src/java/demo/App.java:ConcreteRunner.run",
+      "neighborIds": [
+        "file:src/java/demo/App.java",
+        "symbol:class:src/java/demo/App.java:ConcreteRunner",
+        "symbol:method:src/java/demo/App.java:Entry.bootstrapJava",
+        "symbol:method:src/java/demo/support/Helper.java:Helper.helper"
+      ],
+      "edgeLabels": ["CALLS", "MEMBER_OF"]
+    },
+    {
+      "symbol": "ConcreteKRunner.run",
+      "symbolId": "symbol:method:src/kotlin/demo/App.kt:ConcreteKRunner.run",
+      "neighborIds": [
+        "file:src/kotlin/demo/App.kt",
+        "symbol:class:src/kotlin/demo/App.kt:ConcreteKRunner",
+        "symbol:function:src/kotlin/demo/App.kt:bootstrapKotlin",
+        "symbol:function:src/kotlin/demo/support/kHelper.kt:kHelper"
+      ],
+      "edgeLabels": ["CALLS", "MEMBER_OF"]
+    }
+  ],
+  "impactChecks": [
+    {
+      "target": "ConcreteRunner",
+      "direction": "downstream",
+      "limit": 20,
+      "seedId": "symbol:class:src/java/demo/App.java:ConcreteRunner",
+      "mustIncludeNodeIds": [
+        "symbol:interface:src/java/demo/App.java:Runner"
+      ],
+      "riskLevelOneOf": ["low", "medium", "high"]
+    },
+    {
+      "target": "ConcreteKRunner",
+      "direction": "downstream",
+      "limit": 20,
+      "seedId": "symbol:class:src/kotlin/demo/App.kt:ConcreteKRunner",
+      "mustIncludeNodeIds": [
+        "symbol:class:src/kotlin/demo/App.kt:KRunnerBase",
+        "symbol:interface:src/kotlin/demo/App.kt:KRunner"
+      ],
+      "riskLevelOneOf": ["low", "medium", "high"]
+    }
+  ]
+}

@@ -19,6 +19,7 @@ import * as http from 'http';
 import * as path from 'path';
 import { DevPlanGraphStore } from '../dev-plan-graph-store';
 import { createDevPlan, getDefaultBasePath, resolveBasePathForProject, readDevPlanConfig } from '../dev-plan-factory';
+import { CodeBridgeStore, EmbeddedCodeIntelligenceStore, runCodeIntelRegressionCheck } from '../code-intelligence';
 import type { IDevPlanStore } from '../dev-plan-interface';
 import { getVisualizationHTML } from './template';
 import { getGraphCanvasScript } from './graph-canvas/index';
@@ -355,9 +356,69 @@ function readRequestBody(req: http.IncomingMessage): Promise<any> {
 function startServer(projectName: string, basePath: string, port: number): void {
   const htmlContent = getVisualizationHTML(projectName);
   const graphCanvasJs = getGraphCanvasScript();
+  const codeIntelStore = new EmbeddedCodeIntelligenceStore(projectName, basePath);
+  const getCodeBridgeStore = () => new CodeBridgeStore(
+    projectName,
+    basePath,
+    codeIntelStore,
+    createDevPlan(projectName, basePath, 'graph'),
+  );
+
+  function writeJson(res: http.ServerResponse, statusCode: number, body: unknown): void {
+    res.writeHead(statusCode, { 'Content-Type': 'application/json; charset=utf-8' });
+    res.end(JSON.stringify(body));
+  }
+
+  async function writeCodeIntelOk(
+    res: http.ServerResponse,
+    requestedRepoPath: string | undefined,
+    data: unknown,
+    legacyFields?: unknown,
+  ): Promise<void> {
+    const status = await codeIntelStore.getStatus(requestedRepoPath);
+    const legacyPayload = legacyFields && typeof legacyFields === 'object'
+      ? legacyFields as Record<string, unknown>
+      : {};
+    writeJson(res, 200, {
+      ok: true,
+      projectName,
+      repoPath: requestedRepoPath || status.repoPath || null,
+      source: status.source,
+      mode: status.mode,
+      status,
+      data,
+      ...legacyPayload,
+    });
+  }
+
+  async function writeCodeIntelError(
+    res: http.ServerResponse,
+    httpStatus: number,
+    message: string,
+    code: string,
+    requestedRepoPath?: string,
+  ): Promise<void> {
+    let status = null;
+    try {
+      status = await codeIntelStore.getStatus(requestedRepoPath);
+    } catch {
+      status = null;
+    }
+    writeJson(res, httpStatus, {
+      ok: false,
+      projectName,
+      repoPath: requestedRepoPath || status?.repoPath || null,
+      source: status?.source || 'native_embedded',
+      mode: status?.mode || 'embedded_source',
+      status,
+      error: { code, message },
+      message,
+    });
+  }
 
   const server = http.createServer(async (req, res) => {
     const url = new URL(req.url || '/', `http://localhost:${port}`);
+    const repoPath = normalizeNonEmptyString(url.searchParams.get('repoPath'));
 
     // CORS headers
     res.setHeader('Access-Control-Allow-Origin', '*');
@@ -381,6 +442,7 @@ function startServer(projectName: string, basePath: string, port: number): void 
         case '/docs':
         case '/test-tools':
         case '/memory':
+        case '/code-intel':
         case '/md-viewer':
         case '/settings':
           res.writeHead(200, { 'Content-Type': 'text/html; charset=utf-8' });
@@ -439,6 +501,337 @@ function startServer(projectName: string, basePath: string, port: number): void 
             docCount: sections.length,
             promptCount,
           }));
+          break;
+        }
+
+        case '/api/code-intel/status': {
+          const status = await codeIntelStore.getStatus(repoPath);
+          writeJson(res, 200, {
+            ...status,
+            ok: true,
+            data: status,
+          });
+          break;
+        }
+
+        case '/api/code-intel/graph': {
+          const graph = await codeIntelStore.getGraph(repoPath);
+          await writeCodeIntelOk(
+            res,
+            repoPath,
+            graph,
+            { nodes: graph.nodes, edges: graph.edges },
+          );
+          break;
+        }
+
+        case '/api/code-intel/clusters': {
+          const clusters = await codeIntelStore.getClusters(repoPath);
+          await writeCodeIntelOk(
+            res,
+            repoPath,
+            { count: clusters.length, clusters },
+            { clusters, count: clusters.length },
+          );
+          break;
+        }
+
+        case '/api/code-intel/processes': {
+          const processes = await codeIntelStore.getProcesses(repoPath);
+          await writeCodeIntelOk(
+            res,
+            repoPath,
+            { count: processes.length, processes },
+            { processes, count: processes.length },
+          );
+          break;
+        }
+
+        case '/api/code-intel/query': {
+          const query = normalizeNonEmptyString(url.searchParams.get('query'));
+          if (!query) {
+            await writeCodeIntelError(res, 400, '缺少 query 参数', 'missing_query', repoPath);
+            break;
+          }
+          const limit = Number(url.searchParams.get('limit') || '10');
+          const result = await codeIntelStore.query(query, repoPath, Number.isFinite(limit) ? limit : 10);
+          await writeCodeIntelOk(
+            res,
+            repoPath,
+            result,
+            result,
+          );
+          break;
+        }
+
+        case '/api/code-intel/context': {
+          const symbol = normalizeNonEmptyString(url.searchParams.get('symbol'));
+          if (!symbol) {
+            await writeCodeIntelError(res, 400, '缺少 symbol 参数', 'missing_symbol', repoPath);
+            break;
+          }
+          const result = await codeIntelStore.getContext(symbol, repoPath);
+          await writeCodeIntelOk(
+            res,
+            repoPath,
+            result,
+            result,
+          );
+          break;
+        }
+
+        case '/api/code-intel/impact': {
+          const target = normalizeNonEmptyString(url.searchParams.get('target'));
+          if (!target) {
+            await writeCodeIntelError(res, 400, '缺少 target 参数', 'missing_target', repoPath);
+            break;
+          }
+          const direction = (normalizeNonEmptyString(url.searchParams.get('direction')) as 'upstream' | 'downstream' | 'both' | undefined) || 'both';
+          const limit = Number(url.searchParams.get('limit') || '20');
+          const result = await codeIntelStore.getImpact(target, direction, repoPath, Number.isFinite(limit) ? limit : 20);
+          await writeCodeIntelOk(
+            res,
+            repoPath,
+            result,
+            result,
+          );
+          break;
+        }
+
+        case '/api/code-intel/rebuild': {
+          if (req.method !== 'POST') {
+            await writeCodeIntelError(res, 405, 'Method Not Allowed. Use POST.', 'method_not_allowed', repoPath);
+            break;
+          }
+          const body = await readRequestBody(req);
+          const requestedRepoPath = normalizeNonEmptyString(body?.repoPath) || repoPath;
+          const status = await codeIntelStore.rebuildIndex(requestedRepoPath);
+          writeJson(res, 200, {
+            ok: true,
+            projectName,
+            repoPath: requestedRepoPath || status.repoPath || null,
+            source: status.source,
+            mode: status.mode,
+            status,
+            data: { rebuilt: true },
+            success: true,
+          });
+          break;
+        }
+
+        case '/api/code-intel/regression-check': {
+          if (req.method !== 'POST') {
+            await writeCodeIntelError(res, 405, 'Method Not Allowed. Use POST.', 'method_not_allowed', repoPath);
+            break;
+          }
+          const body = await readRequestBody(req);
+          const fixturePath = normalizeNonEmptyString(body?.fixturePath);
+          const expectedPath = normalizeNonEmptyString(body?.expectedPath);
+          if (!fixturePath) {
+            await writeCodeIntelError(res, 400, 'Missing fixturePath', 'missing_fixture_path', repoPath);
+            break;
+          }
+          const result = await runCodeIntelRegressionCheck({
+            fixturePath,
+            expectedPath: expectedPath || undefined,
+          });
+          writeJson(res, 200, {
+            ok: result.ok,
+            projectName,
+            repoPath: fixturePath,
+            source: result.status.source,
+            mode: result.status.mode,
+            status: result.status,
+            data: result,
+            fixturePath: result.fixturePath,
+            expectedPath: result.expectedPath,
+            comparedAt: result.comparedAt,
+            summary: result.summary,
+            metrics: result.metrics,
+            performance: result.performance,
+            stability: result.stability,
+            diagnostics: result.diagnostics,
+          });
+          break;
+        }
+
+        case '/api/code-intel/link/module': {
+          if (req.method !== 'POST') {
+            await writeCodeIntelError(res, 405, 'Method Not Allowed. Use POST.', 'method_not_allowed', repoPath);
+            break;
+          }
+          const body = await readRequestBody(req);
+          const moduleId = normalizeNonEmptyString(body?.moduleId);
+          const communityId = normalizeNonEmptyString(body?.communityId);
+          const note = normalizeNonEmptyString(body?.note);
+          if (!moduleId) {
+            await writeCodeIntelError(res, 400, 'Missing moduleId', 'missing_module_id', repoPath);
+            break;
+          }
+          if (!communityId) {
+            await writeCodeIntelError(res, 400, 'Missing communityId', 'missing_community_id', repoPath);
+            break;
+          }
+          const bridge = getCodeBridgeStore();
+          const link = await bridge.linkModuleToCommunity(moduleId, communityId, note || undefined);
+          await writeCodeIntelOk(
+            res,
+            repoPath,
+            { link },
+            { link },
+          );
+          break;
+        }
+
+        case '/api/code-intel/module/resolve': {
+          const moduleId = normalizeNonEmptyString(url.searchParams.get('moduleId'));
+          if (!moduleId) {
+            await writeCodeIntelError(res, 400, 'Missing moduleId', 'missing_module_id', repoPath);
+            break;
+          }
+          const bridge = getCodeBridgeStore();
+          const result = await bridge.resolveModuleCodeContext(moduleId);
+          await writeCodeIntelOk(
+            res,
+            repoPath,
+            result,
+            result,
+          );
+          break;
+        }
+
+        case '/api/code-intel/recommend/module': {
+          const moduleId = normalizeNonEmptyString(url.searchParams.get('moduleId'));
+          if (!moduleId) {
+            await writeCodeIntelError(res, 400, 'Missing moduleId', 'missing_module_id', repoPath);
+            break;
+          }
+          const limit = Number(url.searchParams.get('limit') || '5');
+          const bridge = getCodeBridgeStore();
+          const result = await bridge.recommendModuleMappings(moduleId, Number.isFinite(limit) ? limit : 5);
+          await writeCodeIntelOk(res, repoPath, result, result);
+          break;
+        }
+
+        case '/api/code-intel/recommend/task': {
+          const taskId = normalizeNonEmptyString(url.searchParams.get('taskId'));
+          if (!taskId) {
+            await writeCodeIntelError(res, 400, 'Missing taskId', 'missing_task_id', repoPath);
+            break;
+          }
+          const limit = Number(url.searchParams.get('limit') || '8');
+          const bridge = getCodeBridgeStore();
+          const result = await bridge.recommendTaskMappings(taskId, Number.isFinite(limit) ? limit : 8);
+          await writeCodeIntelOk(res, repoPath, result, result);
+          break;
+        }
+
+        case '/api/code-intel/recommend/doc': {
+          const section = normalizeNonEmptyString(url.searchParams.get('section'));
+          const subSection = normalizeNonEmptyString(url.searchParams.get('subSection'));
+          if (!section) {
+            await writeCodeIntelError(res, 400, 'Missing section', 'missing_section', repoPath);
+            break;
+          }
+          const limit = Number(url.searchParams.get('limit') || '8');
+          const bridge = getCodeBridgeStore();
+          const result = await bridge.recommendDocMappings(section, subSection || undefined, Number.isFinite(limit) ? limit : 8);
+          await writeCodeIntelOk(res, repoPath, result, result);
+          break;
+        }
+
+        case '/api/code-intel/recommend/anchor': {
+          const anchorName = normalizeNonEmptyString(url.searchParams.get('anchorName'));
+          if (!anchorName) {
+            await writeCodeIntelError(res, 400, 'Missing anchorName', 'missing_anchor_name', repoPath);
+            break;
+          }
+          const limit = Number(url.searchParams.get('limit') || '8');
+          const bridge = getCodeBridgeStore();
+          const result = await bridge.recommendAnchorMappings(anchorName, Number.isFinite(limit) ? limit : 8);
+          await writeCodeIntelOk(res, repoPath, result, result);
+          break;
+        }
+
+        case '/api/code-intel/bridge/modules': {
+          const bridge = getCodeBridgeStore();
+          const result = await bridge.listModuleBridgeContexts();
+          await writeCodeIntelOk(res, repoPath, result, result);
+          break;
+        }
+
+        case '/api/code-intel/link/task': {
+          if (req.method !== 'POST') {
+            await writeCodeIntelError(res, 405, 'Method Not Allowed. Use POST.', 'method_not_allowed', repoPath);
+            break;
+          }
+          const body = await readRequestBody(req);
+          const taskId = normalizeNonEmptyString(body?.taskId);
+          if (!taskId) {
+            await writeCodeIntelError(res, 400, 'Missing taskId', 'missing_task_id', repoPath);
+            break;
+          }
+          const bridge = getCodeBridgeStore();
+          const link = await bridge.linkTaskToCode(
+            taskId,
+            Array.isArray(body?.symbolIds) ? body.symbolIds : [],
+            Array.isArray(body?.processIds) ? body.processIds : [],
+            normalizeNonEmptyString(body?.note) || undefined,
+          );
+          await writeCodeIntelOk(res, repoPath, { link }, { link });
+          break;
+        }
+
+        case '/api/code-intel/link/doc': {
+          if (req.method !== 'POST') {
+            await writeCodeIntelError(res, 405, 'Method Not Allowed. Use POST.', 'method_not_allowed', repoPath);
+            break;
+          }
+          const body = await readRequestBody(req);
+          const section = normalizeNonEmptyString(body?.section);
+          const processId = normalizeNonEmptyString(body?.processId);
+          if (!section) {
+            await writeCodeIntelError(res, 400, 'Missing section', 'missing_section', repoPath);
+            break;
+          }
+          if (!processId) {
+            await writeCodeIntelError(res, 400, 'Missing processId', 'missing_process_id', repoPath);
+            break;
+          }
+          const bridge = getCodeBridgeStore();
+          const link = await bridge.linkDocToProcess(
+            section,
+            normalizeNonEmptyString(body?.subSection) || undefined,
+            processId,
+            normalizeNonEmptyString(body?.note) || undefined,
+          );
+          await writeCodeIntelOk(res, repoPath, { link }, { link });
+          break;
+        }
+
+        case '/api/code-intel/link/anchor': {
+          if (req.method !== 'POST') {
+            await writeCodeIntelError(res, 405, 'Method Not Allowed. Use POST.', 'method_not_allowed', repoPath);
+            break;
+          }
+          const body = await readRequestBody(req);
+          const anchorName = normalizeNonEmptyString(body?.anchorName);
+          const symbolId = normalizeNonEmptyString(body?.symbolId);
+          if (!anchorName) {
+            await writeCodeIntelError(res, 400, 'Missing anchorName', 'missing_anchor_name', repoPath);
+            break;
+          }
+          if (!symbolId) {
+            await writeCodeIntelError(res, 400, 'Missing symbolId', 'missing_symbol_id', repoPath);
+            break;
+          }
+          const bridge = getCodeBridgeStore();
+          const link = await bridge.linkAnchorToSymbol(
+            anchorName,
+            symbolId,
+            normalizeNonEmptyString(body?.note) || undefined,
+          );
+          await writeCodeIntelOk(res, repoPath, { link }, { link });
           break;
         }
 
@@ -2629,6 +3022,16 @@ function startServer(projectName: string, basePath: string, port: number): void 
       }
     } catch (err: any) {
       console.error('请求处理错误:', err);
+      if ((url.pathname || '').startsWith('/api/code-intel/')) {
+        await writeCodeIntelError(
+          res,
+          500,
+          err?.message || 'Internal Server Error',
+          'internal_error',
+          repoPath,
+        );
+        return;
+      }
       res.writeHead(500, { 'Content-Type': 'application/json; charset=utf-8' });
       res.end(JSON.stringify({ error: err.message || 'Internal Server Error' }));
     }

@@ -61,12 +61,17 @@ function getChildDocNodeIds(parentNodeId) {
 function getAllDescendantDocNodeIds(parentNodeId) {
   var result = [];
   var queue = [parentNodeId];
+  var visited = {};
+  visited[parentNodeId] = true;
   while (queue.length > 0) {
     var current = queue.shift();
     var children = getChildDocNodeIds(current);
     for (var i = 0; i < children.length; i++) {
-      result.push(children[i]);
-      queue.push(children[i]);
+      var childId = children[i];
+      if (visited[childId]) continue;
+      visited[childId] = true;
+      result.push(childId);
+      queue.push(childId);
     }
   }
   return result;
@@ -93,12 +98,15 @@ function findAllNode(nodeId) {
 }
 
 /** 检查节点是否应被隐藏（因为其祖先父文档处于收起状态） */
-function isNodeCollapsedByParent(nodeId) {
+function isNodeCollapsedByParent(nodeId, visited) {
+  visited = visited || {};
+  if (visited[nodeId]) return false;
+  visited[nodeId] = true;
   for (var i = 0; i < allEdges.length; i++) {
     var e = allEdges[i];
     if (e.to === nodeId && e.label === 'doc_has_child') {
       if (collapsedDocNodes[e.from]) return true;
-      if (isNodeCollapsedByParent(e.from)) return true;
+      if (isNodeCollapsedByParent(e.from, visited)) return true;
     }
   }
   return false;

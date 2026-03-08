@@ -45,6 +45,21 @@ export function getHTML(projectName: string): string {
         <span class="nav-item-text">文档库</span>
         <span class="nav-tooltip">文档库</span>
       </div>
+      <div class="nav-item" data-page="code-intel" onclick="navTo('code-intel')">
+        <span class="nav-item-icon">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+            <rect x="4" y="4" width="6" height="6" rx="1"></rect>
+            <rect x="14" y="4" width="6" height="6" rx="1"></rect>
+            <rect x="9" y="14" width="6" height="6" rx="1"></rect>
+            <path d="M10 7h4"></path>
+            <path d="M7 10v4"></path>
+            <path d="M17 10v4"></path>
+            <path d="M12 14v-4"></path>
+          </svg>
+        </span>
+        <span class="nav-item-text">代码智能</span>
+        <span class="nav-tooltip">Code Intelligence</span>
+      </div>
       <div class="nav-item" data-page="test-tools" onclick="navTo('test-tools')">
         <span class="nav-item-icon">
           <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
@@ -397,6 +412,115 @@ export function getHTML(projectName: string): string {
           <!-- Phase-69: 完整性检测结果区域 -->
           <div id="aiBatchVerifyArea" style="display:none;margin-top:10px;"></div>
           <button class="mem-auto-import-cancel" id="aiBatchCancelBtn" onclick="cancelAiBatch()">取消</button>
+        </div>
+      </div>
+    </div>
+
+    <!-- ===== PAGE: Code Intelligence ===== -->
+    <div class="page-view page-code-intel" id="pageCodeIntel">
+      <div class="header code-intel-header">
+        <div class="code-intel-header-copy">
+          <h1><span class="project-name">${projectName}</span> Code Intelligence</h1>
+          <div class="code-intel-header-subtitle">独立代码图数据面。当前以项目内嵌的原生源码扫描能力提供文件、符号、导入、 community、process 视图。</div>
+        </div>
+        <div class="stats-bar code-intel-stats-bar" id="codeIntelStatusCards">
+          <div class="stat"><span>加载中...</span></div>
+        </div>
+            </div>
+
+      <div class="graph-container code-intel-graph-container">
+        <div id="codeIntelGraph"></div>
+          </div>
+
+      <div class="code-intel-bottom-sheet collapsed" id="codeIntelBottomSheet">
+        <button class="code-intel-bottom-sheet-handle" id="codeIntelBottomSheetHandle" onclick="toggleCodeIntelBottomSheet()" title="展开或收起底部信息面板">
+          <span class="code-intel-bottom-sheet-title">文件信息</span>
+          <span class="code-intel-bottom-sheet-subtitle" id="codeIntelBottomSheetSubtitle">默认收起，点击后向上展开</span>
+          <span class="code-intel-bottom-sheet-arrow" id="codeIntelBottomSheetArrow">▲</span>
+        </button>
+
+        <div class="legend code-intel-dock">
+          <div class="code-intel-dock-toolbar">
+            <div class="code-intel-dock-controls">
+              <input id="codeIntelRepoPath" class="code-intel-input" type="text" placeholder="代码仓库路径（可选）">
+              <button class="legend-refresh-btn" onclick="refreshCodeIntelPage()" title="刷新 code-intel 数据">刷新</button>
+            </div>
+            <div class="code-intel-dock-meta" id="codeIntelGraphMeta">等待加载</div>
+          </div>
+
+          <div class="code-intel-dock-grid">
+          <div class="code-intel-dock-card code-intel-selection-card">
+            <div class="code-intel-dock-title">文件信息</div>
+            <div class="code-intel-dock-body" id="codeIntelSelection">点击图中的文件 / 符号 / community / process 节点后，在这里查看详情。</div>
+          </div>
+
+          <div class="code-intel-dock-card">
+            <div class="code-intel-dock-title">Communities</div>
+            <div class="code-intel-dock-body" id="codeIntelClusters">等待加载...</div>
+          </div>
+
+          <div class="code-intel-dock-card">
+            <div class="code-intel-dock-title">Processes</div>
+            <div class="code-intel-dock-body" id="codeIntelProcesses">等待加载...</div>
+          </div>
+
+          <div class="code-intel-dock-card">
+            <div class="code-intel-dock-title">Bridge</div>
+            <div class="code-intel-inline-grid">
+              <input id="codeIntelBridgeModuleId" class="code-intel-input" type="text" placeholder="moduleId，例如 code-intelligence">
+              <input id="codeIntelBridgeModuleFamily" class="code-intel-input" type="text" placeholder="模块族前缀，例如 code / memory / gateway" oninput="applyCodeIntelBridgeFilters()">
+              <input id="codeIntelBridgeCommunityFilter" class="code-intel-input" type="text" placeholder="community id / label 过滤" oninput="applyCodeIntelBridgeFilters()">
+              </div>
+            <div class="code-intel-chip-row">
+              <label class="code-intel-mini-check">
+                    <input id="codeIntelBridgeShowAll" type="checkbox" onchange="toggleCodeIntelBridgeShowAll()">
+                    显示全部 bridge
+                  </label>
+              <label class="code-intel-mini-check">
+                  <input id="codeIntelBridgeFilterLinked" type="checkbox" checked onchange="applyCodeIntelBridgeFilters()">
+                  linked
+                </label>
+              <label class="code-intel-mini-check">
+                  <input id="codeIntelBridgeFilterRecommended" type="checkbox" checked onchange="applyCodeIntelBridgeFilters()">
+                  recommended
+                </label>
+              <label class="code-intel-mini-check">
+                  <input id="codeIntelBridgeFilterRecommendedProcess" type="checkbox" checked onchange="applyCodeIntelBridgeFilters()">
+                  recommended-process
+                </label>
+              </div>
+            <div class="code-intel-chip-row code-intel-bridge-legend">
+              <span class="code-intel-badge linked">linked</span>
+              <span class="code-intel-badge recommended">recommended</span>
+              <span class="code-intel-badge recommended-process">recommended-process</span>
+              </div>
+            <div class="code-intel-action-row">
+              <button class="legend-refresh-btn" onclick="loadCodeIntelBridgePanel()">查看映射</button>
+              <button class="legend-refresh-btn" onclick="recommendCodeIntelBridge()">推荐候选</button>
+              <button class="legend-refresh-btn" onclick="focusCurrentCodeIntelBridgeModule()">聚焦当前模块</button>
+            </div>
+            <div class="code-intel-dock-body" id="codeIntelBridge">输入 <code>moduleId</code> 后可查看当前映射和推荐候选。</div>
+          </div>
+
+          <div class="code-intel-dock-card">
+            <div class="code-intel-dock-title-row">
+              <div class="code-intel-dock-title">Regression</div>
+              <button class="legend-refresh-btn" onclick="runCodeIntelRegressionCheck()">运行校验</button>
+        </div>
+            <div class="code-intel-inline-grid">
+              <input id="codeIntelRegressionFixturePath" class="code-intel-input" type="text" placeholder="fixturePath，例如 D:/Project/git/aifastdb-devplan/tests/fixtures/code-intelligence/native-sample">
+              <input id="codeIntelRegressionExpectedPath" class="code-intel-input" type="text" placeholder="expectedPath（可选，默认 <fixturePath>/expected.json）">
+            </div>
+            <div class="code-intel-dock-body" id="codeIntelRegression">输入 fixturePath 后可执行原生回归校验并查看差异诊断。</div>
+          </div>
+
+          <div class="code-intel-dock-card">
+            <div class="code-intel-dock-title">说明</div>
+            <div class="code-intel-dock-body" id="codeIntelWarnings">
+              当前页面用于展示独立代码图，不替代 DevPlan 项目图。
+            </div>
+          </div>
+          </div>
         </div>
       </div>
     </div>

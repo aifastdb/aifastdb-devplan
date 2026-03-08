@@ -882,6 +882,7 @@ export class DevPlanGraphStore implements IDevPlanStore {
 
     // 确定最终的 parentDoc 值（显式传入 > 已有值）
     const finalParentDoc = input.parentDoc !== undefined ? input.parentDoc : existing?.parentDoc;
+    this.validateParentDocAssignment(input.section, input.subSection, existing?.id, finalParentDoc);
 
     if (existing) {
       // 更新已有文档
@@ -1006,6 +1007,7 @@ export class DevPlanGraphStore implements IDevPlanStore {
     const finalModuleId = input.moduleId || null;
     const finalParentDoc = input.parentDoc !== undefined ? input.parentDoc : null;
     const sk = sectionKey(input.section, input.subSection);
+    this.validateParentDocAssignment(input.section, input.subSection, undefined, finalParentDoc);
 
     // 使用 addEntity（纯新增，每次生成新 UUID），不使用 upsertEntityByProp
     const entity = this.graph.addEntity(input.title, ET.DOC, {
@@ -6519,6 +6521,57 @@ export class DevPlanGraphStore implements IDevPlanStore {
     }
   }
 
+  private validateParentDocAssignment(
+    docSection: string,
+    docSubSection: string | undefined,
+    docEntityId: string | undefined,
+    newParentDoc?: string | null,
+  ): void {
+    if (!newParentDoc) return;
+
+    const docKey = sectionKey(docSection as DevPlanSection, docSubSection || undefined);
+    if (newParentDoc === docKey) {
+      throw new Error(`Invalid parentDoc: document "${docKey}" cannot be its own parent.`);
+    }
+
+    if (!docEntityId) return;
+
+    const [parentSection, parentSubSection] = newParentDoc.split('|');
+    const parentEntity = this.findDocEntityBySection(parentSection, parentSubSection || undefined);
+    if (!parentEntity) return;
+
+    if (parentEntity.id === docEntityId) {
+      throw new Error(`Invalid parentDoc: document "${docKey}" cannot be its own parent.`);
+    }
+
+    if (this.hasDescendantDocEntity(docEntityId, parentEntity.id)) {
+      throw new Error(
+        `Invalid parentDoc: assigning "${newParentDoc}" as parent of "${docKey}" would create a document hierarchy cycle.`
+      );
+    }
+  }
+
+  private hasDescendantDocEntity(rootDocEntityId: string, candidateDocEntityId: string): boolean {
+    const visited = new Set<string>([rootDocEntityId]);
+    const queue: string[] = [rootDocEntityId];
+
+    while (queue.length > 0) {
+      const currentId = queue.shift()!;
+      const childRels = this.getOutRelations(currentId, RT.DOC_HAS_CHILD);
+      for (const rel of childRels) {
+        const childId = rel.target;
+        if (childId === candidateDocEntityId) {
+          return true;
+        }
+        if (visited.has(childId)) continue;
+        visited.add(childId);
+        queue.push(childId);
+      }
+    }
+
+    return false;
+  }
+
   /**
    * 更新文档的父文档关系（DOC_HAS_CHILD）
    *
@@ -6526,6 +6579,11 @@ export class DevPlanGraphStore implements IDevPlanStore {
    */
   private updateParentDocRelation(docEntityId: string, oldParentDoc?: string, newParentDoc?: string): void {
     const projectId = this.getProjectId();
+    const docEntity = this.graph.getEntity(docEntityId);
+    if (docEntity) {
+      const props = docEntity.properties as any;
+      this.validateParentDocAssignment(props.section, props.subSection || undefined, docEntityId, newParentDoc);
+    }
 
     // 移除旧的父文档关系（入向 DOC_HAS_CHILD）
     if (oldParentDoc) {

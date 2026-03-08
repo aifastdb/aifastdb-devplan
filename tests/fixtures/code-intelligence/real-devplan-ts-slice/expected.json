@@ -1,0 +1,66 @@
+{
+  "stats": {
+    "fileCount": 5,
+    "communityCount": 2,
+    "processCount": 2
+  },
+  "requiredNodeIds": [
+    "file:src/code-intelligence/index.ts",
+    "file:src/code-intelligence/regression.ts",
+    "file:src/code-intelligence/types.ts",
+    "file:src/mcp-server/handlers/code-tools.ts",
+    "file:src/mcp-server/tool-definitions.ts",
+    "community:src/code-intelligence",
+    "community:src/mcp-server",
+    "process:src/code-intelligence",
+    "process:src/mcp-server",
+    "symbol:function:src/code-intelligence/regression.ts:runCodeIntelRegressionCheck",
+    "symbol:function:src/mcp-server/handlers/code-tools.ts:handleCodeToolCall",
+    "symbol:interface:src/mcp-server/tool-definitions.ts:ToolArgs"
+  ],
+  "requiredImports": [
+    ["file:src/code-intelligence/index.ts", "file:src/code-intelligence/regression.ts"],
+    ["file:src/code-intelligence/index.ts", "file:src/code-intelligence/types.ts"],
+    ["file:src/code-intelligence/regression.ts", "file:src/code-intelligence/types.ts"],
+    ["file:src/mcp-server/handlers/code-tools.ts", "file:src/code-intelligence/index.ts"],
+    ["file:src/mcp-server/handlers/code-tools.ts", "file:src/code-intelligence/regression.ts"],
+    ["file:src/mcp-server/handlers/code-tools.ts", "file:src/mcp-server/tool-definitions.ts"]
+  ],
+  "clusterIds": [
+    "community:src/code-intelligence",
+    "community:src/mcp-server"
+  ],
+  "processIds": [
+    "process:src/code-intelligence",
+    "process:src/mcp-server"
+  ],
+  "queryChecks": [
+    {
+      "query": "runCodeIntelRegressionCheck",
+      "topNodeId": "symbol:function:src/code-intelligence/regression.ts:runCodeIntelRegressionCheck"
+    },
+    {
+      "query": "handleCodeToolCall",
+      "topNodeId": "symbol:function:src/mcp-server/handlers/code-tools.ts:handleCodeToolCall"
+    },
+    {
+      "query": "ToolArgs",
+      "topNodeId": "symbol:interface:src/mcp-server/tool-definitions.ts:ToolArgs"
+    }
+  ],
+  "contextChecks": [
+    {
+      "symbol": "handleCodeToolCall",
+      "symbolId": "symbol:function:src/mcp-server/handlers/code-tools.ts:handleCodeToolCall",
+      "neighborIds": [
+        "file:src/mcp-server/handlers/code-tools.ts",
+        "symbol:field:src/code-intelligence/regression.ts:CodeIntelRegressionQueryCheck.query",
+        "symbol:function:src/code-intelligence/regression.ts:runCodeIntelRegressionCheck",
+        "symbol:function:src/mcp-server/handlers/code-tools.ts:buildCodeMeta",
+        "symbol:function:src/mcp-server/handlers/code-tools.ts:createBridgeStore",
+        "symbol:function:src/mcp-server/handlers/code-tools.ts:createCodeStore"
+      ],
+      "edgeLabels": ["DEFINES"]
+    }
+  ]
+}

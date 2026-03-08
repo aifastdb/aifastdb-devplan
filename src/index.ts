@@ -119,6 +119,43 @@ export {
   getLastHeartbeat,
 } from './autopilot';
 
+// Code intelligence
+export {
+  EmbeddedCodeIntelligenceStore,
+  inferRepoPathFromBasePath,
+} from './code-intelligence';
+export type {
+  CodeIntelNodeType,
+  CodeIntelEdgeType,
+  CodeIntelNode,
+  CodeIntelEdge,
+  CodeIntelCluster,
+  CodeIntelProcess,
+  CodeIntelProcessStep,
+  CodeIntelStatus,
+  CodeIntelGraph,
+  CodeIntelSnapshot,
+  CodeIntelFusionMode,
+  CodeIntelRetrievalEvidence,
+  CodeIntelQueryResult,
+  CodeIntelContextResult,
+  CodeIntelImpactResult,
+  CodeIntelChangeType,
+  CodeIntelChangeDetail,
+  CodeIntelChangeStats,
+  CodeIntelDetectChangesResult,
+  CodeIntelRenameEdit,
+  CodeIntelRenameTarget,
+  CodeIntelRenameResult,
+  CodeIntelGraphQueryOptions,
+  CodeIntelGraphQueryResult,
+  CodeIntelRefactorGuardrails,
+  CodeIntelRegressionMetric,
+  CodeIntelRegressionMetrics,
+  CodeIntelRegressionPerformance,
+  CodeIntelRegressionStability,
+} from './code-intelligence';
+
 // Test tools hub
 export type {
   TestToolDefinition,

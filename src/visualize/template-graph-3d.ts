@@ -29,7 +29,12 @@ function load3DSizesFromSettings() {
     'main-task': s.sizeMainTask,
     'sub-task':  s.sizeSubTask,
     'document':  s.sizeDocument,
-    'memory':    s.sizeMemory || 8
+    'memory':    s.sizeMemory || 8,
+    'file':      7,
+    'folder':    9,
+    'symbol':    5,
+    'community': 11,
+    'process':   10
   };
 }
 var NODE_3D_COLORS = load3DColorsFromSettings();
@@ -109,6 +114,11 @@ function get3DNodeColor(node) {
   if (t === 'sub-task') {
     return SUB_TASK_STATUS_COLORS[status] || SUB_TASK_STATUS_COLORS.pending;
   }
+  if (t === 'file') return '#3b82f6';
+  if (t === 'folder') return '#64748b';
+  if (t === 'symbol') return '#22c55e';
+  if (t === 'community') return '#f59e0b';
+  if (t === 'process') return '#a855f7';
   return NODE_3D_COLORS[t] || '#6b7280';
 }
 
@@ -119,6 +129,12 @@ function get3DLinkColor(link) {
   // Blur Effect: 对齐 AI_Influencers_X 的默认灰白细线
   if (_eff === 'blur') return 'rgba(255,255,255,0.07)';
   var label = link._label || '';
+  var bridgeKind = String(((link._props || {}).bridgeKind) || '');
+  if (label === 'BRIDGE_LINK') return 'rgba(251,146,60,0.82)';
+  if (label === 'BRIDGE_RECOMMEND') {
+    if (bridgeKind === 'recommended-process') return 'rgba(56,189,248,0.68)';
+    return 'rgba(250,204,21,0.55)';
+  }
   if (label === 'has_main_task') return 'rgba(147,197,253,0.18)';
   if (label === 'has_sub_task')  return 'rgba(129,140,248,0.12)';
   if (label === 'has_document')  return 'rgba(96,165,250,0.10)';
@@ -261,9 +277,12 @@ function render3DGraph(container, visibleNodes, visibleEdges) {
       source: e.from,
       target: e.to,
       _label: e._label,
+      _props: e._props || {},
       _width: e.width || 1,
       _color: get3DLinkColor(e),
-      _highlightColor: LINK_3D_HIGHLIGHT_COLORS[e._label] || '#a5b4fc',
+      _highlightColor: (e._label === 'BRIDGE_RECOMMEND' && e._props && e._props.bridgeKind === 'recommended-process')
+        ? '#38bdf8'
+        : (LINK_3D_HIGHLIGHT_COLORS[e._label] || '#a5b4fc'),
       _projectEdgeHidden: !!e._projectEdgeHidden  // 主节点连线: 参与力模拟但不渲染
     });
   }
@@ -278,7 +297,14 @@ function render3DGraph(container, visibleNodes, visibleEdges) {
       _type: n._type,
       _props: n._props || {},
       _val: NODE_3D_SIZES[n._type] || 5,
-      _color: get3DNodeColor(n)
+      _color: get3DNodeColor(n),
+      _clusterId: n._clusterId,
+      _clusterCx: n._clusterCx,
+      _clusterCy: n._clusterCy,
+      _clusterCz: n._clusterCz,
+      x: n.x,
+      y: n.y,
+      z: n.z
     });
   }
 
@@ -819,7 +845,11 @@ function render3DGraph(container, visibleNodes, visibleEdges) {
     // ── 连接距离使用轨道间距 ──
     graph3d.d3Force('link').distance(function(l) {
       return _orbitSpacing * 0.8;
-    }).strength(0.3); // 较弱的连接力，让轨道力主导
+    }).strength(function(l) {
+      if (l && l._projectEdgeHidden) return 0.002;
+      if (l && l._linkStrengthFactor !== undefined) return 0.3 * l._linkStrengthFactor;
+      return 0.3;
+    }); // 较弱的连接力，让轨道力主导
 
     // ── 关闭默认中心引力 (由轨道力取代) ──
     try {
@@ -891,16 +921,19 @@ function render3DGraph(container, visibleNodes, visibleEdges) {
     var _linkDist = _s3d.linkDistance; // 基准连接距离
     graph3d.d3Force('link').distance(function(l) {
       var label = l._label || '';
+      var factor = (l && l._linkDistanceFactor !== undefined) ? l._linkDistanceFactor : 1;
       if (label === 'has_main_task') return _linkDist * 1.25;
       if (label === 'has_module') return _linkDist * 1.12;
       if (label === 'has_sub_task') return _linkDist * 0.625;
       if (label === 'module_has_task') return _linkDist * 1.0;
       if (label === 'has_document') return _linkDist * 0.875;
-      return _linkDist * 0.75;
+      return _linkDist * 0.75 * factor;
     }).strength(function(l) {
       var label = l._label || '';
+      if (l && l._projectEdgeHidden) return 0.002;
+      var factor = (l && l._linkStrengthFactor !== undefined) ? l._linkStrengthFactor : 1;
       if (label === 'has_main_task' || label === 'has_module' || label === 'module_has_task') return 0.7;
-      return 0.5;
+      return 0.5 * factor;
     });
 
     // ── 中心引力 (来自自定义设置) ──
@@ -949,8 +982,10 @@ function render3DGraph(container, visibleNodes, visibleEdges) {
       // 削弱连接力，避免连线把不同层的节点拽到一起
       graph3d.d3Force('link').strength(function(l) {
         var label = l._label || '';
+        if (l && l._projectEdgeHidden) return 0.002;
+        var factor = (l && l._linkStrengthFactor !== undefined) ? l._linkStrengthFactor : 1;
         if (label === 'has_main_task' || label === 'has_module' || label === 'module_has_task') return 0.15;
-        return 0.1;
+        return 0.1 * factor;
       });
 
       // 自定义 D3 力: 强径向弹簧，将节点拉向目标轨道半径
@@ -1024,6 +1059,36 @@ function render3DGraph(container, visibleNodes, visibleEdges) {
       graph3d.d3Force('typeSeparation', typeSepForce);
       log('🌍 类型分层: 模块@' + _typeSepSpacing + ' 文档@' + (_typeSepSpacing*2) + ' 主任务@' + (_typeSepSpacing*3) + ' 子任务@' + (_typeSepSpacing*4) + ' 强度=' + _typeSepK, true);
     }
+  }
+
+  if (nodes3d.some(function(n) { return !!n._clusterId; })) {
+    var codeIntelClusterForce = (function() {
+      var _nodes;
+      function force(alpha) {
+        for (var i = 0; i < _nodes.length; i++) {
+          var n = _nodes[i];
+          if (!n._clusterId || n._type === 'project') continue;
+          var tx = n._clusterCx || 0;
+          var ty = n._clusterCy || 0;
+          var tz = n._clusterCz || 0;
+          var dx = tx - (n.x || 0);
+          var dy = ty - (n.y || 0);
+          var dz = tz - (n.z || 0);
+          var strength = 0.045;
+          if (n._type === 'community') strength = 0.16;
+          else if (n._type === 'process') strength = 0.08;
+          else if (n._type === 'file' || n._type === 'folder') strength = 0.06;
+          n.vx = (n.vx || 0) + dx * strength * alpha;
+          n.vy = (n.vy || 0) + dy * strength * alpha;
+          n.vz = (n.vz || 0) + dz * strength * alpha;
+        }
+      }
+      force.initialize = function(nodes) { _nodes = nodes; };
+      return force;
+    })();
+
+    graph3d.d3Force('codeIntelCluster', codeIntelClusterForce);
+    log('🫧 代码图多球簇布局已启用: 按 community 聚类', true);
   }
 
   // 注入数据

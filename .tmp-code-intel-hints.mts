@@ -1,0 +1,10 @@
+import * as fs from 'node:fs/promises';
+import * as path from 'node:path';
+import embeddedModule from './src/code-intelligence/embedded-store.ts';
+const { EmbeddedCodeIntelligenceStore } = embeddedModule as typeof import('./src/code-intelligence/embedded-store');
+const store = new EmbeddedCodeIntelligenceStore('native_validation', './tests/fixtures/code-intelligence/native-advanced/.devplan-temp');
+const absPath = path.resolve('./tests/fixtures/code-intelligence/native-advanced/src/gamma/entry.ts');
+const relPath = 'src/gamma/entry.ts';
+const content = await fs.readFile(absPath, 'utf-8');
+const analysis = (store as any).analyzeFile({ absPath, relPath, content, size: content.length, mtimeMs: Date.now() });
+console.log(JSON.stringify(analysis.relationHints, null, 2));

@@ -1376,6 +1376,2201 @@ function closeBatchImport() {
   if (overlay) overlay.classList.remove('active');
 }
 
+// ========== Code Intelligence ==========
+var codeIntelLoaded = false;
+var codeIntelGraphData = { nodes: [], edges: [] };
+var codeIntelRenderedGraphData = { nodes: [], edges: [] };
+var codeIntelNetwork = null;
+var codeIntelMapNodesDataSet = null;
+var codeIntelMapEdgesDataSet = null;
+var codeIntelMapEdges = [];
+var codeIntelAtlasDeck = null;
+var codeIntelAtlasState = null;
+var codeIntelAtlasViewState = null;
+var codeIntelAtlasHoverNodeId = null;
+var codeIntelAtlasLoading = false;
+var codeIntelAtlasCallbacks = [];
+var codeIntelStatusData = null;
+var codeIntelRegressionData = null;
+var codeIntelBridgeData = null;
+var codeIntelBridgeOverviewData = null;
+var codeIntelBridgeFocusNodeId = null;
+var codeIntelSelectedNodeId = null;
+var codeIntelBottomSheetExpanded = false;
+var codeIntelVisLoading = false;
+var codeIntelVisCallbacks = [];
+var CODE_INTEL_VIS_LOAD_TIMEOUT_MS = 4000;
+var CODE_INTEL_ATLAS_LOAD_TIMEOUT_MS = 5000;
+var CODE_INTEL_FETCH_TIMEOUT_MS = 15000;
+var CODE_INTEL_2D_NODE_LIMIT = 1800;
+
+function currentCodeIntelQuery() {
+  var input = document.getElementById('codeIntelRepoPath');
+  var repoPath = input ? String(input.value || '').trim() : '';
+  return repoPath ? ('?repoPath=' + encodeURIComponent(repoPath)) : '';
+}
+
+function currentCodeIntelRegressionFixturePath() {
+  var input = document.getElementById('codeIntelRegressionFixturePath');
+  return input ? String(input.value || '').trim() : '';
+}
+
+function currentCodeIntelRegressionExpectedPath() {
+  var input = document.getElementById('codeIntelRegressionExpectedPath');
+  return input ? String(input.value || '').trim() : '';
+}
+
+function loadCodeIntelPage(forceRefresh) {
+  forceRefresh = !!forceRefresh;
+  var graphMeta = document.getElementById('codeIntelGraphMeta');
+  var clustersEl = document.getElementById('codeIntelClusters');
+  var processesEl = document.getElementById('codeIntelProcesses');
+  var warningsEl = document.getElementById('codeIntelWarnings');
+  var cardsEl = document.getElementById('codeIntelStatusCards');
+  var regressionEl = document.getElementById('codeIntelRegression');
+  var bridgeEl = document.getElementById('codeIntelBridge');
+  if (!graphMeta || !clustersEl || !processesEl || !warningsEl || !cardsEl || !regressionEl || !bridgeEl) return;
+  setCodeIntelBottomSheetExpanded(false);
+
+  if (!forceRefresh && codeIntelLoaded && codeIntelStatusData) {
+    renderCodeIntelStatus(codeIntelStatusData);
+    renderCodeIntelGraph(codeIntelGraphData);
+    return;
+  }
+
+  cardsEl.innerHTML = statCard('🧠', '...', 'Code Intelligence', '正在加载', 'blue');
+  graphMeta.textContent = '加载中...';
+  clustersEl.innerHTML = '<div style="text-align:center;padding:32px 0;color:#6b7280;"><div class="spinner" style="margin:0 auto 10px;"></div>加载 communities...</div>';
+  processesEl.innerHTML = '<div style="text-align:center;padding:32px 0;color:#6b7280;"><div class="spinner" style="margin:0 auto 10px;"></div>加载 processes...</div>';
+  warningsEl.innerHTML = '正在读取代码图状态...';
+  regressionEl.innerHTML = '输入 fixturePath 后可执行原生回归校验并查看差异诊断。';
+  bridgeEl.innerHTML = '输入 <code>moduleId</code> 后可查看当前映射和推荐候选。';
+
+  var query = currentCodeIntelQuery();
+  Promise.all([
+    fetchCodeIntelJson('/api/code-intel/status' + query, 'status'),
+    fetchCodeIntelJson('/api/code-intel/graph' + query, 'graph'),
+    fetchCodeIntelJson('/api/code-intel/clusters' + query, 'clusters'),
+    fetchCodeIntelJson('/api/code-intel/processes' + query, 'processes')
+  ]).then(function(results) {
+    codeIntelStatusData = unwrapCodeIntelData(results[0]);
+    codeIntelGraphData = unwrapCodeIntelData(results[1]) || { nodes: [], edges: [] };
+    var clusterPayload = unwrapCodeIntelData(results[2]) || {};
+    var processPayload = unwrapCodeIntelData(results[3]) || {};
+    codeIntelLoaded = true;
+    renderCodeIntelStatus(codeIntelStatusData);
+    renderCodeIntelGraph(codeIntelGraphData);
+    renderCodeIntelClusters(clusterPayload.clusters || []);
+    renderCodeIntelProcesses(processPayload.processes || []);
+    renderCodeIntelRegressionPanel(codeIntelRegressionData);
+    loadCodeIntelBridgePanel(false);
+  }).catch(function(err) {
+    cardsEl.innerHTML = statCard('⚠️', '0', 'Code Intelligence', '加载失败', 'rose');
+    graphMeta.textContent = '加载失败';
+    warningsEl.innerHTML = '<div style="color:#fca5a5;">' + escHtml(err.message || String(err)) + '</div>';
+    clustersEl.innerHTML = '<div style="color:#fca5a5;">加载失败</div>';
+    processesEl.innerHTML = '<div style="color:#fca5a5;">加载失败</div>';
+    regressionEl.innerHTML = '<div style="color:#94a3b8;">页面初始化失败后，暂时无法运行 regression 检查</div>';
+    bridgeEl.innerHTML = '<div style="color:#fca5a5;">页面初始化失败后，暂时无法加载 bridge 面板</div>';
+  });
+}
+
+function refreshCodeIntelPage() {
+  codeIntelLoaded = false;
+  loadCodeIntelPage(true);
+}
+
+function fetchCodeIntelJson(url, label) {
+  return new Promise(function(resolve, reject) {
+    var done = false;
+    var timer = setTimeout(function() {
+      if (done) return;
+      done = true;
+      reject(new Error('Code Intelligence ' + label + ' 请求超时'));
+    }, CODE_INTEL_FETCH_TIMEOUT_MS);
+
+    fetch(url).then(function(r) {
+      if (!r.ok) {
+        return r.json().catch(function() { return {}; }).then(function(payload) {
+          throw new Error((payload && (payload.message || (payload.error && payload.error.message))) || ('HTTP ' + r.status));
+        });
+      }
+      return r.json();
+    }).then(function(payload) {
+      if (done) return;
+      done = true;
+      clearTimeout(timer);
+      if (payload && payload.ok === false) {
+        reject(new Error((payload.message || (payload.error && payload.error.message))) || ('Code Intelligence ' + label + ' 请求失败'));
+        return;
+      }
+      resolve(payload);
+    }).catch(function(err) {
+      if (done) return;
+      done = true;
+      clearTimeout(timer);
+      reject(err);
+    });
+  });
+}
+
+function postCodeIntelJson(url, payload, label) {
+  return new Promise(function(resolve, reject) {
+    var done = false;
+    var timer = setTimeout(function() {
+      if (done) return;
+      done = true;
+      reject(new Error('Code Intelligence ' + label + ' 请求超时'));
+    }, CODE_INTEL_FETCH_TIMEOUT_MS);
+
+    fetch(url, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(payload || {}),
+    }).then(function(r) {
+      if (!r.ok) {
+        return r.json().catch(function() { return {}; }).then(function(resp) {
+          throw new Error((resp && (resp.message || (resp.error && resp.error.message))) || ('HTTP ' + r.status));
+        });
+      }
+      return r.json();
+    }).then(function(resp) {
+      if (done) return;
+      done = true;
+      clearTimeout(timer);
+      if (resp && resp.ok === false) {
+        reject(new Error((resp.message || (resp.error && resp.error.message))) || ('Code Intelligence ' + label + ' 请求失败'));
+        return;
+      }
+      resolve(resp);
+    }).catch(function(err) {
+      if (done) return;
+      done = true;
+      clearTimeout(timer);
+      reject(err);
+    });
+  });
+}
+
+function unwrapCodeIntelData(payload) {
+  if (payload && typeof payload === 'object' && payload.data) return payload.data;
+  return payload;
+}
+
+function setCodeIntelBottomSheetExpanded(expanded) {
+  codeIntelBottomSheetExpanded = !!expanded;
+  var sheet = document.getElementById('codeIntelBottomSheet');
+  var subtitle = document.getElementById('codeIntelBottomSheetSubtitle');
+  if (sheet) {
+    if (codeIntelBottomSheetExpanded) sheet.classList.remove('collapsed');
+    else sheet.classList.add('collapsed');
+  }
+  if (!subtitle) return;
+  if (codeIntelBottomSheetExpanded) {
+    subtitle.textContent = '点击标题可再次收起';
+    return;
+  }
+  if (codeIntelSelectedNodeId && codeIntelRenderedGraphData && codeIntelRenderedGraphData.nodes) {
+    for (var i = 0; i < codeIntelRenderedGraphData.nodes.length; i++) {
+      var node = codeIntelRenderedGraphData.nodes[i];
+      if (node.id === codeIntelSelectedNodeId) {
+        subtitle.textContent = '当前: ' + String(node.label || codeIntelSelectedNodeId);
+        return;
+      }
+    }
+  }
+  subtitle.textContent = '默认收起，点击后向上展开';
+}
+
+function toggleCodeIntelBottomSheet() {
+  setCodeIntelBottomSheetExpanded(!codeIntelBottomSheetExpanded);
+}
+
+function selectCodeIntelNode(nodeId) {
+  codeIntelSelectedNodeId = nodeId ? String(nodeId) : null;
+  renderCodeIntelSelection(codeIntelSelectedNodeId, codeIntelRenderedGraphData);
+  updateCodeIntelMapEdgeVisibility(codeIntelSelectedNodeId);
+  setCodeIntelBottomSheetExpanded(codeIntelBottomSheetExpanded);
+  if (codeIntelAtlasDeck) {
+    updateCodeIntelAtlasSelection();
+    focusCodeIntelAtlasNode(codeIntelSelectedNodeId);
+  }
+  if (codeIntelNetwork && codeIntelSelectedNodeId && typeof codeIntelNetwork.focus === 'function') {
+    try {
+      codeIntelNetwork.focus(codeIntelSelectedNodeId, {
+        scale: 1.1,
+        animation: { duration: 350, easingFunction: 'easeInOutQuad' }
+      });
+    } catch (e) {}
+  }
+}
+
+function renderCodeIntelSelection(nodeId, graph) {
+  var el = document.getElementById('codeIntelSelection');
+  if (!el) return;
+  if (!graph || !graph.nodes || !graph.nodes.length) {
+    el.innerHTML = '<div class="code-intel-selection-empty">当前没有可展示的代码图节点。</div>';
+    return;
+  }
+  if (!nodeId) {
+    el.innerHTML = '<div class="code-intel-selection-empty">点击图中的文件 / 符号 / community / process 节点后，在这里查看详情。</div>';
+    return;
+  }
+
+  var node = null;
+  var nodeMap = {};
+  for (var i = 0; i < graph.nodes.length; i++) {
+    var candidate = graph.nodes[i];
+    nodeMap[candidate.id] = candidate;
+    if (candidate.id === nodeId) node = candidate;
+  }
+  if (!node) {
+    el.innerHTML = '<div class="code-intel-selection-empty">当前视图中未找到该节点，请重新点击图中的节点。</div>';
+    return;
+  }
+
+  var props = node.properties || {};
+  var incoming = 0;
+  var outgoing = 0;
+  var neighbors = [];
+  for (var j = 0; j < (graph.edges || []).length; j++) {
+    var edge = graph.edges[j];
+    if (edge.from === nodeId) {
+      outgoing++;
+      if (nodeMap[edge.to]) neighbors.push(nodeMap[edge.to].label || edge.to);
+    } else if (edge.to === nodeId) {
+      incoming++;
+      if (nodeMap[edge.from]) neighbors.push(nodeMap[edge.from].label || edge.from);
+    }
+  }
+
+  var kvs = [
+    ['类型', node.type || '-'],
+    ['ID', node.id || '-'],
+    ['路径', props.filePath || props.repoPath || props.entryFile || '-'],
+    ['语言', props.language || props.kind || props.processType || '-'],
+    ['Community', props.communityId || '-'],
+    ['入边 / 出边', incoming + ' / ' + outgoing]
+  ];
+
+  var html = '';
+  html += '<div class="code-intel-selection-title">' + escHtml(node.label || node.id) + '</div>';
+  html += '<div class="code-intel-selection-badges">';
+  html += '<span>' + escHtml(String(node.type || 'node')) + '</span>';
+  if (props.kind) html += '<span>' + escHtml(String(props.kind)) + '</span>';
+  if (props.processType) html += '<span>' + escHtml(String(props.processType)) + '</span>';
+  html += '</div>';
+  html += '<div class="code-intel-selection-grid">';
+  for (var k = 0; k < kvs.length; k++) {
+    html += '<div class="code-intel-selection-kv">';
+    html += '<div class="code-intel-selection-k">' + escHtml(kvs[k][0]) + '</div>';
+    html += '<div class="code-intel-selection-v">' + escHtml(String(kvs[k][1])) + '</div>';
+    html += '</div>';
+  }
+  html += '</div>';
+
+  var extraKeys = ['symbolCount', 'memberCount', 'fileCount', 'stepCount', 'subSection', 'section'];
+  var extraHtml = '';
+  for (var x = 0; x < extraKeys.length; x++) {
+    var key = extraKeys[x];
+    if (typeof props[key] === 'undefined' || props[key] === null || props[key] === '') continue;
+    extraHtml += '<span>' + escHtml(key + ': ' + String(props[key])) + '</span>';
+  }
+  if (extraHtml) {
+    html += '<div class="code-intel-selection-list">' + extraHtml + '</div>';
+  }
+
+  if (neighbors.length) {
+    html += '<div style="margin-top:10px;color:#94a3b8;font-size:11px;">相邻节点</div>';
+    html += '<div class="code-intel-selection-list" style="margin-top:6px;">';
+    for (var n = 0; n < Math.min(8, neighbors.length); n++) {
+      html += '<span>' + escHtml(String(neighbors[n])) + '</span>';
+    }
+    if (neighbors.length > 8) {
+      html += '<span>+' + (neighbors.length - 8) + ' more</span>';
+    }
+    html += '</div>';
+  }
+
+  el.innerHTML = html;
+}
+
+function runCodeIntelRegressionCheck() {
+  var el = document.getElementById('codeIntelRegression');
+  var fixturePath = currentCodeIntelRegressionFixturePath();
+  var expectedPath = currentCodeIntelRegressionExpectedPath();
+  if (!el) return;
+  if (!fixturePath) {
+    el.innerHTML = '<div style="color:#fca5a5;">请先输入 fixturePath</div>';
+    return;
+  }
+  el.innerHTML = '<div style="color:#94a3b8;"><div class="spinner" style="display:inline-block;vertical-align:middle;margin-right:8px;width:14px;height:14px;border-width:2px;"></div>正在执行原生 regression 检查...</div>';
+  postCodeIntelJson('/api/code-intel/regression-check', {
+    fixturePath: fixturePath,
+    expectedPath: expectedPath || undefined
+  }, 'regression-check').then(function(resp) {
+    codeIntelRegressionData = unwrapCodeIntelData(resp) || resp || null;
+    renderCodeIntelRegressionPanel(codeIntelRegressionData);
+  }).catch(function(err) {
+    el.innerHTML = '<div style="color:#fca5a5;">' + escHtml(err.message || String(err)) + '</div>';
+  });
+}
+
+function renderCodeIntelRegressionPanel(result) {
+  var el = document.getElementById('codeIntelRegression');
+  if (!el) return;
+  if (!result) {
+    el.innerHTML = '输入 fixturePath 后可执行原生回归校验并查看差异诊断。';
+    return;
+  }
+
+  var summary = result.summary || {};
+  var metrics = result.metrics || {};
+  var performance = result.performance || {};
+  var stability = result.stability || {};
+  var diagnostics = Array.isArray(result.diagnostics) ? result.diagnostics : [];
+  function metricPct(metric) {
+    return Math.round(Number(metric && metric.rate != null ? metric.rate : 1) * 100);
+  }
+  var html = '';
+  html += '<div style="display:flex;gap:8px;flex-wrap:wrap;margin-bottom:10px;">';
+  html += '<span style="padding:3px 8px;border-radius:999px;background:' + (result.ok ? '#052e16' : '#3f0d0d') + ';color:' + (result.ok ? '#86efac' : '#fca5a5') + ';font-size:11px;font-weight:600;">' + (result.ok ? 'PASS' : 'FAIL') + '</span>';
+  html += '<span style="padding:3px 8px;border-radius:999px;background:#172554;color:#93c5fd;font-size:11px;">checks ' + Number(summary.checksTotal || 0) + '</span>';
+  html += '<span style="padding:3px 8px;border-radius:999px;background:#1f2937;color:#cbd5e1;font-size:11px;">passed ' + Number(summary.passed || 0) + '</span>';
+  html += '<span style="padding:3px 8px;border-radius:999px;background:#3f0d0d;color:#fca5a5;font-size:11px;">failed ' + Number(summary.failed || 0) + '</span>';
+  html += '</div>';
+  html += '<div style="margin-bottom:8px;color:#9fb0d1;font-size:11px;line-height:1.6;">';
+  html += '<div><strong>fixture:</strong> ' + escHtml(String(result.fixturePath || '-')) + '</div>';
+  html += '<div><strong>expected:</strong> ' + escHtml(String(result.expectedPath || '-')) + '</div>';
+  if (result.comparedAt) {
+    html += '<div><strong>comparedAt:</strong> ' + escHtml(new Date(result.comparedAt).toLocaleString()) + '</div>';
+  }
+  html += '</div>';
+  if (metrics && typeof metrics === 'object') {
+    html += '<div style="margin-bottom:10px;">';
+    html += '<div style="margin-bottom:6px;color:#cbd5e1;font-size:11px;font-weight:600;">质量指标</div>';
+    html += '<div style="display:flex;gap:8px;flex-wrap:wrap;">';
+    if (metrics.requiredNodeRecall) {
+      html += '<span style="padding:3px 8px;border-radius:999px;background:#172554;color:#93c5fd;font-size:11px;">node recall ' + metricPct(metrics.requiredNodeRecall) + '% (' + Number(metrics.requiredNodeRecall.matched || 0) + '/' + Number(metrics.requiredNodeRecall.total || 0) + ')</span>';
+    }
+    if (metrics.importRecall) {
+      html += '<span style="padding:3px 8px;border-radius:999px;background:#0f3d2e;color:#86efac;font-size:11px;">import recall ' + metricPct(metrics.importRecall) + '% (' + Number(metrics.importRecall.matched || 0) + '/' + Number(metrics.importRecall.total || 0) + ')</span>';
+    }
+    if (metrics.requiredEdgeRecall) {
+      html += '<span style="padding:3px 8px;border-radius:999px;background:#3b2f0e;color:#fde68a;font-size:11px;">edge recall ' + metricPct(metrics.requiredEdgeRecall) + '% (' + Number(metrics.requiredEdgeRecall.matched || 0) + '/' + Number(metrics.requiredEdgeRecall.total || 0) + ')</span>';
+    }
+    if (metrics.queryTop1HitRate) {
+      html += '<span style="padding:3px 8px;border-radius:999px;background:#1f2937;color:#cbd5e1;font-size:11px;">query top-1 ' + metricPct(metrics.queryTop1HitRate) + '% (' + Number(metrics.queryTop1HitRate.matched || 0) + '/' + Number(metrics.queryTop1HitRate.total || 0) + ')</span>';
+    }
+    if (metrics.contextNeighborExactRate) {
+      html += '<span style="padding:3px 8px;border-radius:999px;background:#3f0d0d;color:#fca5a5;font-size:11px;">context exact ' + metricPct(metrics.contextNeighborExactRate) + '% (' + Number(metrics.contextNeighborExactRate.matched || 0) + '/' + Number(metrics.contextNeighborExactRate.total || 0) + ')</span>';
+    }
+    if (metrics.impactRequiredNodeCoverage) {
+      html += '<span style="padding:3px 8px;border-radius:999px;background:#172554;color:#bfdbfe;font-size:11px;">impact coverage ' + metricPct(metrics.impactRequiredNodeCoverage) + '% (' + Number(metrics.impactRequiredNodeCoverage.matched || 0) + '/' + Number(metrics.impactRequiredNodeCoverage.total || 0) + ')</span>';
+    }
+    html += '</div>';
+    html += '</div>';
+  }
+  if (performance && typeof performance === 'object') {
+    html += '<div style="margin-bottom:10px;">';
+    html += '<div style="margin-bottom:6px;color:#cbd5e1;font-size:11px;font-weight:600;">性能基线</div>';
+    html += '<div style="display:flex;gap:8px;flex-wrap:wrap;">';
+    html += '<span style="padding:3px 8px;border-radius:999px;background:#172554;color:#93c5fd;font-size:11px;">index ' + Number(performance.indexMs || 0) + 'ms</span>';
+    html += '<span style="padding:3px 8px;border-radius:999px;background:#0f3d2e;color:#86efac;font-size:11px;">graph ' + Number(performance.graphMs || 0) + 'ms</span>';
+    html += '<span style="padding:3px 8px;border-radius:999px;background:#1f2937;color:#cbd5e1;font-size:11px;">query avg ' + Number(performance.queryAvgMs || 0).toFixed(1) + 'ms</span>';
+    html += '<span style="padding:3px 8px;border-radius:999px;background:#1f2937;color:#cbd5e1;font-size:11px;">context avg ' + Number(performance.contextAvgMs || 0).toFixed(1) + 'ms</span>';
+    html += '<span style="padding:3px 8px;border-radius:999px;background:#1f2937;color:#cbd5e1;font-size:11px;">impact avg ' + Number(performance.impactAvgMs || 0).toFixed(1) + 'ms</span>';
+    html += '<span style="padding:3px 8px;border-radius:999px;background:#3b2f0e;color:#fde68a;font-size:11px;">graph bytes ' + Number(performance.graphBytes || 0) + '</span>';
+    html += '<span style="padding:3px 8px;border-radius:999px;background:#172554;color:#bfdbfe;font-size:11px;">nodes ' + Number(performance.nodeCount || 0) + ' / edges ' + Number(performance.edgeCount || 0) + '</span>';
+    html += '</div>';
+    html += '</div>';
+  }
+  if (stability && typeof stability === 'object' && typeof stability.rebuildStable !== 'undefined') {
+    html += '<div style="margin-bottom:10px;">';
+    html += '<div style="margin-bottom:6px;color:#cbd5e1;font-size:11px;font-weight:600;">稳定性基线</div>';
+    html += '<div style="display:flex;gap:8px;flex-wrap:wrap;">';
+    html += '<span style="padding:3px 8px;border-radius:999px;background:' + (stability.rebuildStable ? '#052e16' : '#3f0d0d') + ';color:' + (stability.rebuildStable ? '#86efac' : '#fca5a5') + ';font-size:11px;">rebuild ' + (stability.rebuildStable ? 'stable' : 'mismatch') + '</span>';
+    html += '<span style="padding:3px 8px;border-radius:999px;background:#1f2937;color:#cbd5e1;font-size:11px;">rebuild ' + Number(stability.rebuildMs || 0) + 'ms</span>';
+    html += '<span style="padding:3px 8px;border-radius:999px;background:#1f2937;color:#cbd5e1;font-size:11px;">delta n/e/c/p = ' + Number(stability.nodeDelta || 0) + '/' + Number(stability.edgeDelta || 0) + '/' + Number(stability.clusterDelta || 0) + '/' + Number(stability.processDelta || 0) + '</span>';
+    html += '</div>';
+    html += '</div>';
+  }
+
+  if (!diagnostics.length) {
+    html += '<div style="color:#86efac;">当前没有发现回归差异。</div>';
+    el.innerHTML = html;
+    return;
+  }
+
+  html += '<div style="max-height:220px;overflow:auto;border:1px solid #1f2a44;border-radius:8px;background:#0b1220;padding:8px;">';
+  for (var i = 0; i < diagnostics.length; i++) {
+    var item = diagnostics[i] || {};
+    html += '<div style="padding:8px 0;' + (i > 0 ? 'border-top:1px solid #1f2a44;' : '') + '">';
+    html += '<div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap;margin-bottom:4px;">';
+    html += '<span style="font-size:10px;padding:2px 6px;border-radius:999px;background:' + (item.severity === 'error' ? '#3f0d0d' : '#3b2f0e') + ';color:' + (item.severity === 'error' ? '#fca5a5' : '#fde68a') + ';">' + escHtml(String(item.severity || 'info')) + '</span>';
+    html += '<span style="font-size:10px;padding:2px 6px;border-radius:999px;background:#172554;color:#93c5fd;">' + escHtml(String(item.scope || '-')) + '</span>';
+    html += '<span style="font-size:10px;color:#94a3b8;font-family:monospace;">' + escHtml(String(item.code || '-')) + '</span>';
+    html += '</div>';
+    html += '<div style="color:#e2e8f0;margin-bottom:4px;">' + escHtml(String(item.message || '')) + '</div>';
+    if (typeof item.expected !== 'undefined') {
+      html += '<div style="font-size:11px;color:#94a3b8;"><strong>expected:</strong> ' + escHtml(JSON.stringify(item.expected)) + '</div>';
+    }
+    if (typeof item.actual !== 'undefined') {
+      html += '<div style="font-size:11px;color:#94a3b8;"><strong>actual:</strong> ' + escHtml(JSON.stringify(item.actual)) + '</div>';
+    }
+    html += '</div>';
+  }
+  html += '</div>';
+  el.innerHTML = html;
+}
+
+function currentCodeIntelBridgeModuleId() {
+  var input = document.getElementById('codeIntelBridgeModuleId');
+  return input ? String(input.value || '').trim() : '';
+}
+
+function isCodeIntelBridgeShowAllEnabled() {
+  var input = document.getElementById('codeIntelBridgeShowAll');
+  return !!(input && input.checked);
+}
+
+function getCodeIntelBridgeFilters() {
+  var moduleFamilyInput = document.getElementById('codeIntelBridgeModuleFamily');
+  var communityInput = document.getElementById('codeIntelBridgeCommunityFilter');
+  var linkedInput = document.getElementById('codeIntelBridgeFilterLinked');
+  var recommendedInput = document.getElementById('codeIntelBridgeFilterRecommended');
+  var recommendedProcessInput = document.getElementById('codeIntelBridgeFilterRecommendedProcess');
+  return {
+    moduleFamily: moduleFamilyInput ? String(moduleFamilyInput.value || '').trim().toLowerCase() : '',
+    communityQuery: communityInput ? String(communityInput.value || '').trim().toLowerCase() : '',
+    showLinked: !linkedInput || !!linkedInput.checked,
+    showRecommended: !recommendedInput || !!recommendedInput.checked,
+    showRecommendedProcess: !recommendedProcessInput || !!recommendedProcessInput.checked,
+  };
+}
+
+function applyCodeIntelBridgeFilters() {
+  renderCodeIntelGraph(codeIntelGraphData);
+}
+
+function toggleCodeIntelBridgeShowAll() {
+  if (isCodeIntelBridgeShowAllEnabled()) {
+    loadCodeIntelBridgeOverview();
+  } else {
+    codeIntelBridgeOverviewData = null;
+    renderCodeIntelGraph(codeIntelGraphData);
+  }
+}
+
+function loadCodeIntelBridgeOverview() {
+  var query = currentCodeIntelQuery();
+  fetchCodeIntelJson('/api/code-intel/bridge/modules' + query, 'bridge-modules')
+    .then(function(resp) {
+      codeIntelBridgeOverviewData = unwrapCodeIntelData(resp) || null;
+      renderCodeIntelGraph(codeIntelGraphData);
+    })
+    .catch(function() {
+      codeIntelBridgeOverviewData = null;
+      renderCodeIntelGraph(codeIntelGraphData);
+    });
+}
+
+function loadCodeIntelBridgePanel(forceRecommend) {
+  var moduleId = currentCodeIntelBridgeModuleId();
+  var el = document.getElementById('codeIntelBridge');
+  if (!el) return;
+  if (!moduleId) {
+    el.innerHTML = '输入 <code>moduleId</code> 后可查看当前映射和推荐候选。';
+    return;
+  }
+
+  el.innerHTML = '<div style="color:#94a3b8;">正在读取 bridge 映射...</div>';
+  var query = currentCodeIntelQuery();
+  fetchCodeIntelJson('/api/code-intel/module/resolve?moduleId=' + encodeURIComponent(moduleId) + (query ? ('&' + query.slice(1)) : ''), 'bridge-resolve')
+    .then(function(resp) {
+      var resolved = unwrapCodeIntelData(resp) || {};
+      codeIntelBridgeData = { resolved: resolved, recommended: null };
+      codeIntelBridgeFocusNodeId = resolved && resolved.module && resolved.module.moduleId
+        ? ('module-overlay:' + String(resolved.module.moduleId))
+        : null;
+      renderCodeIntelBridgePanel(codeIntelBridgeData);
+      renderCodeIntelGraph(codeIntelGraphData);
+      if (forceRecommend !== false) {
+        recommendCodeIntelBridge();
+      }
+    })
+    .catch(function(err) {
+      el.innerHTML = '<div style="color:#fca5a5;">' + escHtml(err.message || String(err)) + '</div>';
+    });
+}
+
+function recommendCodeIntelBridge() {
+  var moduleId = currentCodeIntelBridgeModuleId();
+  var el = document.getElementById('codeIntelBridge');
+  if (!el || !moduleId) return;
+
+  var query = currentCodeIntelQuery();
+  fetchCodeIntelJson('/api/code-intel/recommend/module?moduleId=' + encodeURIComponent(moduleId) + '&limit=5' + (query ? ('&' + query.slice(1)) : ''), 'bridge-recommend')
+    .then(function(resp) {
+      var recommended = unwrapCodeIntelData(resp) || {};
+      codeIntelBridgeData = codeIntelBridgeData || {};
+      codeIntelBridgeData.recommended = recommended;
+      renderCodeIntelBridgePanel(codeIntelBridgeData);
+      renderCodeIntelGraph(codeIntelGraphData);
+    })
+    .catch(function(err) {
+      el.innerHTML = '<div style="color:#fca5a5;">' + escHtml(err.message || String(err)) + '</div>';
+    });
+}
+
+function applyCodeIntelModuleRecommendation(communityId) {
+  var moduleId = currentCodeIntelBridgeModuleId();
+  var el = document.getElementById('codeIntelBridge');
+  if (!el || !moduleId || !communityId) return;
+  el.innerHTML = '<div style="color:#94a3b8;">正在应用推荐映射...</div>';
+  postCodeIntelJson('/api/code-intel/link/module', {
+    moduleId: moduleId,
+    communityId: communityId
+  }, 'bridge-link-module').then(function() {
+    loadCodeIntelBridgePanel(true);
+  }).catch(function(err) {
+    el.innerHTML = '<div style="color:#fca5a5;">' + escHtml(err.message || String(err)) + '</div>';
+  });
+}
+
+function focusCurrentCodeIntelBridgeModule() {
+  var moduleId = currentCodeIntelBridgeModuleId();
+  if (!moduleId) return;
+  codeIntelBridgeFocusNodeId = 'module-overlay:' + moduleId;
+  if (codeIntelNetwork && typeof codeIntelNetwork.focus === 'function') {
+    try {
+      codeIntelNetwork.focus(codeIntelBridgeFocusNodeId, {
+        scale: 1.2,
+        animation: { duration: 600, easingFunction: 'easeInOutQuad' }
+      });
+      return;
+    } catch (e) {}
+  }
+  renderCodeIntelGraph(codeIntelGraphData);
+}
+
+function renderCodeIntelBridgePanel(data) {
+  var el = document.getElementById('codeIntelBridge');
+  if (!el) return;
+  if (!data || !data.resolved) {
+    el.innerHTML = '暂无 bridge 数据';
+    return;
+  }
+
+  var resolved = data.resolved || {};
+  var recommended = data.recommended || null;
+  var html = '';
+  var moduleInfo = resolved.module || {};
+  html += '<div style="margin-bottom:10px;"><strong>模块:</strong> ' + escHtml(String(moduleInfo.name || moduleInfo.moduleId || '-')) + ' <span style="color:#64748b;">(' + escHtml(String(moduleInfo.moduleId || '-')) + ')</span></div>';
+
+  var links = resolved.links || [];
+  html += '<div style="margin-bottom:10px;"><strong>当前映射:</strong></div>';
+  if (!links.length) {
+    html += '<div style="color:#94a3b8;margin-bottom:10px;">尚未建立 module → community 映射</div>';
+  } else {
+    for (var i = 0; i < links.length; i++) {
+      html += '<div style="margin-bottom:6px;color:#86efac;">• ' + escHtml(String(links[i].communityId || '')) + '</div>';
+    }
+  }
+
+  if (recommended) {
+    var communities = recommended.recommendedCommunities || [];
+    var processes = recommended.recommendedProcesses || [];
+    html += '<div style="margin:10px 0 6px;"><strong>推荐 Communities:</strong></div>';
+    if (!communities.length) {
+      html += '<div style="color:#94a3b8;">暂无推荐 community</div>';
+    } else {
+      for (var c = 0; c < communities.length; c++) {
+        var item = communities[c];
+        html += '<div style="margin-bottom:8px;padding:8px;border:1px solid #1f2a44;border-radius:8px;background:#0b1220;">';
+        html += '<div style="display:flex;justify-content:space-between;gap:8px;align-items:flex-start;">';
+        html += '<div><div style="color:#dbe7ff;font-weight:600;">' + escHtml(String((item.community && item.community.label) || '-')) + '</div>';
+        html += '<div style="color:#64748b;">' + escHtml(String((item.community && item.community.id) || '-')) + ' · score ' + escHtml(String(item.score || 0)) + '</div></div>';
+        html += '<button class="refresh-btn" data-community-id="' + escHtml(encodeURIComponent(String((item.community && item.community.id) || ''))) + '" onclick="applyCodeIntelModuleRecommendation(decodeURIComponent(this.getAttribute(\\x27data-community-id\\x27) || \\x27\\x27))" style="padding:6px 10px;">应用</button>';
+        html += '</div>';
+        if (item.reasons && item.reasons.length) {
+          html += '<div style="margin-top:6px;color:#94a3b8;">' + escHtml(item.reasons.join(' | ')) + '</div>';
+        }
+        html += '</div>';
+      }
+    }
+    html += '<div style="margin:10px 0 6px;"><strong>推荐 Processes:</strong></div>';
+    if (!processes.length) {
+      html += '<div style="color:#94a3b8;">暂无推荐 process</div>';
+    } else {
+      for (var p = 0; p < processes.length; p++) {
+        var proc = processes[p];
+        html += '<div style="margin-bottom:6px;">• <span style="color:#dbe7ff;">' + escHtml(String((proc.process && proc.process.label) || '-')) + '</span> <span style="color:#64748b;">(score ' + escHtml(String(proc.score || 0)) + ')</span></div>';
+      }
+    }
+  }
+
+  el.innerHTML = html;
+}
+
+function buildCodeIntelBridgeOverlay(graph) {
+  if (!graph || !graph.nodes || !graph.edges) {
+    return { graph: graph, overlayMeta: '' };
+  }
+
+  var filters = getCodeIntelBridgeFilters();
+  var nodes = graph.nodes.slice();
+  var edges = graph.edges.slice();
+  var nodeIdSet = {};
+  for (var i = 0; i < nodes.length; i++) nodeIdSet[nodes[i].id] = true;
+  var nodeById = {};
+  for (var ni = 0; ni < nodes.length; ni++) nodeById[nodes[ni].id] = nodes[ni];
+  var edgeKeySet = {};
+  for (var j = 0; j < edges.length; j++) {
+    edgeKeySet[edges[j].from + '|' + edges[j].to + '|' + edges[j].label] = true;
+  }
+
+  function moduleMatchesFilter(moduleInfo) {
+    if (!filters.moduleFamily) return true;
+    var moduleId = String((moduleInfo && moduleInfo.moduleId) || '').toLowerCase();
+    var moduleName = String((moduleInfo && moduleInfo.name) || '').toLowerCase();
+    return moduleId.indexOf(filters.moduleFamily) === 0 || moduleName.indexOf(filters.moduleFamily) !== -1;
+  }
+
+  function communityMatchesFilter(communityId) {
+    if (!filters.communityQuery) return true;
+    var node = nodeById[communityId] || {};
+    var idText = String(communityId || '').toLowerCase();
+    var labelText = String(node.label || '').toLowerCase();
+    return idText.indexOf(filters.communityQuery) !== -1 || labelText.indexOf(filters.communityQuery) !== -1;
+  }
+
+  function ensureOverlayNode(moduleInfo) {
+    var moduleId = String((moduleInfo && moduleInfo.moduleId) || '').trim();
+    if (!moduleId) return null;
+    var overlayNodeId = 'module-overlay:' + moduleId;
+    if (!nodeIdSet[overlayNodeId]) {
+      nodeIdSet[overlayNodeId] = true;
+      nodes.push({
+        id: overlayNodeId,
+        label: String((moduleInfo && (moduleInfo.name || moduleInfo.moduleId)) || moduleId),
+        type: 'module',
+        properties: {
+          moduleId: moduleId,
+          bridgeOverlay: true,
+          focused: codeIntelBridgeFocusNodeId === overlayNodeId
+        }
+      });
+    }
+    return overlayNodeId;
+  }
+
+  function appendOverlayLinks(moduleInfo, links, recommendedCommunities, recommendedProcesses) {
+    if (!moduleMatchesFilter(moduleInfo)) return;
+    var overlayNodeId = null;
+    var addedAny = false;
+
+    var currentLinks = links || [];
+    for (var k = 0; k < currentLinks.length; k++) {
+      var linkedCommunityId = String(currentLinks[k].communityId || '');
+      var key = overlayNodeId + '|' + linkedCommunityId + '|BRIDGE_LINK';
+      if (!filters.showLinked) continue;
+      if (!linkedCommunityId || !communityMatchesFilter(linkedCommunityId)) continue;
+      if (!overlayNodeId) overlayNodeId = ensureOverlayNode(moduleInfo);
+      key = overlayNodeId + '|' + linkedCommunityId + '|BRIDGE_LINK';
+      if (!edgeKeySet[key]) {
+        edgeKeySet[key] = true;
+        edges.push({
+          from: overlayNodeId,
+          to: linkedCommunityId,
+          label: 'BRIDGE_LINK',
+          confidence: 1,
+          properties: { bridgeOverlay: true, bridgeKind: 'linked' }
+        });
+        addedAny = true;
+      }
+    }
+
+    var recCommunities = recommendedCommunities || [];
+    for (var c = 0; c < recCommunities.length; c++) {
+      var community = recCommunities[c] && recCommunities[c].community;
+      var recommendedCommunityId = String((community && community.id) || '');
+      var recKey = overlayNodeId + '|' + recommendedCommunityId + '|BRIDGE_RECOMMEND';
+      var linkedKey = overlayNodeId + '|' + recommendedCommunityId + '|BRIDGE_LINK';
+      if (!filters.showRecommended) continue;
+      if (!recommendedCommunityId || !communityMatchesFilter(recommendedCommunityId)) continue;
+      if (!overlayNodeId) overlayNodeId = ensureOverlayNode(moduleInfo);
+      recKey = overlayNodeId + '|' + recommendedCommunityId + '|BRIDGE_RECOMMEND';
+      linkedKey = overlayNodeId + '|' + recommendedCommunityId + '|BRIDGE_LINK';
+      if (!edgeKeySet[linkedKey] && !edgeKeySet[recKey]) {
+        edgeKeySet[recKey] = true;
+        edges.push({
+          from: overlayNodeId,
+          to: recommendedCommunityId,
+          label: 'BRIDGE_RECOMMEND',
+          confidence: 0.75,
+          properties: { bridgeOverlay: true, bridgeKind: 'recommended' }
+        });
+        addedAny = true;
+      }
+    }
+
+    var recProcesses = recommendedProcesses || [];
+    for (var p = 0; p < recProcesses.length; p++) {
+      var process = recProcesses[p] && recProcesses[p].process;
+      var processId = String((process && process.id) || '');
+      var processKey = overlayNodeId + '|' + processId + '|BRIDGE_RECOMMEND';
+      var processNode = nodeById[processId] || {};
+      var processCommunityId = String((processNode.properties && processNode.properties.communityId) || '');
+      if (!filters.showRecommendedProcess) continue;
+      if (!processId) continue;
+      if (filters.communityQuery && processCommunityId && !communityMatchesFilter(processCommunityId)) continue;
+      if (!overlayNodeId) overlayNodeId = ensureOverlayNode(moduleInfo);
+      processKey = overlayNodeId + '|' + processId + '|BRIDGE_RECOMMEND';
+      if (!edgeKeySet[processKey]) {
+        edgeKeySet[processKey] = true;
+        edges.push({
+          from: overlayNodeId,
+          to: processId,
+          label: 'BRIDGE_RECOMMEND',
+          confidence: 0.55,
+          properties: { bridgeOverlay: true, bridgeKind: 'recommended-process' }
+        });
+        addedAny = true;
+      }
+    }
+
+    if (!addedAny && overlayNodeId) {
+      for (var idx = nodes.length - 1; idx >= 0; idx--) {
+        if (nodes[idx].id === overlayNodeId) {
+          nodes.splice(idx, 1);
+          break;
+        }
+      }
+      delete nodeIdSet[overlayNodeId];
+    }
+  }
+
+  if (codeIntelBridgeData && codeIntelBridgeData.resolved) {
+    var resolved = codeIntelBridgeData.resolved || {};
+    var recommended = codeIntelBridgeData.recommended || {};
+    appendOverlayLinks(
+      resolved.module || {},
+      resolved.links || [],
+      recommended.recommendedCommunities || [],
+      recommended.recommendedProcesses || [],
+    );
+  }
+
+  if (isCodeIntelBridgeShowAllEnabled() && codeIntelBridgeOverviewData && codeIntelBridgeOverviewData.modules) {
+    for (var m = 0; m < codeIntelBridgeOverviewData.modules.length; m++) {
+      var item = codeIntelBridgeOverviewData.modules[m] || {};
+      appendOverlayLinks(item.module || {}, item.links || [], [], []);
+    }
+  }
+
+  return {
+    graph: { nodes: nodes, edges: edges },
+    overlayMeta: ' + bridge overlay'
+  };
+}
+
+function ensureCodeIntelAtlasLoaded(callback) {
+  if (typeof deck !== 'undefined' && deck.Deck && deck.TextLayer && deck.PolygonLayer) {
+    callback();
+    return;
+  }
+  codeIntelAtlasCallbacks.push(callback);
+  if (codeIntelAtlasLoading) return;
+  codeIntelAtlasLoading = true;
+
+  var atlasUrls = [
+    'https://cdn.jsdelivr.net/npm/deck.gl@8.9.36/dist.min.js',
+    'https://unpkg.com/deck.gl@8.9.36/dist.min.js'
+  ];
+
+  function flushCallbacks() {
+    var callbacks = codeIntelAtlasCallbacks.slice();
+    codeIntelAtlasCallbacks = [];
+    codeIntelAtlasLoading = false;
+    for (var i = 0; i < callbacks.length; i++) {
+      try { callbacks[i](); } catch (e) {}
+    }
+  }
+
+  function failCallbacks() {
+    codeIntelAtlasCallbacks = [];
+    codeIntelAtlasLoading = false;
+  }
+
+  function loadOne(index) {
+    if (typeof deck !== 'undefined' && deck.Deck && deck.TextLayer && deck.PolygonLayer) {
+      flushCallbacks();
+      return;
+    }
+    if (index >= atlasUrls.length) {
+      failCallbacks();
+      return;
+    }
+    var s = document.createElement('script');
+    var settled = false;
+    var timer = setTimeout(function() {
+      if (settled) return;
+      settled = true;
+      try { s.remove(); } catch (e) {}
+      loadOne(index + 1);
+    }, CODE_INTEL_ATLAS_LOAD_TIMEOUT_MS);
+    s.src = atlasUrls[index];
+    s.onload = function() {
+      if (settled) return;
+      settled = true;
+      clearTimeout(timer);
+      if (typeof deck !== 'undefined' && deck.Deck && deck.TextLayer && deck.PolygonLayer) {
+        flushCallbacks();
+      } else {
+        loadOne(index + 1);
+      }
+    };
+    s.onerror = function() {
+      if (settled) return;
+      settled = true;
+      clearTimeout(timer);
+      loadOne(index + 1);
+    };
+    document.head.appendChild(s);
+  }
+
+  loadOne(0);
+}
+
+function ensureCodeIntelVisLoaded(callback) {
+  if (typeof vis !== 'undefined' && vis.Network && vis.DataSet) {
+    callback();
+    return;
+  }
+  codeIntelVisCallbacks.push(callback);
+  if (codeIntelVisLoading) return;
+  codeIntelVisLoading = true;
+
+  function flushCallbacks() {
+    var callbacks = codeIntelVisCallbacks.slice();
+    codeIntelVisCallbacks = [];
+    codeIntelVisLoading = false;
+    for (var i = 0; i < callbacks.length; i++) {
+      try { callbacks[i](); } catch (e) {}
+    }
+  }
+
+  function failCallbacks(message) {
+    codeIntelVisCallbacks = [];
+    codeIntelVisLoading = false;
+    var container = document.getElementById('codeIntelGraph');
+    if (container) {
+      container.innerHTML = '<div style="display:flex;align-items:center;justify-content:center;height:100%;color:#fca5a5;">' + escHtml(message) + '</div>';
+    }
+  }
+
+  function loadOne(index) {
+    if (typeof vis !== 'undefined' && vis.Network && vis.DataSet) {
+      flushCallbacks();
+      return;
+    }
+    if (!VIS_URLS || index >= VIS_URLS.length) {
+      failCallbacks('vis-network CDN 加载失败');
+      return;
+    }
+    var s = document.createElement('script');
+    var settled = false;
+    var timer = setTimeout(function() {
+      if (settled) return;
+      settled = true;
+      try { s.remove(); } catch (e) {}
+      loadOne(index + 1);
+    }, CODE_INTEL_VIS_LOAD_TIMEOUT_MS);
+    s.src = VIS_URLS[index];
+    s.onload = function() {
+      if (settled) return;
+      settled = true;
+      clearTimeout(timer);
+      if (typeof vis !== 'undefined' && vis.Network && vis.DataSet) {
+        flushCallbacks();
+      } else {
+        loadOne(index + 1);
+      }
+    };
+    s.onerror = function() {
+      if (settled) return;
+      settled = true;
+      clearTimeout(timer);
+      loadOne(index + 1);
+    };
+    document.head.appendChild(s);
+  }
+
+  loadOne(0);
+}
+
+function renderCodeIntelGraph3D(graph, container) {
+  function hashString(input) {
+    var h = 2166136261;
+    for (var i = 0; i < input.length; i++) {
+      h ^= input.charCodeAt(i);
+      h = Math.imul(h, 16777619);
+    }
+    return h >>> 0;
+  }
+
+  function hashUnit(input, salt) {
+    var h = hashString(String(input) + '|' + String(salt || ''));
+    return (h % 1000000) / 1000000;
+  }
+
+  function gridClusterPoint(index, total, spacing) {
+    if (total <= 1) return { x: 0, y: 0, z: 0 };
+    var side = Math.ceil(Math.pow(total, 1 / 3));
+    var layerSize = side * side;
+    var zIndex = Math.floor(index / layerSize);
+    var rem = index % layerSize;
+    var yIndex = Math.floor(rem / side);
+    var xIndex = rem % side;
+    var x = (xIndex - (side - 1) / 2) * spacing;
+    var y = (yIndex - (side - 1) / 2) * spacing * 0.82;
+    var z = (zIndex - (side - 1) / 2) * spacing;
+    return { x: x, y: y, z: z };
+  }
+
+  function seededClusterOffset(id, radius) {
+    var u = hashUnit(id, 'phi');
+    var v = hashUnit(id, 'theta');
+    var w = hashUnit(id, 'rr');
+    var theta = u * Math.PI * 2;
+    var phi = Math.acos(2 * v - 1);
+    var rr = Math.max(6, Math.pow(w, 0.72) * radius);
+    return {
+      x: Math.sin(phi) * Math.cos(theta) * rr,
+      y: Math.cos(phi) * rr * 0.72,
+      z: Math.sin(phi) * Math.sin(theta) * rr
+    };
+  }
+
+  var nodeById = {};
+  for (var n0 = 0; n0 < graph.nodes.length; n0++) nodeById[graph.nodes[n0].id] = graph.nodes[n0];
+
+  var fileToCommunity = {};
+  var symbolToFile = {};
+  var folderCounts = {};
+  for (var e0 = 0; e0 < graph.edges.length; e0++) {
+    var e = graph.edges[e0];
+    if (e.label === 'MEMBER_OF' && String(e.to || '').indexOf('community:') === 0) fileToCommunity[e.from] = e.to;
+    if (e.label === 'DEFINES') symbolToFile[e.to] = e.from;
+  }
+
+  for (var fileId in fileToCommunity) {
+    var fileNode = nodeById[fileId];
+    if (!fileNode || !fileNode.properties || !fileNode.properties.filePath) continue;
+    var relPath = String(fileNode.properties.filePath);
+    var segments = relPath.split(/[\\/]/).filter(Boolean);
+    var current = '';
+    for (var s = 0; s < Math.max(0, segments.length - 1); s++) {
+      current = current ? (current + '/' + segments[s]) : segments[s];
+      if (!folderCounts[current]) folderCounts[current] = {};
+      folderCounts[current][fileToCommunity[fileId]] = (folderCounts[current][fileToCommunity[fileId]] || 0) + 1;
+    }
+  }
+
+  function dominantCommunityForFolder(folderPath) {
+    var counts = folderCounts[folderPath];
+    if (!counts) return null;
+    var bestId = null;
+    var bestCount = -1;
+    for (var communityId in counts) {
+      if (counts[communityId] > bestCount) {
+        bestCount = counts[communityId];
+        bestId = communityId;
+      }
+    }
+    return bestId;
+  }
+
+  var communityNodes = graph.nodes.filter(function(n) { return n.type === 'community'; });
+  communityNodes.sort(function(a, b) {
+    return String(a.label || a.id).localeCompare(String(b.label || b.id));
+  });
+
+  var clusterSpacing = Math.max(240, Math.min(360, 180 + communityNodes.length * 1.8));
+  var clusterCenters = {};
+  for (var c = 0; c < communityNodes.length; c++) {
+    clusterCenters[communityNodes[c].id] = gridClusterPoint(c, communityNodes.length, clusterSpacing);
+  }
+
+  function resolveClusterId(node) {
+    if (!node) return null;
+    if (node.type === 'project') return null;
+    if (node.type === 'community') return node.id;
+    if (node.type === 'process' && node.properties && node.properties.communityId) return node.properties.communityId;
+    if (node.type === 'file') return fileToCommunity[node.id] || null;
+    if (node.type === 'symbol') {
+      var parentFileId = symbolToFile[node.id];
+      return parentFileId ? (fileToCommunity[parentFileId] || null) : null;
+    }
+    if (node.type === 'folder' && node.properties && node.properties.filePath) {
+      return dominantCommunityForFolder(String(node.properties.filePath));
+    }
+    return null;
+  }
+
+  var nodes3d = [];
+  for (var i = 0; i < graph.nodes.length; i++) {
+    var n = graph.nodes[i];
+    var clusterId = resolveClusterId(n);
+    var center = clusterId ? clusterCenters[clusterId] : null;
+    var radius = 26;
+    if (n.type === 'community') radius = 4;
+    else if (n.type === 'process') radius = 18;
+    else if (n.type === 'folder') radius = 22;
+    else if (n.type === 'file') radius = 44;
+    else if (n.type === 'symbol') radius = 70;
+    var offset = center ? seededClusterOffset(n.id, radius) : { x: 0, y: 0, z: 0 };
+    nodes3d.push({
+      id: n.id,
+      label: n.label,
+      _origLabel: n.label,
+      _type: n.type,
+      _props: n.properties || {},
+      _clusterId: clusterId,
+      _clusterCx: center ? center.x : 0,
+      _clusterCy: center ? center.y : 0,
+      _clusterCz: center ? center.z : 0,
+      x: n.type === 'project' ? 0 : (center ? center.x + offset.x : offset.x),
+      y: n.type === 'project' ? 0 : (center ? center.y + offset.y : offset.y),
+      z: n.type === 'project' ? 0 : (center ? center.z + offset.z : offset.z)
+    });
+  }
+
+  var edges3d = [];
+  for (var j = 0; j < graph.edges.length; j++) {
+    var e = graph.edges[j];
+    var fromNode = nodeById[e.from];
+    var toNode = nodeById[e.to];
+    var fromClusterId = fromNode ? resolveClusterId(fromNode) : null;
+    var toClusterId = toNode ? resolveClusterId(toNode) : null;
+    var isProjectEdge = !!(
+      e.label === 'CONTAINS' &&
+      ((fromNode && fromNode.type === 'project') || (toNode && toNode.type === 'project'))
+    );
+    var isCrossCluster = !!(fromClusterId && toClusterId && fromClusterId !== toClusterId);
+    edges3d.push({
+      from: e.from,
+      to: e.to,
+      _label: e.label,
+      _props: e.properties || {},
+      width: 1,
+      _projectEdgeHidden: isProjectEdge,
+      _crossCluster: isCrossCluster,
+      _linkStrengthFactor: isProjectEdge ? 0.003 : (isCrossCluster ? 0.045 : 1),
+      _linkDistanceFactor: isProjectEdge ? 2.8 : (isCrossCluster ? 1.7 : 1)
+    });
+  }
+
+  render3DGraph(container, nodes3d, edges3d);
+  codeIntelNetwork = network;
+  if (codeIntelBridgeFocusNodeId && codeIntelNetwork && typeof codeIntelNetwork.focus === 'function') {
+    try {
+      codeIntelNetwork.focus(codeIntelBridgeFocusNodeId, {
+        scale: 1.15,
+        animation: { duration: 700, easingFunction: 'easeInOutQuad' }
+      });
+    } catch (e) {}
+  }
+}
+
+function renderCodeIntelStatus(status) {
+  var cardsEl = document.getElementById('codeIntelStatusCards');
+  var warningsEl = document.getElementById('codeIntelWarnings');
+  if (!cardsEl || !warningsEl || !status) return;
+
+  cardsEl.innerHTML =
+    statCard('📁', status.stats ? (status.stats.fileCount || 0) : 0, '代码文件', status.indexStatus || '-', 'blue') +
+    statCard('🔣', status.stats ? (status.stats.symbolCount || 0) : 0, '符号', status.available ? '可用' : '不可用', 'green') +
+    statCard('🧩', status.stats ? (status.stats.communityCount || 0) : 0, 'Communities', status.mode || '-', 'purple') +
+    statCard('🔄', status.stats ? (status.stats.processCount || 0) : 0, 'Processes', status.source || '-', 'amber');
+
+  var warningList = status.warnings || [];
+  var repoText = '<div><strong>repoPath:</strong> ' + escHtml(status.repoPath || '-') + '</div>';
+  if (!warningList.length) {
+    warningsEl.innerHTML = repoText + '<div style="margin-top:8px;color:#86efac;">当前已启用内嵌源码扫描模式。</div>';
+    return;
+  }
+
+  var html = repoText + '<div style="margin-top:8px;">';
+  for (var i = 0; i < warningList.length; i++) {
+    html += '<div style="margin-bottom:6px;">• ' + escHtml(String(warningList[i])) + '</div>';
+  }
+  html += '</div>';
+  warningsEl.innerHTML = html;
+}
+
+function codeIntelMapHash(input, salt) {
+  var str = String(input || '') + '::' + String(salt || '');
+  var hash = 2166136261;
+  for (var i = 0; i < str.length; i++) {
+    hash ^= str.charCodeAt(i);
+    hash += (hash << 1) + (hash << 4) + (hash << 7) + (hash << 8) + (hash << 24);
+  }
+  return hash >>> 0;
+}
+
+function codeIntelMapUnit(input, salt) {
+  return codeIntelMapHash(input, salt) / 4294967295;
+}
+
+function codeIntelBaseName(filePath) {
+  var parts = String(filePath || '').split(/[\\/]/).filter(Boolean);
+  return parts.length ? parts[parts.length - 1] : String(filePath || '');
+}
+
+function codeIntelShortPath(filePath) {
+  var parts = String(filePath || '').split(/[\\/]/).filter(Boolean);
+  if (parts.length <= 2) return parts.join('/');
+  return parts.slice(parts.length - 2).join('/');
+}
+
+function codeIntelFamilyKeyFromPath(filePath) {
+  var parts = String(filePath || '').split(/[\\/]/).filter(Boolean);
+  if (!parts.length) return '__root__';
+  var head = parts[0];
+  if ((head === 'extensions' || head === 'apps' || head === 'packages' || head === 'crates') && parts.length > 1) {
+    return head + '/' + parts[1];
+  }
+  return head;
+}
+
+function buildCodeIntelMapLayout(graph) {
+  if (!graph || !graph.nodes || !graph.edges) return { nodes: [], edges: [], initialScale: 0.6 };
+
+  var nodeById = {};
+  for (var i = 0; i < graph.nodes.length; i++) nodeById[graph.nodes[i].id] = graph.nodes[i];
+
+  var fileToCommunity = {};
+  var communityFamilyCounts = {};
+  for (var e0 = 0; e0 < graph.edges.length; e0++) {
+    var edge0 = graph.edges[e0];
+    if (edge0.label === 'MEMBER_OF' && String(edge0.to || '').indexOf('community:') === 0) {
+      fileToCommunity[edge0.from] = edge0.to;
+    }
+  }
+
+  for (var fileId in fileToCommunity) {
+    var fileNode = nodeById[fileId];
+    if (!fileNode || !fileNode.properties || !fileNode.properties.filePath) continue;
+    var communityId = fileToCommunity[fileId];
+    var familyKey = codeIntelFamilyKeyFromPath(String(fileNode.properties.filePath || ''));
+    if (!communityFamilyCounts[communityId]) communityFamilyCounts[communityId] = {};
+    communityFamilyCounts[communityId][familyKey] = (communityFamilyCounts[communityId][familyKey] || 0) + 1;
+  }
+
+  function dominantFamilyForCommunity(communityId) {
+    var counts = communityFamilyCounts[communityId];
+    if (!counts) return '__root__';
+    var bestId = '__root__';
+    var bestCount = -1;
+    for (var familyId in counts) {
+      if (counts[familyId] > bestCount) {
+        bestCount = counts[familyId];
+        bestId = familyId;
+      }
+    }
+    return bestId;
+  }
+
+  function resolveClusterId(node) {
+    if (!node) return null;
+    if (node.type === 'community') return node.id;
+    if (node.type === 'file') return fileToCommunity[node.id] || null;
+    if (String(node.id || '').indexOf('module-overlay:') === 0) {
+      var links = node.properties && node.properties.communityLinks;
+      if (links && links.length) return String(links[0].communityId || '') || null;
+    }
+    return null;
+  }
+
+  function resolveFamilyId(node, clusterId) {
+    if (!node) return '__root__';
+    if (node.type === 'file' && node.properties && node.properties.filePath) {
+      return codeIntelFamilyKeyFromPath(String(node.properties.filePath || ''));
+    }
+    if (clusterId && clusterId !== '__misc__') return dominantFamilyForCommunity(clusterId);
+    return '__root__';
+  }
+
+  var keptNodes = [];
+  var keptNodeIds = {};
+  var basenameCounts = {};
+  for (var n0 = 0; n0 < graph.nodes.length; n0++) {
+    var rawNode = graph.nodes[n0];
+    if (
+      rawNode.type !== 'community' &&
+      rawNode.type !== 'file' &&
+      String(rawNode.id || '').indexOf('module-overlay:') !== 0
+    ) continue;
+    var nextNode = {
+      id: rawNode.id,
+      label: rawNode.label,
+      type: rawNode.type,
+      properties: rawNode.properties || {}
+    };
+    if (nextNode.type === 'file') {
+      var filePath0 = String(nextNode.properties.filePath || nextNode.label || nextNode.id);
+      var baseName0 = codeIntelBaseName(filePath0);
+      basenameCounts[baseName0] = (basenameCounts[baseName0] || 0) + 1;
+    }
+    nextNode._clusterId = resolveClusterId(nextNode) || '__misc__';
+    nextNode._familyId = resolveFamilyId(nextNode, nextNode._clusterId);
+    keptNodes.push(nextNode);
+    keptNodeIds[nextNode.id] = true;
+  }
+
+  var keptEdges = [];
+  for (var j0 = 0; j0 < graph.edges.length; j0++) {
+    var edge = graph.edges[j0];
+    if (!keptNodeIds[edge.from] || !keptNodeIds[edge.to]) continue;
+    if (edge.label === 'CONTAINS') continue;
+    if (
+      edge.label !== 'IMPORTS' &&
+      edge.label !== 'MEMBER_OF' &&
+      edge.label !== 'BRIDGE_LINK' &&
+      edge.label !== 'BRIDGE_RECOMMEND'
+    ) continue;
+    keptEdges.push({
+      from: edge.from,
+      to: edge.to,
+      label: edge.label,
+      properties: edge.properties || {}
+    });
+  }
+
+  var familyOrder = [];
+  var familySeen = {};
+  var familyToClusters = {};
+  for (var c = 0; c < keptNodes.length; c++) {
+    var familyId0 = keptNodes[c]._familyId || '__root__';
+    var clusterId0 = keptNodes[c]._clusterId || '__misc__';
+    if (!familySeen[familyId0]) {
+      familySeen[familyId0] = true;
+      familyOrder.push(familyId0);
+    }
+    if (!familyToClusters[familyId0]) familyToClusters[familyId0] = [];
+    if (clusterId0 !== '__misc__' && familyToClusters[familyId0].indexOf(clusterId0) === -1) {
+      familyToClusters[familyId0].push(clusterId0);
+    }
+  }
+  familyOrder.sort();
+
+  var familyCenters = {};
+  var familyColumns = Math.max(1, Math.ceil(Math.sqrt(Math.max(1, familyOrder.length))));
+  var familyRows = Math.max(1, Math.ceil(familyOrder.length / familyColumns));
+  for (var f = 0; f < familyOrder.length; f++) {
+    var familyCol = f % familyColumns;
+    var familyRow = Math.floor(f / familyColumns);
+    familyCenters[familyOrder[f]] = {
+      x: (familyCol - (familyColumns - 1) / 2) * 1380,
+      y: (familyRow - (familyRows - 1) / 2) * 980
+    };
+  }
+
+  var clusterCenters = {};
+  for (var f0 = 0; f0 < familyOrder.length; f0++) {
+    var familyKey = familyOrder[f0];
+    var familyCenter = familyCenters[familyKey] || { x: 0, y: 0 };
+    var clusters = (familyToClusters[familyKey] || []).slice().sort();
+    if (!clusters.length) continue;
+    var localCols = Math.max(1, Math.ceil(Math.sqrt(clusters.length)));
+    var localRows = Math.max(1, Math.ceil(clusters.length / localCols));
+    for (var k = 0; k < clusters.length; k++) {
+      var localCol = k % localCols;
+      var localRow = Math.floor(k / localCols);
+      clusterCenters[clusters[k]] = {
+        x: familyCenter.x + (localCol - (localCols - 1) / 2) * 360,
+        y: familyCenter.y + (localRow - (localRows - 1) / 2) * 240
+      };
+    }
+  }
+
+  var buckets = {};
+  function ensureBucket(key, familyId) {
+    if (!buckets[key]) buckets[key] = { familyId: familyId || '__root__', community: [], file: [], overlay: [] };
+    return buckets[key];
+  }
+
+  for (var n1 = 0; n1 < keptNodes.length; n1++) {
+    var node = keptNodes[n1];
+    var bucket = ensureBucket(node._clusterId, node._familyId);
+    if (node.type === 'community') bucket.community.push(node);
+    else if (node.type === 'file') bucket.file.push(node);
+    else if (String(node.id || '').indexOf('module-overlay:') === 0) bucket.overlay.push(node);
+  }
+
+  function placeFileGrid(nodes, center) {
+    var cols = Math.max(2, Math.ceil(Math.sqrt(Math.max(1, nodes.length) * 1.35)));
+    for (var i2 = 0; i2 < nodes.length; i2++) {
+      var col = i2 % cols;
+      var row = Math.floor(i2 / cols);
+      nodes[i2].x = center.x + (col - (cols - 1) / 2) * 122 + (codeIntelMapUnit(nodes[i2].id, 'x') - 0.5) * 14;
+      nodes[i2].y = center.y + 48 + row * 32 + (codeIntelMapUnit(nodes[i2].id, 'y') - 0.5) * 10;
+    }
+  }
+
+  var layoutNodes = [];
+  for (var clusterKey in buckets) {
+    var center = clusterCenters[clusterKey] || familyCenters[buckets[clusterKey].familyId] || { x: 0, y: 0 };
+    var parts = buckets[clusterKey];
+    parts.community.sort(function(a, b) { return String(a.label || a.id).localeCompare(String(b.label || b.id)); });
+    parts.file.sort(function(a, b) { return String((a.properties && a.properties.filePath) || a.label || a.id).localeCompare(String((b.properties && b.properties.filePath) || b.label || b.id)); });
+    parts.overlay.sort(function(a, b) { return String(a.label || a.id).localeCompare(String(b.label || b.id)); });
+
+    for (var i3 = 0; i3 < parts.community.length; i3++) {
+      parts.community[i3].x = center.x;
+      parts.community[i3].y = center.y - i3 * 42;
+    }
+    for (var o = 0; o < parts.overlay.length; o++) {
+      parts.overlay[o].x = center.x + 180 + o * 44;
+      parts.overlay[o].y = center.y - 18;
+    }
+    placeFileGrid(parts.file, center);
+
+    Array.prototype.push.apply(layoutNodes, parts.community);
+    Array.prototype.push.apply(layoutNodes, parts.file);
+    Array.prototype.push.apply(layoutNodes, parts.overlay);
+  }
+
+  for (var n2 = 0; n2 < layoutNodes.length; n2++) {
+    var mappedNode = layoutNodes[n2];
+    if (mappedNode.type === 'file') {
+      var filePath = String(mappedNode.properties.filePath || mappedNode.label || mappedNode.id);
+      var baseName = codeIntelBaseName(filePath);
+      mappedNode._mapLabel = basenameCounts[baseName] > 1 ? codeIntelShortPath(filePath) : baseName;
+    } else {
+      mappedNode._mapLabel = mappedNode.label;
+    }
+  }
+
+  var initialScale = familyOrder.length > 12 ? 0.34 : (familyOrder.length > 8 ? 0.42 : (familyOrder.length > 4 ? 0.52 : 0.68));
+  return { nodes: layoutNodes, edges: keptEdges, initialScale: initialScale };
+}
+
+function buildCodeIntelAtlasLayout(graph) {
+  var mapLayout = buildCodeIntelMapLayout(graph);
+  var nodes = mapLayout.nodes || [];
+  var edges = mapLayout.edges || [];
+  var nodeById = {};
+  var districtById = {};
+  var blocks = [];
+  var fileLabels = [];
+  var communityLabels = [];
+  var overlayLabels = [];
+  var importEdges = [];
+  var minX = Infinity, minY = Infinity, maxX = -Infinity, maxY = -Infinity;
+  var palette = [
+    [99, 102, 241],
+    [16, 185, 129],
+    [245, 158, 11],
+    [168, 85, 247],
+    [59, 130, 246],
+    [236, 72, 153]
+  ];
+
+  function expandBounds(x, y) {
+    if (x < minX) minX = x;
+    if (y < minY) minY = y;
+    if (x > maxX) maxX = x;
+    if (y > maxY) maxY = y;
+  }
+
+  function polygonRect(cx, cy, width, height) {
+    var hw = width / 2;
+    var hh = height / 2;
+    return [
+      [cx - hw, cy - hh],
+      [cx + hw, cy - hh],
+      [cx + hw, cy + hh],
+      [cx - hw, cy + hh]
+    ];
+  }
+
+  function rgba(rgb, alpha) {
+    return [rgb[0], rgb[1], rgb[2], Math.round(alpha * 255)];
+  }
+
+  for (var i = 0; i < nodes.length; i++) nodeById[nodes[i].id] = nodes[i];
+
+  var filesByDistrictAndFolder = {};
+  for (var j = 0; j < nodes.length; j++) {
+    var node = nodes[j];
+    var districtId = String(node._clusterId || '__misc__');
+    if (!districtById[districtId]) {
+      var color = palette[codeIntelMapHash(districtId, 'district') % palette.length];
+      districtById[districtId] = {
+        id: districtId,
+        color: color,
+        files: [],
+        communities: [],
+        overlays: [],
+        minX: Infinity,
+        minY: Infinity,
+        maxX: -Infinity,
+        maxY: -Infinity
+      };
+    }
+    var district = districtById[districtId];
+    if (node.type === 'file') {
+      district.files.push(node);
+      var filePath = String((node.properties && node.properties.filePath) || '');
+      var folderKey = filePath.split(/[\\/]/).slice(0, -1).join('/') || '__root__';
+      var bucketKey = districtId + '::' + folderKey;
+      if (!filesByDistrictAndFolder[bucketKey]) filesByDistrictAndFolder[bucketKey] = [];
+      filesByDistrictAndFolder[bucketKey].push(node);
+    } else if (node.type === 'community') {
+      district.communities.push(node);
+    } else if (String(node.id || '').indexOf('module-overlay:') === 0) {
+      district.overlays.push(node);
+    }
+    if (Number.isFinite(node.x) && Number.isFinite(node.y)) {
+      if (node.x < district.minX) district.minX = node.x;
+      if (node.y < district.minY) district.minY = node.y;
+      if (node.x > district.maxX) district.maxX = node.x;
+      if (node.y > district.maxY) district.maxY = node.y;
+      expandBounds(node.x, node.y);
+    }
+  }
+
+  var districts = [];
+  for (var districtId in districtById) {
+    var district = districtById[districtId];
+    if (!isFinite(district.minX)) continue;
+    var width = Math.max(260, district.maxX - district.minX + 180);
+    var height = Math.max(180, district.maxY - district.minY + 140);
+    var cx = (district.minX + district.maxX) / 2;
+    var cy = (district.minY + district.maxY) / 2 + 12;
+    district.centerX = cx;
+    district.centerY = cy;
+    district.polygon = polygonRect(cx, cy, width, height);
+    districts.push({
+      id: district.id,
+      polygon: district.polygon,
+      fillColor: rgba(district.color, 0.12),
+      lineColor: rgba(district.color, 0.46)
+    });
+    communityLabels.push({
+      id: district.id,
+      nodeId: district.communities.length ? district.communities[0].id : district.id,
+      text: district.communities.length ? String(district.communities[0].label || district.id) : district.id,
+      position: [cx, cy - height / 2 + 26],
+      size: 16,
+      color: [226, 232, 240, 255]
+    });
+    expandBounds(cx - width / 2, cy - height / 2);
+    expandBounds(cx + width / 2, cy + height / 2);
+  }
+
+  for (var folderBucket in filesByDistrictAndFolder) {
+    var files = filesByDistrictAndFolder[folderBucket];
+    if (!files || !files.length) continue;
+    var blockMinX = Infinity, blockMinY = Infinity, blockMaxX = -Infinity, blockMaxY = -Infinity;
+    for (var f = 0; f < files.length; f++) {
+      if (files[f].x < blockMinX) blockMinX = files[f].x;
+      if (files[f].y < blockMinY) blockMinY = files[f].y;
+      if (files[f].x > blockMaxX) blockMaxX = files[f].x;
+      if (files[f].y > blockMaxY) blockMaxY = files[f].y;
+    }
+    var districtId0 = folderBucket.split('::')[0];
+    var district0 = districtById[districtId0];
+    var folderPath0 = folderBucket.slice(districtId0.length + 2);
+    if (!district0) continue;
+    blocks.push({
+      id: folderBucket,
+      polygon: polygonRect((blockMinX + blockMaxX) / 2, (blockMinY + blockMaxY) / 2, Math.max(110, blockMaxX - blockMinX + 44), Math.max(54, blockMaxY - blockMinY + 20)),
+      fillColor: rgba(district0.color, 0.08),
+      lineColor: rgba(district0.color, 0.2),
+      label: codeIntelBaseName(folderPath0 || '__root__')
+    });
+  }
+
+  for (var n = 0; n < nodes.length; n++) {
+    var item = nodes[n];
+    if (item.type === 'file') {
+      fileLabels.push({
+        id: item.id,
+        nodeId: item.id,
+        text: String(item._mapLabel || item.label || item.id),
+        position: [item.x || 0, item.y || 0],
+        size: 14,
+        color: [191, 219, 254, 255]
+      });
+    } else if (String(item.id || '').indexOf('module-overlay:') === 0) {
+      overlayLabels.push({
+        id: item.id,
+        nodeId: item.id,
+        text: String(item.label || item.id),
+        position: [item.x || 0, item.y || 0],
+        size: 12,
+        color: [253, 186, 116, 255]
+      });
+    }
+  }
+
+  for (var e = 0; e < edges.length; e++) {
+    var edge = edges[e];
+    if (edge.label !== 'IMPORTS' && edge.label !== 'BRIDGE_LINK' && edge.label !== 'BRIDGE_RECOMMEND') continue;
+    var fromNode = nodeById[edge.from];
+    var toNode = nodeById[edge.to];
+    if (!fromNode || !toNode) continue;
+    importEdges.push({
+      id: 'atlas-edge-' + e,
+      from: edge.from,
+      to: edge.to,
+      sourcePosition: [fromNode.x || 0, fromNode.y || 0],
+      targetPosition: [toNode.x || 0, toNode.y || 0],
+      color: edge.label === 'BRIDGE_LINK' ? [251, 146, 60, 220] : (edge.label === 'BRIDGE_RECOMMEND' ? [250, 204, 21, 200] : [96, 165, 250, 190]),
+      width: edge.label === 'BRIDGE_LINK' ? 2.5 : 1.4
+    });
+  }
+
+  if (!isFinite(minX)) {
+    minX = -200; minY = -120; maxX = 200; maxY = 120;
+  }
+
+  return {
+    mapLayout: mapLayout,
+    districts: districts,
+    blocks: blocks,
+    fileLabels: fileLabels,
+    communityLabels: communityLabels,
+    overlayLabels: overlayLabels,
+    edges: importEdges,
+    nodeById: nodeById,
+    bounds: { minX: minX - 180, minY: minY - 140, maxX: maxX + 180, maxY: maxY + 180 }
+  };
+}
+
+function computeCodeIntelAtlasViewState(bounds, width, height) {
+  var spanX = Math.max(1, (bounds.maxX || 0) - (bounds.minX || 0));
+  var spanY = Math.max(1, (bounds.maxY || 0) - (bounds.minY || 0));
+  var usableW = Math.max(320, Number(width || 0));
+  var usableH = Math.max(240, Number(height || 0));
+  var scaleX = usableW / spanX;
+  var scaleY = usableH / spanY;
+  var zoom = Math.log(Math.max(0.0001, Math.min(scaleX, scaleY))) / Math.LN2;
+  return {
+    target: [(bounds.minX + bounds.maxX) / 2, (bounds.minY + bounds.maxY) / 2, 0],
+    zoom: Math.max(-4.5, Math.min(1.2, zoom - 0.18))
+  };
+}
+
+function renderCodeIntelAtlasLayers() {
+  if (!codeIntelAtlasDeck || !codeIntelAtlasState || typeof deck === 'undefined') return;
+  var hovered = codeIntelAtlasHoverNodeId ? String(codeIntelAtlasHoverNodeId) : '';
+  var selected = codeIntelSelectedNodeId ? String(codeIntelSelectedNodeId) : '';
+  var activeNodeId = selected || hovered;
+  var activeEdges = [];
+  for (var i = 0; i < codeIntelAtlasState.edges.length; i++) {
+    var edge = codeIntelAtlasState.edges[i];
+    if (activeNodeId && (edge.from === activeNodeId || edge.to === activeNodeId)) activeEdges.push(edge);
+  }
+  var highlight = [];
+  if (activeNodeId && codeIntelAtlasState.nodeById[activeNodeId]) {
+    var n = codeIntelAtlasState.nodeById[activeNodeId];
+    highlight.push({
+      position: [n.x || 0, n.y || 0],
+      radius: n.type === 'community' ? 42 : 26
+    });
+  }
+
+  codeIntelAtlasDeck.setProps({
+    layers: [
+      new deck.PolygonLayer({
+        id: 'code-intel-atlas-districts',
+        data: codeIntelAtlasState.districts,
+        getPolygon: function(d) { return d.polygon; },
+        getFillColor: function(d) { return d.fillColor; },
+        getLineColor: function(d) { return d.lineColor; },
+        getLineWidth: 2,
+        lineWidthUnits: 'pixels',
+        stroked: true,
+        filled: true,
+        pickable: false
+      }),
+      new deck.PolygonLayer({
+        id: 'code-intel-atlas-blocks',
+        data: codeIntelAtlasState.blocks,
+        getPolygon: function(d) { return d.polygon; },
+        getFillColor: function(d) { return d.fillColor; },
+        getLineColor: function(d) { return d.lineColor; },
+        getLineWidth: 1,
+        lineWidthUnits: 'pixels',
+        stroked: true,
+        filled: true,
+        pickable: false
+      }),
+      new deck.LineLayer({
+        id: 'code-intel-atlas-edges',
+        data: activeEdges,
+        getSourcePosition: function(d) { return d.sourcePosition; },
+        getTargetPosition: function(d) { return d.targetPosition; },
+        getColor: function(d) { return d.color; },
+        getWidth: function(d) { return d.width; },
+        widthUnits: 'pixels',
+        pickable: false
+      }),
+      new deck.ScatterplotLayer({
+        id: 'code-intel-atlas-highlight',
+        data: highlight,
+        getPosition: function(d) { return d.position; },
+        getRadius: function(d) { return d.radius; },
+        radiusUnits: 'pixels',
+        getFillColor: [99, 102, 241, 45],
+        getLineColor: [165, 180, 252, 180],
+        lineWidthUnits: 'pixels',
+        getLineWidth: 2,
+        stroked: true,
+        filled: true,
+        pickable: false
+      }),
+      new deck.TextLayer({
+        id: 'code-intel-atlas-community-labels',
+        data: codeIntelAtlasState.communityLabels,
+        getText: function(d) { return d.text; },
+        getPosition: function(d) { return d.position; },
+        getColor: function(d) { return d.color; },
+        getSize: function(d) { return d.size; },
+        getTextAnchor: 'middle',
+        getAlignmentBaseline: 'center',
+        fontFamily: 'Inter, Segoe UI, sans-serif',
+        background: true,
+        getBackgroundColor: [15, 23, 42, 180],
+        getBorderColor: [99, 102, 241, 120],
+        getBorderWidth: 1,
+        billboard: false,
+        pickable: true,
+        onClick: function(info) { if (info && info.object) selectCodeIntelNode(info.object.nodeId); }
+      }),
+      new deck.TextLayer({
+        id: 'code-intel-atlas-file-labels',
+        data: codeIntelAtlasState.fileLabels,
+        getText: function(d) { return d.text; },
+        getPosition: function(d) { return d.position; },
+        getColor: function(d) { return d.color; },
+        getSize: function(d) { return d.size; },
+        getTextAnchor: 'middle',
+        getAlignmentBaseline: 'center',
+        fontFamily: 'Inter, Segoe UI, sans-serif',
+        background: true,
+        getBackgroundColor: [10, 14, 26, 150],
+        billboard: false,
+        pickable: true,
+        onHover: function(info) {
+          codeIntelAtlasHoverNodeId = info && info.object ? info.object.nodeId : null;
+          renderCodeIntelAtlasLayers();
+        },
+        onClick: function(info) { if (info && info.object) selectCodeIntelNode(info.object.nodeId); }
+      }),
+      new deck.TextLayer({
+        id: 'code-intel-atlas-overlay-labels',
+        data: codeIntelAtlasState.overlayLabels,
+        getText: function(d) { return d.text; },
+        getPosition: function(d) { return d.position; },
+        getColor: function(d) { return d.color; },
+        getSize: function(d) { return d.size; },
+        getTextAnchor: 'start',
+        getAlignmentBaseline: 'center',
+        fontFamily: 'Inter, Segoe UI, sans-serif',
+        background: true,
+        getBackgroundColor: [124, 45, 18, 110],
+        billboard: false,
+        pickable: true,
+        onClick: function(info) { if (info && info.object) selectCodeIntelNode(info.object.nodeId); }
+      })
+    ]
+  });
+}
+
+function focusCodeIntelAtlasNode(nodeId) {
+  if (!codeIntelAtlasDeck || !codeIntelAtlasState || !nodeId) return;
+  var targetNode = codeIntelAtlasState.nodeById[String(nodeId)];
+  if (!targetNode) return;
+  codeIntelAtlasViewState = Object.assign({}, codeIntelAtlasViewState || codeIntelAtlasState.initialViewState, {
+    target: [targetNode.x || 0, targetNode.y || 0, 0],
+    zoom: Math.min(2.2, Math.max((codeIntelAtlasViewState && codeIntelAtlasViewState.zoom) || 0, 0.5)),
+    transitionDuration: 350
+  });
+  codeIntelAtlasDeck.setProps({ viewState: codeIntelAtlasViewState });
+}
+
+function updateCodeIntelAtlasSelection() {
+  renderCodeIntelAtlasLayers();
+}
+
+function destroyCodeIntelAtlas() {
+  if (codeIntelAtlasDeck && typeof codeIntelAtlasDeck.finalize === 'function') {
+    try { codeIntelAtlasDeck.finalize(); } catch (e) {}
+  }
+  codeIntelAtlasDeck = null;
+  codeIntelAtlasState = null;
+  codeIntelAtlasViewState = null;
+  codeIntelAtlasHoverNodeId = null;
+}
+
+function renderCodeIntelAtlasGraph(graph, container) {
+  if (typeof deck === 'undefined' || !deck.Deck) return false;
+  destroyCodeIntelAtlas();
+  container.innerHTML = '';
+  var atlasState = buildCodeIntelAtlasLayout(graph);
+  atlasState.initialViewState = computeCodeIntelAtlasViewState(atlasState.bounds, container.clientWidth || 1200, container.clientHeight || 700);
+  codeIntelAtlasState = atlasState;
+  codeIntelAtlasViewState = Object.assign({}, atlasState.initialViewState);
+  codeIntelAtlasDeck = new deck.Deck({
+    parent: container,
+    views: [new deck.OrthographicView({ id: 'code-intel-atlas-view' })],
+    initialViewState: codeIntelAtlasViewState,
+    controller: true,
+    getCursor: function(state) { return state && state.isDragging ? 'grabbing' : 'grab'; },
+    parameters: { clearColor: [10 / 255, 14 / 255, 26 / 255, 1] },
+    onViewStateChange: function(params) {
+      codeIntelAtlasViewState = params.viewState;
+      if (codeIntelAtlasDeck) codeIntelAtlasDeck.setProps({ viewState: codeIntelAtlasViewState });
+    },
+    onClick: function(info) {
+      if (!info || !info.object) {
+        codeIntelSelectedNodeId = null;
+        renderCodeIntelSelection(null, codeIntelRenderedGraphData);
+        renderCodeIntelAtlasLayers();
+      }
+    },
+    getTooltip: function(info) {
+      if (!info || !info.object) return null;
+      return { text: info.object.text || info.object.id || '' };
+    }
+  });
+  renderCodeIntelAtlasLayers();
+  return true;
+}
+
+function buildCodeIntelDegreeMap(graph) {
+  var degreeMap = {};
+  if (!graph || !graph.edges) return degreeMap;
+  for (var i = 0; i < graph.edges.length; i++) {
+    var edge = graph.edges[i];
+    degreeMap[edge.from] = (degreeMap[edge.from] || 0) + 1;
+    degreeMap[edge.to] = (degreeMap[edge.to] || 0) + 1;
+  }
+  return degreeMap;
+}
+
+function codeIntelNodeStyle(node, degree) {
+  var size = Math.max(12, Math.min(28, 12 + Math.sqrt(Math.max(0, degree || 0)) * 2.4));
+  if (node.type === 'community') {
+    return {
+      shape: 'hexagon',
+      size: Math.max(size, 22),
+      color: { background: '#4f46e5', border: '#a5b4fc', highlight: { background: '#4f46e5', border: '#ffffff' } },
+      font: { color: '#eef2ff', size: 14, face: 'Inter, Segoe UI, sans-serif' },
+      borderWidth: 2
+    };
+  }
+  if (node.type === 'folder') {
+    return {
+      shape: 'diamond',
+      size: Math.max(size - 1, 16),
+      color: { background: '#0f766e', border: '#5eead4', highlight: { background: '#0f766e', border: '#ffffff' } },
+      font: { color: '#ccfbf1', size: 12, face: 'Inter, Segoe UI, sans-serif' },
+      borderWidth: 2
+    };
+  }
+  if (node.type === 'process') {
+    return {
+      shape: 'star',
+      size: Math.max(size, 18),
+      color: { background: '#7c3aed', border: '#d8b4fe', highlight: { background: '#7c3aed', border: '#ffffff' } },
+      font: { color: '#f5f3ff', size: 13, face: 'Inter, Segoe UI, sans-serif' },
+      borderWidth: 2
+    };
+  }
+  if (String(node.id || '').indexOf('module-overlay:') === 0) {
+    return {
+      shape: 'triangle',
+      size: Math.max(size, 18),
+      color: { background: '#ea580c', border: '#fdba74', highlight: { background: '#ea580c', border: '#ffffff' } },
+      font: { color: '#ffedd5', size: 12, face: 'Inter, Segoe UI, sans-serif' },
+      borderWidth: 2
+    };
+  }
+  return {
+    shape: 'box',
+    size: Math.max(size, 14),
+    color: { background: '#1d4ed8', border: '#93c5fd', highlight: { background: '#1d4ed8', border: '#ffffff' } },
+    font: { color: '#dbeafe', size: 12, face: 'Inter, Segoe UI, sans-serif' },
+    borderWidth: 1.5
+  };
+}
+
+function codeIntelEdgeStyle(edge) {
+  var label = String(edge.label || '');
+  var bridgeKind = String((edge.properties && edge.properties.bridgeKind) || '');
+  if (label === 'IMPORTS') {
+    return { width: 1.6, color: { color: '#4b5563', highlight: '#60a5fa', hover: '#60a5fa' }, dashes: false, arrows: { to: { enabled: true, scaleFactor: 0.45 } }, _highlightColor: '#60a5fa' };
+  }
+  if (label === 'MEMBER_OF') {
+    return { width: 1.2, color: { color: '#4b5563', highlight: '#f59e0b', hover: '#f59e0b' }, dashes: [4, 3], arrows: { to: { enabled: true, scaleFactor: 0.4 } }, _highlightColor: '#f59e0b' };
+  }
+  if (label === 'STEP_IN_PROCESS') {
+    return { width: 1.2, color: { color: '#4b5563', highlight: '#c084fc', hover: '#c084fc' }, dashes: [5, 4], arrows: { to: { enabled: true, scaleFactor: 0.4 } }, _highlightColor: '#c084fc' };
+  }
+  if (label === 'BRIDGE_LINK') {
+    return { width: 2.2, color: { color: '#4b5563', highlight: '#fb923c', hover: '#fb923c' }, dashes: false, arrows: { to: { enabled: true, scaleFactor: 0.5 } }, _highlightColor: '#fb923c' };
+  }
+  if (label === 'BRIDGE_RECOMMEND') {
+    var recommendColor = bridgeKind === 'recommended-process' ? '#38bdf8' : '#facc15';
+    return { width: 1.8, color: { color: '#4b5563', highlight: recommendColor, hover: recommendColor }, dashes: [6, 4], arrows: { to: { enabled: true, scaleFactor: 0.45 } }, _highlightColor: recommendColor };
+  }
+  return { width: 1, color: { color: '#4b5563', highlight: '#9ca3af', hover: '#9ca3af' }, dashes: false, arrows: { to: { enabled: false } }, _highlightColor: '#9ca3af' };
+}
+
+function buildCodeIntelPhysicsOptions(nodeCount) {
+  if (nodeCount > 2000) {
+    return {
+      enabled: false,
+      stabilization: { enabled: false }
+    };
+  }
+  if (nodeCount > 800) {
+    return {
+      enabled: true,
+      solver: 'forceAtlas2Based',
+      forceAtlas2Based: {
+        gravitationalConstant: -58,
+        centralGravity: 0.03,
+        springLength: 125,
+        springConstant: 0.055,
+        damping: 0.52,
+        avoidOverlap: 0.85
+      },
+      stabilization: { enabled: true, iterations: 80, updateInterval: 20 }
+    };
+  }
+  if (nodeCount > 200) {
+    return {
+      enabled: true,
+      solver: 'forceAtlas2Based',
+      forceAtlas2Based: {
+        gravitationalConstant: -74,
+        centralGravity: 0.018,
+        springLength: 145,
+        springConstant: 0.05,
+        damping: 0.42,
+        avoidOverlap: 0.8
+      },
+      stabilization: { enabled: true, iterations: 120, updateInterval: 25 }
+    };
+  }
+  return {
+    enabled: true,
+    solver: 'forceAtlas2Based',
+    forceAtlas2Based: {
+      gravitationalConstant: -82,
+      centralGravity: 0.015,
+      springLength: 150,
+      springConstant: 0.05,
+      damping: 0.4,
+      avoidOverlap: 0.8
+    },
+    stabilization: { enabled: true, iterations: 150, updateInterval: 25 }
+  };
+}
+
+function updateCodeIntelMapEdgeVisibility(selectedNodeId) {
+  if (!codeIntelMapEdgesDataSet || !codeIntelMapEdges || !codeIntelMapEdges.length) return;
+  var selected = selectedNodeId ? String(selectedNodeId) : '';
+  var updates = [];
+  for (var i = 0; i < codeIntelMapEdges.length; i++) {
+    var edge = codeIntelMapEdges[i];
+    var active = !!selected && (edge.from === selected || edge.to === selected);
+    updates.push({
+      id: edge.id,
+      hidden: false,
+      width: selected ? (active ? edge._activeWidth : edge._baseWidth) : edge._baseWidth,
+      color: selected
+        ? { color: active ? edge._highlightColor : 'rgba(75,85,99,0.16)', highlight: edge._highlightColor, hover: edge._highlightColor }
+        : edge._baseColor,
+      dashes: edge._dashed
+    });
+  }
+  codeIntelMapEdgesDataSet.update(updates);
+}
+
+function renderCodeIntelGraph(graph) {
+  var container = document.getElementById('codeIntelGraph');
+  var meta = document.getElementById('codeIntelGraphMeta');
+  if (!container || !meta) return;
+
+  if (!graph || !graph.nodes || !graph.edges) {
+    container.innerHTML = '<div style="display:flex;align-items:center;justify-content:center;height:100%;color:#6b7280;">暂无代码图数据</div>';
+    meta.textContent = '无数据';
+    codeIntelRenderedGraphData = { nodes: [], edges: [] };
+    renderCodeIntelSelection(codeIntelSelectedNodeId, codeIntelRenderedGraphData);
+    setCodeIntelBottomSheetExpanded(codeIntelBottomSheetExpanded);
+    return;
+  }
+
+  var overlay = buildCodeIntelBridgeOverlay(graph);
+  var view = prepareCodeIntelGraphView(overlay.graph);
+  var renderGraph = view.graph;
+  codeIntelRenderedGraphData = renderGraph;
+  meta.textContent = view.metaText + (overlay.overlayMeta || '');
+  renderCodeIntelSelection(codeIntelSelectedNodeId, renderGraph);
+  setCodeIntelBottomSheetExpanded(codeIntelBottomSheetExpanded);
+
+  if (codeIntelNetwork) {
+    codeIntelNetwork.destroy();
+    codeIntelNetwork = null;
+  }
+  destroyCodeIntelAtlas();
+  codeIntelMapNodesDataSet = null;
+  codeIntelMapEdgesDataSet = null;
+  codeIntelMapEdges = [];
+
+  if (typeof vis === 'undefined' || !vis.Network) {
+    container.innerHTML = '<div style="display:flex;align-items:center;justify-content:center;height:100%;color:#9ca3af;">正在加载 vis-network...</div>';
+    ensureCodeIntelVisLoaded(function() { renderCodeIntelGraph(renderGraph); });
+    return;
+  }
+
+  var degreeMap = buildCodeIntelDegreeMap(renderGraph);
+  var nodeCount = renderGraph.nodes.length;
+  var isLargeGraph = nodeCount > 300;
+  var isVeryLargeGraph = nodeCount > 800;
+  var initLabelCompact = nodeCount > 180;
+  var nodes = [];
+  for (var i = 0; i < renderGraph.nodes.length; i++) {
+    var n = renderGraph.nodes[i];
+    var s = codeIntelNodeStyle(n, degreeMap[n.id] || 0);
+    var origFontSize = (s.font && s.font.size) || 12;
+    var nodeFont = s.font;
+    if (initLabelCompact && (n.type === 'file' || n.type === 'folder')) {
+      nodeFont = { size: 0, color: (s.font && s.font.color) || '#dbeafe' };
+    }
+    nodes.push({
+      id: n.id,
+      label: n.label,
+      title: escHtml(n.label + ' (' + n.type + ')'),
+      shape: s.shape,
+      color: s.color,
+      font: nodeFont,
+      size: s.size,
+      borderWidth: s.borderWidth,
+      _type: n.type,
+      _origFontSize: origFontSize,
+      _origLabel: n.label,
+      _props: n.properties || {}
+    });
+  }
+
+  var edges = [];
+  for (var j = 0; j < renderGraph.edges.length; j++) {
+    var e = renderGraph.edges[j];
+    var es = codeIntelEdgeStyle(e);
+    edges.push({
+      id: 'code-intel-edge-' + j,
+      from: e.from,
+      to: e.to,
+      arrows: es.arrows,
+      width: es.width,
+      _baseWidth: es.width,
+      _activeWidth: Math.max(es.width + 0.8, es.width * 1.35),
+      _dashed: es.dashes,
+      _baseColor: es.color,
+      _highlightColor: es._highlightColor || '#9ca3af',
+      color: es.color,
+      dashes: es.dashes,
+      title: e.label,
+      hidden: false
+    });
+  }
+
+  codeIntelMapNodesDataSet = new vis.DataSet(nodes);
+  codeIntelMapEdgesDataSet = new vis.DataSet(edges);
+  codeIntelMapEdges = edges.slice();
+  codeIntelNetwork = new vis.Network(
+    container,
+    { nodes: codeIntelMapNodesDataSet, edges: codeIntelMapEdgesDataSet },
+    {
+      nodes: {
+        borderWidth: 2,
+        chosen: false,
+        shadow: isLargeGraph ? false : { enabled: true, color: 'rgba(0,0,0,0.3)', size: 5, x: 0, y: 2 }
+      },
+      edges: {
+        chosen: false,
+        selectionWidth: 0,
+        smooth: isLargeGraph ? false : { enabled: true, type: 'continuous', roundness: 0.45 },
+        shadow: false
+      },
+      physics: buildCodeIntelPhysicsOptions(nodeCount),
+      interaction: {
+        hover: !isVeryLargeGraph,
+        tooltipDelay: 200,
+        zoomView: true,
+        dragView: true,
+        dragNodes: false,
+        multiselect: false,
+        hideEdgesOnDrag: isLargeGraph,
+        hideEdgesOnZoom: isLargeGraph,
+        zoomSpeed: isVeryLargeGraph ? 0.8 : 1
+      },
+      layout: {
+        improvedLayout: (nodeCount > 200 && nodeCount <= 800),
+        randomSeed: 7
+      }
+    }
+  );
+
+  codeIntelNetwork.on('click', function(params) {
+    if (!params || !params.nodes || !params.nodes.length) {
+      codeIntelSelectedNodeId = null;
+      renderCodeIntelSelection(null, renderGraph);
+      updateCodeIntelMapEdgeVisibility(null);
+      return;
+    }
+    var nodeId = String(params.nodes[0] || '');
+    codeIntelSelectedNodeId = nodeId;
+    renderCodeIntelSelection(nodeId, renderGraph);
+    updateCodeIntelMapEdgeVisibility(nodeId);
+    if (nodeId.indexOf('module-overlay:') !== 0) return;
+    var moduleId = nodeId.slice('module-overlay:'.length);
+    var input = document.getElementById('codeIntelBridgeModuleId');
+    if (input) input.value = moduleId;
+    codeIntelBridgeFocusNodeId = nodeId;
+    loadCodeIntelBridgePanel(false);
+  });
+
+  codeIntelNetwork.on('stabilizationIterationsDone', function() {
+    try { codeIntelNetwork.setOptions({ physics: { enabled: false } }); } catch (e) {}
+    try { codeIntelNetwork.fit({ animation: { duration: 700, easingFunction: 'easeInOutQuad' } }); } catch (e) {}
+  });
+
+  if (isLargeGraph) {
+    var labelHidden = initLabelCompact;
+    codeIntelNetwork.on('zoom', function() {
+      var scale = codeIntelNetwork.getScale();
+      if (scale < 0.55 && !labelHidden) {
+        labelHidden = true;
+        var shrinkUpdates = [];
+        codeIntelMapNodesDataSet.forEach(function(node) {
+          if (node._type === 'file' || node._type === 'folder') {
+            shrinkUpdates.push({ id: node.id, font: { size: 0, color: (node.font && node.font.color) || '#dbeafe' } });
+          }
+        });
+        if (shrinkUpdates.length) codeIntelMapNodesDataSet.update(shrinkUpdates);
+      } else if (scale >= 0.55 && labelHidden) {
+        labelHidden = false;
+        var expandUpdates = [];
+        codeIntelMapNodesDataSet.forEach(function(node) {
+          if (node._type === 'file' || node._type === 'folder') {
+            expandUpdates.push({ id: node.id, font: { size: node._origFontSize || 12, color: (node.font && node.font.color) || '#dbeafe' } });
+          }
+        });
+        if (expandUpdates.length) codeIntelMapNodesDataSet.update(expandUpdates);
+      }
+    });
+  }
+
+  updateCodeIntelMapEdgeVisibility(codeIntelSelectedNodeId || codeIntelBridgeFocusNodeId);
+  if (codeIntelBridgeFocusNodeId && typeof codeIntelNetwork.focus === 'function') {
+    try {
+      codeIntelNetwork.focus(codeIntelBridgeFocusNodeId, {
+        scale: 1.15,
+        animation: { duration: 500, easingFunction: 'easeInOutQuad' }
+      });
+    } catch (e) {}
+  }
+}
+
+function prepareCodeIntelGraphView(graph) {
+  if (!graph || !graph.nodes || !graph.edges) {
+    return {
+      graph: { nodes: [], edges: [] },
+      metaText: '0 节点 / 0 边'
+    };
+  }
+
+  var keptNodes = [];
+  var keptNodeIds = {};
+  for (var i = 0; i < graph.nodes.length; i++) {
+    var n = graph.nodes[i];
+    if (n.type === 'project' || n.type === 'symbol') continue;
+    keptNodes.push(n);
+    keptNodeIds[n.id] = true;
+  }
+
+  var keptEdges = [];
+  for (var j = 0; j < graph.edges.length; j++) {
+    var e = graph.edges[j];
+    if (!keptNodeIds[e.from] || !keptNodeIds[e.to]) continue;
+    if (e.label === 'CONTAINS') continue;
+    keptEdges.push(e);
+  }
+
+  return {
+    graph: {
+      nodes: keptNodes,
+      edges: keptEdges
+    },
+    metaText: graph.nodes.length + ' 节点 / ' + graph.edges.length + ' 边 (代码关系图: ' + keptNodes.length + ' / ' + keptEdges.length + '，已过滤 project/symbol 与 project contains 噪音)'
+  };
+}
+
+function renderCodeIntelClusters(clusters) {
+  var el = document.getElementById('codeIntelClusters');
+  if (!el) return;
+  if (!clusters || !clusters.length) {
+    el.innerHTML = '<div style="color:#6b7280;">暂无 community 数据</div>';
+    return;
+  }
+  var html = '';
+  for (var i = 0; i < clusters.length; i++) {
+    var c = clusters[i];
+    var clusterId = String(c.id || '').replace(/'/g, "\\'");
+    html += '<div class="code-intel-list-item" onclick="selectCodeIntelNode(\\x27' + clusterId + '\\x27)">';
+    html += '<div class="code-intel-list-item-title">' + escHtml(c.label || c.id) + '</div>';
+    html += '<div class="code-intel-list-item-sub">文件 ' + (c.fileCount || 0) + ' / 符号 ' + (c.symbolCount || 0) + '</div>';
+    if (c.members && c.members.length) {
+      html += '<div class="code-intel-list-item-meta">' + escHtml(c.members.slice(0, 4).join(', ')) + (c.members.length > 4 ? ' ...' : '') + '</div>';
+    }
+    html += '</div>';
+  }
+  el.innerHTML = html;
+}
+
+function renderCodeIntelProcesses(processes) {
+  var el = document.getElementById('codeIntelProcesses');
+  if (!el) return;
+  if (!processes || !processes.length) {
+    el.innerHTML = '<div style="color:#6b7280;">暂无 process 数据</div>';
+    return;
+  }
+  var html = '';
+  for (var i = 0; i < processes.length; i++) {
+    var p = processes[i];
+    var processId = String(p.id || '').replace(/'/g, "\\'");
+    html += '<div class="code-intel-list-item" onclick="selectCodeIntelNode(\\x27' + processId + '\\x27)">';
+    html += '<div class="code-intel-list-item-title">' + escHtml(p.label || p.id) + '</div>';
+    html += '<div class="code-intel-list-item-sub">stepCount: ' + (p.stepCount || 0) + '</div>';
+    if (p.steps && p.steps.length) {
+      html += '<div class="code-intel-list-item-meta">' + escHtml(p.steps.slice(0, 4).join(' -> ')) + (p.steps.length > 4 ? ' ...' : '') + '</div>';
+    }
+    html += '</div>';
+  }
+  el.innerHTML = html;
+}
+
 // ========== Stats Dashboard ==========
 var statsLoaded = false;
 

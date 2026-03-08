@@ -7,3 +7,4 @@ dist/
 DEVPLAN.md
 /executor/.venv
 /executor/logs
+/.devplan

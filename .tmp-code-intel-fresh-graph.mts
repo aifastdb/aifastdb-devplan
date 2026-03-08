@@ -1,0 +1,13 @@
+import * as fs from 'node:fs';
+import * as os from 'node:os';
+import * as path from 'node:path';
+import embeddedModule from './src/code-intelligence/embedded-store.ts';
+const { EmbeddedCodeIntelligenceStore } = embeddedModule as typeof import('./src/code-intelligence/embedded-store');
+const tempRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'code-intel-check-'));
+const basePath = path.join(tempRoot, '.devplan');
+fs.mkdirSync(basePath, { recursive: true });
+const store = new EmbeddedCodeIntelligenceStore('native_validation', basePath);
+const graph = await store.getGraph('./tests/fixtures/code-intelligence/native-advanced');
+const edges = graph.edges.filter(edge => edge.from === 'symbol:function:src/gamma/entry.ts:bootstrapGamma' && edge.label === 'CALLS');
+console.log(JSON.stringify(edges, null, 2));
+fs.rmSync(tempRoot, { recursive: true, force: true });

@@ -1,0 +1,246 @@
+{
+  "stats": {
+    "fileCount": 8,
+    "communityCount": 3,
+    "processCount": 3
+  },
+  "requiredNodeIds": [
+    "file:src/gamma/models.ts",
+    "file:src/gamma/entry.ts",
+    "file:src/gamma/default-helper.ts",
+    "file:src/gamma/reexport.ts",
+    "file:src/delta/consumer.ts",
+    "file:src/rust/mod.rs",
+    "file:src/rust/helper.rs",
+    "file:src/rust/service.rs",
+    "community:src/gamma",
+    "community:src/delta",
+    "community:src/rust",
+    "process:src/gamma",
+    "process:src/delta",
+    "process:src/rust",
+    "symbol:module:src/gamma/models.ts:GammaDomain",
+    "symbol:interface:src/gamma/models.ts:GammaDomain.Runner",
+    "symbol:function:src/gamma/models.ts:GammaDomain.helper",
+    "symbol:class:src/gamma/models.ts:GammaDomain.BaseRunner",
+    "symbol:method:src/gamma/models.ts:GammaDomain.BaseRunner.run",
+    "symbol:class:src/gamma/models.ts:GammaDomain.ConcreteRunner",
+    "symbol:method:src/gamma/models.ts:GammaDomain.ConcreteRunner.run",
+    "symbol:function:src/gamma/entry.ts:bootstrapGamma",
+    "symbol:function:src/delta/consumer.ts:consumeGamma",
+    "symbol:function:src/delta/consumer.ts:consumeGammaAlias",
+    "symbol:function:src/delta/consumer.ts:consumeGammaReexport",
+    "symbol:function:src/delta/consumer.ts:consumeGammaDefault",
+    "symbol:function:src/gamma/default-helper.ts:runDefaultGamma",
+    "symbol:trait:src/rust/mod.rs:Service",
+    "symbol:method:src/rust/mod.rs:Service.execute",
+    "symbol:function:src/rust/mod.rs:bootstrap_service",
+    "symbol:function:src/rust/helper.rs:helper_call",
+    "symbol:struct:src/rust/service.rs:ServiceRunner",
+    "symbol:method:src/rust/service.rs:ServiceRunner.execute"
+  ],
+  "requiredImports": [
+    ["file:src/gamma/entry.ts", "file:src/gamma/models.ts"],
+    ["file:src/gamma/default-helper.ts", "file:src/gamma/models.ts"],
+    ["file:src/gamma/reexport.ts", "file:src/gamma/models.ts"],
+    ["file:src/delta/consumer.ts", "file:src/gamma/entry.ts"],
+    ["file:src/delta/consumer.ts", "file:src/gamma/default-helper.ts"],
+    ["file:src/delta/consumer.ts", "file:src/gamma/models.ts"],
+    ["file:src/delta/consumer.ts", "file:src/gamma/reexport.ts"],
+    ["file:src/rust/mod.rs", "file:src/rust/helper.rs"],
+    ["file:src/rust/mod.rs", "file:src/rust/service.rs"],
+    ["file:src/rust/service.rs", "file:src/rust/mod.rs"],
+    ["file:src/rust/service.rs", "file:src/rust/helper.rs"]
+  ],
+  "requiredEdges": [
+    {
+      "from": "symbol:class:src/gamma/models.ts:GammaDomain.ConcreteRunner",
+      "to": "symbol:class:src/gamma/models.ts:GammaDomain.BaseRunner",
+      "label": "EXTENDS"
+    },
+    {
+      "from": "symbol:class:src/gamma/models.ts:GammaDomain.ConcreteRunner",
+      "to": "symbol:interface:src/gamma/models.ts:GammaDomain.Runner",
+      "label": "IMPLEMENTS"
+    },
+    {
+      "from": "symbol:method:src/gamma/models.ts:GammaDomain.BaseRunner.run",
+      "to": "symbol:function:src/gamma/models.ts:GammaDomain.helper",
+      "label": "CALLS"
+    },
+    {
+      "from": "symbol:method:src/gamma/models.ts:GammaDomain.ConcreteRunner.run",
+      "to": "symbol:function:src/gamma/models.ts:GammaDomain.helper",
+      "label": "CALLS"
+    },
+    {
+      "from": "symbol:function:src/delta/consumer.ts:consumeGamma",
+      "to": "symbol:function:src/gamma/entry.ts:bootstrapGamma",
+      "label": "CALLS"
+    },
+    {
+      "from": "symbol:function:src/gamma/entry.ts:bootstrapGamma",
+      "to": "symbol:method:src/gamma/models.ts:GammaDomain.ConcreteRunner.run",
+      "label": "CALLS"
+    },
+    {
+      "from": "symbol:function:src/gamma/default-helper.ts:runDefaultGamma",
+      "to": "symbol:function:src/gamma/models.ts:GammaDomain.helper",
+      "label": "CALLS"
+    },
+    {
+      "from": "symbol:function:src/delta/consumer.ts:consumeGammaAlias",
+      "to": "symbol:function:src/gamma/models.ts:GammaDomain.helper",
+      "label": "CALLS"
+    },
+    {
+      "from": "symbol:function:src/delta/consumer.ts:consumeGammaReexport",
+      "to": "symbol:function:src/gamma/models.ts:GammaDomain.helper",
+      "label": "CALLS"
+    },
+    {
+      "from": "symbol:function:src/delta/consumer.ts:consumeGammaDefault",
+      "to": "symbol:function:src/gamma/default-helper.ts:runDefaultGamma",
+      "label": "CALLS"
+    },
+    {
+      "from": "symbol:struct:src/rust/service.rs:ServiceRunner",
+      "to": "symbol:trait:src/rust/mod.rs:Service",
+      "label": "IMPLEMENTS"
+    },
+    {
+      "from": "symbol:method:src/rust/service.rs:ServiceRunner.execute",
+      "to": "symbol:function:src/rust/helper.rs:helper_call",
+      "label": "CALLS"
+    },
+    {
+      "from": "symbol:function:src/rust/mod.rs:bootstrap_service",
+      "to": "symbol:function:src/rust/helper.rs:helper_call",
+      "label": "CALLS"
+    }
+  ],
+  "nodePropertyChecks": [
+    {
+      "nodeId": "symbol:module:src/gamma/models.ts:GammaDomain",
+      "propertiesInclude": {
+        "kind": "module",
+        "exported": true
+      }
+    },
+    {
+      "nodeId": "symbol:interface:src/gamma/models.ts:GammaDomain.Runner",
+      "propertiesInclude": {
+        "kind": "interface",
+        "ownerId": "symbol:module:src/gamma/models.ts:GammaDomain",
+        "ownerKind": "module",
+        "exported": true
+      }
+    },
+    {
+      "nodeId": "symbol:method:src/gamma/models.ts:GammaDomain.ConcreteRunner.run",
+      "propertiesInclude": {
+        "kind": "method",
+        "ownerId": "symbol:class:src/gamma/models.ts:GammaDomain.ConcreteRunner",
+        "ownerKind": "class",
+        "visibility": "public"
+      }
+    },
+    {
+      "nodeId": "symbol:function:src/gamma/default-helper.ts:runDefaultGamma",
+      "propertiesInclude": {
+        "kind": "function",
+        "exported": true,
+        "defaultExport": true
+      }
+    },
+    {
+      "nodeId": "symbol:method:src/rust/mod.rs:Service.execute",
+      "propertiesInclude": {
+        "kind": "method",
+        "ownerId": "symbol:trait:src/rust/mod.rs:Service",
+        "ownerKind": "trait",
+        "declaration": "trait_method"
+      }
+    },
+    {
+      "nodeId": "symbol:method:src/rust/service.rs:ServiceRunner.execute",
+      "propertiesInclude": {
+        "kind": "method",
+        "ownerId": "symbol:struct:src/rust/service.rs:ServiceRunner",
+        "ownerKind": "struct",
+        "declaration": "trait_impl_method",
+        "implTrait": "Service",
+        "implTarget": "ServiceRunner"
+      }
+    }
+  ],
+  "clusterIds": [
+    "community:src/delta",
+    "community:src/gamma",
+    "community:src/rust"
+  ],
+  "processIds": [
+    "process:src/delta",
+    "process:src/gamma",
+    "process:src/rust"
+  ],
+  "queryChecks": [
+    {
+      "query": "GammaDomain.ConcreteRunner",
+      "topNodeId": "symbol:class:src/gamma/models.ts:GammaDomain.ConcreteRunner",
+      "reasonIncludes": ["exact label match"]
+    },
+    {
+      "query": "ServiceRunner.execute",
+      "topNodeId": "symbol:method:src/rust/service.rs:ServiceRunner.execute"
+    }
+  ],
+  "contextChecks": [
+    {
+      "symbol": "GammaDomain.ConcreteRunner.run",
+      "symbolId": "symbol:method:src/gamma/models.ts:GammaDomain.ConcreteRunner.run",
+      "neighborIds": [
+        "file:src/gamma/models.ts",
+        "symbol:class:src/gamma/models.ts:GammaDomain.ConcreteRunner",
+        "symbol:function:src/gamma/entry.ts:bootstrapGamma",
+        "symbol:function:src/gamma/models.ts:GammaDomain.helper"
+      ],
+      "edgeLabels": ["CALLS", "MEMBER_OF"]
+    },
+    {
+      "symbol": "ServiceRunner.execute",
+      "symbolId": "symbol:method:src/rust/service.rs:ServiceRunner.execute",
+      "neighborIds": [
+        "file:src/rust/service.rs",
+        "symbol:struct:src/rust/service.rs:ServiceRunner",
+        "symbol:function:src/rust/helper.rs:helper_call",
+        "symbol:function:src/rust/mod.rs:bootstrap_service"
+      ],
+      "edgeLabels": ["CALLS", "MEMBER_OF"]
+    }
+  ],
+  "impactChecks": [
+    {
+      "target": "GammaDomain.ConcreteRunner",
+      "direction": "downstream",
+      "limit": 20,
+      "seedId": "symbol:class:src/gamma/models.ts:GammaDomain.ConcreteRunner",
+      "mustIncludeNodeIds": [
+        "symbol:class:src/gamma/models.ts:GammaDomain.BaseRunner",
+        "symbol:interface:src/gamma/models.ts:GammaDomain.Runner"
+      ],
+      "riskLevelOneOf": ["low", "medium", "high"]
+    },
+    {
+      "target": "ServiceRunner.execute",
+      "direction": "downstream",
+      "limit": 20,
+      "seedId": "symbol:method:src/rust/service.rs:ServiceRunner.execute",
+      "mustIncludeNodeIds": [
+        "symbol:function:src/rust/helper.rs:helper_call",
+        "symbol:struct:src/rust/service.rs:ServiceRunner"
+      ],
+      "riskLevelOneOf": ["low", "medium", "high"]
+    }
+  ]
+}

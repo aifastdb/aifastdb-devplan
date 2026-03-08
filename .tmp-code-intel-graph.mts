@@ -1,0 +1,6 @@
+import embeddedModule from './src/code-intelligence/embedded-store.ts';
+const { EmbeddedCodeIntelligenceStore } = embeddedModule as typeof import('./src/code-intelligence/embedded-store');
+const store = new EmbeddedCodeIntelligenceStore('native_validation', './tests/fixtures/code-intelligence/native-advanced/.devplan-temp');
+const graph = await store.getGraph('./tests/fixtures/code-intelligence/native-advanced');
+const edges = graph.edges.filter(edge => edge.from === 'symbol:function:src/gamma/entry.ts:bootstrapGamma' && edge.label === 'CALLS');
+console.log(JSON.stringify(edges, null, 2));

@@ -1,0 +1,10 @@
+import * as fs from 'node:fs/promises';
+import * as path from 'node:path';
+import embeddedModule from './src/code-intelligence/embedded-store.ts';
+const { EmbeddedCodeIntelligenceStore } = embeddedModule as typeof import('./src/code-intelligence/embedded-store');
+const store = new EmbeddedCodeIntelligenceStore('native_validation', './tests/fixtures/code-intelligence/native-advanced/.devplan-temp');
+const repoPath = path.resolve('./tests/fixtures/code-intelligence/native-advanced');
+const files = [] as any[];
+await (store as any).walkRepo(repoPath, repoPath, files);
+const ir = (store as any).buildIrSnapshot(repoPath, files);
+console.log(JSON.stringify(ir.entities.filter((e: any) => e.fileId === 'file:src/gamma/models.ts' && e.kind === 'method').map((e: any) => ({ id: e.id, label: e.label, rawName: e.rawName })), null, 2));

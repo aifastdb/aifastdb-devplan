@@ -209,6 +209,84 @@ export function getStyles(): string {
     .page-view.active { display: flex; flex-direction: column; flex: 1; min-height: 0; }
     .page-graph { position: relative; }
     .page-graph.active { display: flex; flex-direction: column; flex: 1; min-height: 0; }
+    .page-code-intel { position: relative; background: #111827; }
+    .page-code-intel.active { display: flex; flex-direction: column; flex: 1; min-height: 0; }
+    .code-intel-header { position: absolute; top: 0; left: 0; right: 0; padding: 12px 24px 0; align-items: flex-start; gap: 16px; min-height: 104px; }
+    .code-intel-header-copy { display: flex; flex-direction: column; gap: 6px; min-width: 0; padding-top: 2px; }
+    .code-intel-header-copy h1 { font-size: 20px; font-weight: 700; color: #f3f4f6; }
+    .code-intel-header-subtitle { max-width: 680px; font-size: 12px; line-height: 1.5; color: #94a3b8; }
+    .code-intel-stats-bar { display: flex; gap: 10px; flex-wrap: wrap; align-items: stretch; justify-content: flex-end; margin-left: auto; max-width: min(100%, 760px); }
+    .code-intel-stats-bar .stat-card { min-width: 132px; padding: 14px 16px; border-radius: 14px; background: rgba(15, 23, 42, 0.88); border-color: rgba(71, 85, 105, 0.75); backdrop-filter: blur(10px); box-shadow: 0 10px 30px rgba(0,0,0,0.18); }
+    .code-intel-stats-bar .stat-card-icon { font-size: 22px; margin-bottom: 6px; }
+    .code-intel-stats-bar .stat-card-value { font-size: 22px; }
+    .code-intel-stats-bar .stat-card-label { font-size: 11px; }
+    .code-intel-stats-bar .stat-card-sub { font-size: 10px; }
+    .code-intel-graph-container { position: relative; flex: 1; min-height: 0; z-index: 0; }
+    #codeIntelGraph { width: 100%; height: 100%; background: #111827; }
+    .code-intel-bottom-sheet { position: absolute; left: 18px; right: 18px; bottom: 12px; z-index: 24; display: flex; flex-direction: column; border: 1px solid rgba(59,130,246,0.22); border-radius: 16px; background: rgba(15,23,42,0.84); backdrop-filter: blur(12px); box-shadow: 0 20px 60px rgba(0,0,0,0.38); overflow: hidden; transition: transform 0.28s ease, box-shadow 0.2s ease, background 0.2s ease; }
+    .code-intel-bottom-sheet.collapsed { transform: translateY(calc(100% - 48px)); }
+    .code-intel-bottom-sheet:hover { box-shadow: 0 24px 70px rgba(0,0,0,0.45); }
+    .code-intel-bottom-sheet-handle { display: flex; align-items: center; gap: 10px; width: 100%; background: linear-gradient(180deg, rgba(30,41,59,0.98), rgba(15,23,42,0.98)); border: none; border-bottom: 1px solid rgba(51,65,85,0.85); color: #dbe7ff; padding: 12px 16px; text-align: left; cursor: pointer; }
+    .code-intel-bottom-sheet-title { font-size: 13px; font-weight: 700; }
+    .code-intel-bottom-sheet-subtitle { font-size: 11px; color: #94a3b8; }
+    .code-intel-bottom-sheet-arrow { margin-left: auto; font-size: 11px; color: #93c5fd; transition: transform 0.25s ease; }
+    .code-intel-bottom-sheet.collapsed .code-intel-bottom-sheet-arrow { transform: rotate(180deg); }
+    .code-intel-dock { display: flex; flex-direction: column; align-items: stretch; justify-content: flex-start; gap: 10px; padding: 10px 18px 12px; background: rgba(15,23,42,0.96); border-top: 1px solid #334155; max-height: min(44vh, 430px); overflow: auto; }
+    .code-intel-dock-toolbar { display: flex; align-items: center; justify-content: space-between; gap: 12px; flex-wrap: wrap; }
+    .code-intel-dock-controls { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; flex: 1; min-width: 280px; }
+    .code-intel-dock-meta { font-size: 11px; color: #93c5fd; white-space: nowrap; }
+    .code-intel-input { background: #0b1220; border: 1px solid #263655; color: #dbe7ff; border-radius: 8px; padding: 7px 10px; font-size: 12px; min-width: 0; outline: none; transition: border-color 0.15s, box-shadow 0.15s; }
+    .code-intel-input:focus { border-color: #6366f1; box-shadow: 0 0 0 3px rgba(99,102,241,0.15); }
+    #codeIntelRepoPath { flex: 1; min-width: 320px; }
+    .code-intel-dock-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(220px, 1fr)); gap: 10px; align-items: stretch; }
+    .code-intel-dock-card { min-height: 170px; background: #0f172a; border: 1px solid #1f2a44; border-radius: 12px; padding: 12px; display: flex; flex-direction: column; gap: 10px; min-width: 0; }
+    .code-intel-selection-card { grid-column: span 2; }
+    .code-intel-dock-title-row { display: flex; align-items: center; justify-content: space-between; gap: 8px; flex-wrap: wrap; }
+    .code-intel-dock-title { font-size: 13px; font-weight: 700; color: #dbe7ff; }
+    .code-intel-dock-body { flex: 1; min-height: 0; overflow: auto; color: #9fb0d1; font-size: 12px; line-height: 1.6; scrollbar-width: thin; scrollbar-color: #334155 transparent; }
+    .code-intel-dock-body::-webkit-scrollbar { width: 6px; height: 6px; }
+    .code-intel-dock-body::-webkit-scrollbar-thumb { background: #334155; border-radius: 3px; }
+    .code-intel-inline-grid { display: grid; grid-template-columns: 1fr; gap: 8px; }
+    .code-intel-chip-row { display: flex; gap: 8px; flex-wrap: wrap; align-items: center; }
+    .code-intel-mini-check { display: inline-flex; align-items: center; gap: 6px; color: #9fb0d1; font-size: 11px; }
+    .code-intel-mini-check input { accent-color: #6366f1; }
+    .code-intel-badge { display: inline-flex; align-items: center; gap: 6px; padding: 3px 8px; border-radius: 999px; font-size: 10px; border: 1px solid transparent; }
+    .code-intel-badge.linked { color: #fdba74; background: rgba(251,146,60,0.12); border-color: rgba(251,146,60,0.28); }
+    .code-intel-badge.recommended { color: #fde68a; background: rgba(250,204,21,0.1); border-color: rgba(250,204,21,0.24); }
+    .code-intel-badge.recommended-process { color: #7dd3fc; background: rgba(56,189,248,0.1); border-color: rgba(56,189,248,0.24); }
+    .code-intel-action-row { display: flex; gap: 8px; flex-wrap: wrap; }
+    .code-intel-list-item { padding: 10px 0; border-bottom: 1px solid #1f2a44; cursor: pointer; transition: background 0.15s, color 0.15s; }
+    .code-intel-list-item:hover { background: rgba(99,102,241,0.08); color: #dbeafe; }
+    .code-intel-list-item:last-child { border-bottom: none; }
+    .code-intel-list-item-title { font-weight: 700; color: #dbe7ff; }
+    .code-intel-list-item-sub { margin-top: 4px; color: #8da2d6; }
+    .code-intel-list-item-meta { margin-top: 6px; font-size: 11px; color: #94a3b8; }
+    .code-intel-selection-empty { color: #64748b; }
+    .code-intel-selection-title { font-size: 14px; font-weight: 700; color: #f8fafc; margin-bottom: 8px; }
+    .code-intel-selection-badges { display: flex; gap: 8px; flex-wrap: wrap; margin-bottom: 10px; }
+    .code-intel-selection-badges span { padding: 3px 8px; border-radius: 999px; font-size: 10px; background: #172554; color: #93c5fd; }
+    .code-intel-selection-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(180px, 1fr)); gap: 8px; margin-bottom: 10px; }
+    .code-intel-selection-kv { padding: 8px 10px; border-radius: 8px; background: #0b1220; border: 1px solid #1f2a44; }
+    .code-intel-selection-k { font-size: 10px; color: #64748b; text-transform: uppercase; letter-spacing: 0.04em; margin-bottom: 4px; }
+    .code-intel-selection-v { color: #dbe7ff; word-break: break-word; }
+    .code-intel-selection-list { display: flex; flex-wrap: wrap; gap: 6px; }
+    .code-intel-selection-list span { padding: 2px 8px; border-radius: 999px; font-size: 10px; background: #1e293b; color: #cbd5e1; }
+
+    @media (max-width: 1280px) {
+      .code-intel-selection-card { grid-column: span 1; }
+    }
+
+    @media (max-width: 960px) {
+      .code-intel-header { position: relative; padding: 14px 18px 8px; min-height: auto; }
+      .code-intel-stats-bar { width: 100%; justify-content: flex-start; margin-left: 0; }
+      .code-intel-graph-container { min-height: 320px; }
+      .code-intel-bottom-sheet { left: 10px; right: 10px; bottom: 10px; }
+      .code-intel-dock { padding: 10px 12px 12px; max-height: min(56vh, 460px); }
+      .code-intel-dock-toolbar { align-items: stretch; }
+      .code-intel-dock-controls { min-width: 0; width: 100%; }
+      #codeIntelRepoPath { min-width: 0; width: 100%; }
+      .code-intel-bottom-sheet-subtitle { display: none; }
+    }
 
     /* Settings Page */
     .settings-page { padding: 32px 48px; overflow-y: auto; background: #111827; flex: 1; width: 100%; display: flex; flex-direction: column; align-items: center; }
