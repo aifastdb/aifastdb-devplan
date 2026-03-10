@@ -62,6 +62,7 @@ import type {
   SubTaskInput,
   SubTask,
   CompleteSubTaskResult,
+  DeleteTaskResult,
   ProjectProgress,
   MainTaskProgress,
   ModuleInput,
@@ -1545,7 +1546,7 @@ export class DevPlanGraphStore implements IDevPlanStore {
     if (!mainTask) return null;
 
     const now = Date.now();
-    const completedAt = status === 'completed' ? now : mainTask.completedAt;
+    const completedAt = status === 'completed' ? now : null;
 
     // Phase-45: 使用 upsertEntityByProp 代替 updateEntity
     // 原因：updateEntity 依赖 UUID 直接查找，在分片路由变更后可能写入错误分片，
@@ -1573,6 +1574,71 @@ export class DevPlanGraphStore implements IDevPlanStore {
 
     this.graph.flush();
     return this.getMainTask(taskId);
+  }
+
+  deleteTask(taskId: string, taskType?: 'main' | 'sub'): DeleteTaskResult {
+    const resolvedType = this.resolveTaskDeleteType(taskId, taskType);
+    if (!resolvedType) {
+      return {
+        deleted: false,
+        taskType: null,
+        deletedSubTaskIds: [],
+        deletedTaskIds: [],
+        parentTaskId: null,
+      };
+    }
+
+    if (resolvedType === 'main') {
+      const mainTask = this.getMainTask(taskId);
+      if (!mainTask) {
+        return {
+          deleted: false,
+          taskType: null,
+          deletedSubTaskIds: [],
+          deletedTaskIds: [],
+          parentTaskId: null,
+        };
+      }
+
+      const subTasks = this.listSubTasks(taskId);
+      for (const subTask of subTasks) {
+        this.graph.deleteEntity(subTask.id);
+      }
+      this.graph.deleteEntity(mainTask.id);
+      this.graph.flush();
+
+      return {
+        deleted: true,
+        taskType: 'main',
+        deletedMainTaskId: taskId,
+        deletedSubTaskIds: subTasks.map(sub => sub.taskId),
+        deletedTaskIds: [taskId, ...subTasks.map(sub => sub.taskId)],
+        parentTaskId: null,
+      };
+    }
+
+    const subTask = this.getSubTask(taskId);
+    if (!subTask) {
+      return {
+        deleted: false,
+        taskType: null,
+        deletedSubTaskIds: [],
+        deletedTaskIds: [],
+        parentTaskId: null,
+      };
+    }
+
+    this.graph.deleteEntity(subTask.id);
+    const reconciled = this.reconcileMainTaskAfterSubTaskDeletion(subTask.parentTaskId);
+    this.graph.flush();
+
+    return {
+      deleted: true,
+      taskType: 'sub',
+      deletedSubTaskIds: [taskId],
+      deletedTaskIds: [taskId],
+      parentTaskId: reconciled?.taskId || subTask.parentTaskId,
+    };
   }
 
   // ==========================================================================
@@ -1738,11 +1804,11 @@ export class DevPlanGraphStore implements IDevPlanStore {
     if (!subTask) return null;
 
     const now = Date.now();
-    const completedAt = status === 'completed' ? now : (status === 'pending' ? null : subTask.completedAt);
+    const completedAt = status === 'completed' ? now : null;
     const completedAtCommit = status === 'completed'
       ? (options?.completedAtCommit || subTask.completedAtCommit)
-      : (status === 'pending' ? null : subTask.completedAtCommit);
-    const revertReason = options?.revertReason || (status === 'pending' ? null : subTask.revertReason);
+      : null;
+    const revertReason = status === 'pending' ? (options?.revertReason || null) : null;
 
     // Phase-45: 使用 upsertEntityByProp 代替 updateEntity（修复分片路由不一致）
     this.graph.upsertEntityByProp(
@@ -1766,6 +1832,53 @@ export class DevPlanGraphStore implements IDevPlanStore {
 
     this.graph.flush();
     return this.getSubTask(taskId);
+  }
+
+  updateTaskStatus(taskId: string, taskType: 'main' | 'sub', status: TaskStatus): import('./types').UpdateTaskStatusResult {
+    if (status === 'completed') {
+      throw new Error('Use completeSubTask/completeMainTask or devplan_complete_task for completed status');
+    }
+
+    if (taskType === 'main') {
+      const mainTask = this.updateMainTaskStatus(taskId, status);
+      return {
+        updated: !!mainTask,
+        taskType: mainTask ? 'main' : null,
+        taskId,
+        status: mainTask?.status,
+        parentTaskId: null,
+        mainTask: mainTask || undefined,
+      };
+    }
+
+    const subTask = this.updateSubTaskStatus(taskId, status);
+    if (!subTask) {
+      return {
+        updated: false,
+        taskType: null,
+        taskId,
+        parentTaskId: null,
+      };
+    }
+
+    const parentMainTaskBefore = this.getMainTask(subTask.parentTaskId);
+    let parentMainTask = this.refreshMainTaskCounts(subTask.parentTaskId);
+
+    if (status === 'in_progress') {
+      parentMainTask = this.updateMainTaskStatus(subTask.parentTaskId, 'in_progress') || parentMainTask;
+    } else if (parentMainTaskBefore?.status === 'completed' && parentMainTask && parentMainTask.completedSubtasks < parentMainTask.totalSubtasks) {
+      parentMainTask = this.updateMainTaskStatus(subTask.parentTaskId, 'in_progress') || parentMainTask;
+    }
+
+    return {
+      updated: true,
+      taskType: 'sub',
+      taskId,
+      status: subTask.status,
+      parentTaskId: subTask.parentTaskId,
+      subTask,
+      parentMainTask: parentMainTask || null,
+    };
   }
 
   // ==========================================================================
@@ -6394,6 +6507,35 @@ export class DevPlanGraphStore implements IDevPlanStore {
 
     this.graph.flush();
     return this.getMainTask(mainTaskId) || mainTask;
+  }
+
+  private reconcileMainTaskAfterSubTaskDeletion(mainTaskId: string): MainTask | null {
+    const refreshed = this.refreshMainTaskCounts(mainTaskId);
+    if (!refreshed) return null;
+
+    if (
+      refreshed.status !== 'completed'
+      && refreshed.totalSubtasks > 0
+      && refreshed.completedSubtasks >= refreshed.totalSubtasks
+    ) {
+      return this.updateMainTaskStatus(mainTaskId, 'completed');
+    }
+
+    return refreshed;
+  }
+
+  private resolveTaskDeleteType(taskId: string, taskType?: 'main' | 'sub'): 'main' | 'sub' | null {
+    if (taskType === 'main') return this.getMainTask(taskId) ? 'main' : null;
+    if (taskType === 'sub') return this.getSubTask(taskId) ? 'sub' : null;
+
+    const hasMainTask = this.getMainTask(taskId) !== null;
+    const hasSubTask = this.getSubTask(taskId) !== null;
+    if (hasMainTask && hasSubTask) {
+      throw new Error(`Task "${taskId}" exists as both main and sub task. Please provide taskType explicitly.`);
+    }
+    if (hasMainTask) return 'main';
+    if (hasSubTask) return 'sub';
+    return null;
   }
 
   /**

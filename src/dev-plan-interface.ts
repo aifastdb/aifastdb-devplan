@@ -17,6 +17,7 @@ import type {
   SubTask,
   CompleteSubTaskResult,
   ProjectProgress,
+  UpdateTaskStatusResult,
   ModuleInput,
   Module,
   ModuleDetail,
@@ -129,6 +130,14 @@ export interface IDevPlanStore {
    */
   updateMainTaskStatus(taskId: string, status: TaskStatus): MainTask | null;
 
+  /**
+   * 删除主任务或子任务
+   *
+   * - 删除主任务时，需级联删除其全部子任务
+   * - 未指定 taskType 时，按 taskId 自动识别
+   */
+  deleteTask(taskId: string, taskType?: 'main' | 'sub'): import('./types').DeleteTaskResult;
+
   // ==========================================================================
   // Sub Task Operations
   // ==========================================================================
@@ -165,6 +174,11 @@ export interface IDevPlanStore {
     completedAtCommit?: string;
     revertReason?: string;
   }): SubTask | null;
+
+  /**
+   * 手动更新任务状态（不含 completed，完成态请走 complete* 工作流）
+   */
+  updateTaskStatus(taskId: string, taskType: 'main' | 'sub', status: TaskStatus): UpdateTaskStatusResult;
 
   // ==========================================================================
   // Completion Workflow

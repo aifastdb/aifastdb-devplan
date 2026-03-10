@@ -95,7 +95,67 @@ Or in Claude Desktop (`claude_desktop_config.json`):
 }
 ```
 
-Once configured, your AI assistant can use 20 `devplan_*` tools to manage your development plans.
+Once configured, your AI assistant can use the default `micro` MCP tool set (13 core `devplan_*` tools) to manage your development plans.
+
+#### MCP Tool Exposure Modes
+
+`aifastdb-devplan` now supports three MCP tool exposure modes:
+
+- `micro` (default): expose 13 core tools for the most common DevPlan workflow
+- `slim`: expose 25 commonly used tools
+- `full`: expose the complete MCP tool catalog for advanced or low-frequency workflows
+
+The exposed tools are organized into five groups:
+
+- `project`
+- `docs`
+- `tasks`
+- `memory`
+- `batch`
+
+By default, the server starts in `micro` mode, which means:
+
+- MCP `ListTools` only returns those 13 tools
+- only those 13 tools are exposed to the AI assistant
+- tools outside that set are not just hidden; they are rejected at call time
+
+To temporarily enable the full catalog:
+
+```bash
+export AIFASTDB_DEVPLAN_MCP_TOOL_MODE=full
+npx aifastdb-devplan
+```
+
+PowerShell:
+
+```powershell
+$env:AIFASTDB_DEVPLAN_MCP_TOOL_MODE = "full"
+npx aifastdb-devplan
+```
+
+To explicitly use slim mode:
+
+```bash
+export AIFASTDB_DEVPLAN_MCP_TOOL_MODE=slim
+```
+
+PowerShell:
+
+```powershell
+$env:AIFASTDB_DEVPLAN_MCP_TOOL_MODE = "slim"
+```
+
+To explicitly use micro mode:
+
+```bash
+export AIFASTDB_DEVPLAN_MCP_TOOL_MODE=micro
+```
+
+PowerShell:
+
+```powershell
+$env:AIFASTDB_DEVPLAN_MCP_TOOL_MODE = "micro"
+```
 
 #### Option B: As an npm Package (Programmatic)
 
@@ -128,46 +188,28 @@ const progress = plan.getProgress();
 console.log(progress);
 ```
 
-### MCP Tools (20 total)
+### MCP Tools (default micro mode: 13 total, slim mode: 25 total)
 
-#### 📋 Document Management
+#### Grouped Catalog
 
-| Tool | Description |
-|------|-------------|
-| `devplan_init` | Initialize a development plan (auto-detects storage engine) |
-| `devplan_save_section` | Save/update a document section (11 standard types) |
-| `devplan_get_section` | Read a specific document section |
-| `devplan_list_sections` | List all document sections |
+| Group | Tools |
+|------|-------|
+| `project` | `devplan_init`, `devplan_save_prompt`, `devplan_get_progress` |
+| `docs` | `devplan_save_section`, `devplan_get_section`, `devplan_list_sections`, `devplan_search_sections`, `devplan_delete_section` |
+| `tasks` | `devplan_create_main_task`, `devplan_add_sub_task`, `devplan_delete_task`, `devplan_update_task_status`, `devplan_complete_task`, `devplan_list_tasks`, `devplan_search_tasks`, `devplan_start_phase` |
+| `memory` | `devplan_memory_save`, `devplan_recall_unified`, `devplan_memory_context`, `devplan_memory_list`, `devplan_memory_delete`, `devplan_memory_generate` |
+| `batch` | `devplan_memory_batch_prepare`, `devplan_memory_batch_commit`, `devplan_memory_batch_status` |
 
-#### 🎯 Task Management
+#### Default `micro` Mode
 
-| Tool | Description |
-|------|-------------|
-| `devplan_create_main_task` | Create a main task (priority P0–P3) |
-| `devplan_add_sub_task` | Add a subtask to a main task |
-| `devplan_upsert_task` | Idempotent task import (deduplication) |
-| `devplan_complete_task` | Complete a task (auto-updates progress + Git anchoring) |
-| `devplan_list_tasks` | List tasks (filter by status/priority/parent) |
-| `devplan_get_progress` | Get overall project progress |
+`micro` keeps the shortest, highest-frequency workflow tools:
 
-#### 📦 Module Management
+- `project`: `devplan_init`, `devplan_save_prompt`
+- `docs`: `devplan_get_section`, `devplan_search_sections`, `devplan_save_section`
+- `tasks`: `devplan_list_tasks`, `devplan_search_tasks`, `devplan_start_phase`, `devplan_create_main_task`, `devplan_add_sub_task`, `devplan_complete_task`
+- `memory`: `devplan_memory_save`, `devplan_recall_unified`
 
-| Tool | Description |
-|------|-------------|
-| `devplan_create_module` | Create a feature module |
-| `devplan_list_modules` | List all feature modules |
-| `devplan_get_module` | Get module details (linked tasks and docs) |
-| `devplan_update_module` | Update module information |
-
-#### 🔧 Utilities
-
-| Tool | Description |
-|------|-------------|
-| `devplan_export_markdown` | Export full Markdown development plan |
-| `devplan_export_graph` | Export graph structure `{ nodes, edges }` for visualization (graph engine only) |
-| `devplan_migrate_engine` | Migrate data between `document` and `graph` engines |
-| `devplan_sync_git` | Sync Git history and detect rollbacks |
-| `devplan_start_visual` | Start the graph visualization HTTP server and open browser |
+`slim` expands that to the 25 commonly used tools above, and `full` exposes the entire catalog.
 
 ### Dual Storage Engine
 
@@ -440,7 +482,67 @@ npm install -g aifastdb-devplan
 }
 ```
 
-配置完成后，AI 助手即可使用 20 个 `devplan_*` 工具来管理你的开发计划。
+配置完成后，AI 助手默认即可使用 `micro` MCP 工具集（12 个核心 `devplan_*` 工具）来管理你的开发计划。
+
+#### MCP 工具暴露模式
+
+`aifastdb-devplan` 现在支持三种 MCP 工具暴露模式：
+
+- `micro`（默认）：只暴露 12 个核心工具
+- `slim`：暴露 24 个常用 DevPlan 工具
+- `full`：暴露完整 MCP 工具目录，适合高级或低频工作流
+
+工具同时按 5 组组织：
+
+- `project`
+- `docs`
+- `tasks`
+- `memory`
+- `batch`
+
+默认启动时使用 `micro` 模式，这意味着：
+
+- MCP `ListTools` 只会返回这 12 个工具
+- AI 助手上下文里也只会看到并使用这 12 个工具
+- 白名单外工具不只是“隐藏”，而是调用时会被直接拒绝
+
+临时开启全量工具目录：
+
+```bash
+export AIFASTDB_DEVPLAN_MCP_TOOL_MODE=full
+npx aifastdb-devplan
+```
+
+PowerShell：
+
+```powershell
+$env:AIFASTDB_DEVPLAN_MCP_TOOL_MODE = "full"
+npx aifastdb-devplan
+```
+
+如需显式切换到 `slim` 模式：
+
+```bash
+export AIFASTDB_DEVPLAN_MCP_TOOL_MODE=slim
+```
+
+PowerShell：
+
+```powershell
+$env:AIFASTDB_DEVPLAN_MCP_TOOL_MODE = "slim"
+```
+
+如需显式使用默认 `micro` 模式：
+
+```bash
+export AIFASTDB_DEVPLAN_MCP_TOOL_MODE=micro
+```
+
+PowerShell：
+
+```powershell
+$env:AIFASTDB_DEVPLAN_MCP_TOOL_MODE = "micro"
+```
 
 #### 方式 B：作为 npm 包编程使用
 
@@ -473,46 +575,44 @@ const progress = plan.getProgress();
 console.log(progress);
 ```
 
-### MCP 工具一览（20 个）
+### MCP 工具一览（默认 micro 13 个，slim 25 个）
 
-#### 📋 文档管理
+#### 分组目录
 
-| 工具 | 说明 |
+| 分组 | 工具 |
 |------|------|
-| `devplan_init` | 初始化开发计划（自动检测存储引擎） |
-| `devplan_save_section` | 保存/更新文档片段（11 种标准类型） |
-| `devplan_get_section` | 读取指定文档片段 |
-| `devplan_list_sections` | 列出所有文档片段 |
+| `project` | `devplan_init`、`devplan_save_prompt`、`devplan_get_progress` |
+| `docs` | `devplan_save_section`、`devplan_get_section`、`devplan_list_sections`、`devplan_search_sections`、`devplan_delete_section` |
+| `tasks` | `devplan_create_main_task`、`devplan_add_sub_task`、`devplan_delete_task`、`devplan_update_task_status`、`devplan_complete_task`、`devplan_list_tasks`、`devplan_search_tasks`、`devplan_start_phase` |
+| `memory` | `devplan_memory_save`、`devplan_recall_unified`、`devplan_memory_context`、`devplan_memory_list`、`devplan_memory_delete`、`devplan_memory_generate` |
+| `batch` | `devplan_memory_batch_prepare`、`devplan_memory_batch_commit`、`devplan_memory_batch_status` |
 
-#### 🎯 任务管理
+#### 默认 `micro` 模式
 
-| 工具 | 说明 |
-|------|------|
-| `devplan_create_main_task` | 创建主任务（支持优先级 P0-P3） |
-| `devplan_add_sub_task` | 添加子任务到主任务 |
-| `devplan_upsert_task` | 幂等导入任务（防重复，适合批量初始化） |
-| `devplan_complete_task` | 完成任务（自动更新进度 + Git 锚定） |
-| `devplan_list_tasks` | 列出任务（支持按状态/优先级/主任务筛选） |
-| `devplan_get_progress` | 获取项目整体进度概览 |
+`micro` 只保留最高频、最短链路的工具：
 
-#### 📦 模块管理
+- `project`：`devplan_init`、`devplan_save_prompt`
+- `docs`：`devplan_get_section`、`devplan_search_sections`、`devplan_save_section`
+- `tasks`：`devplan_list_tasks`、`devplan_search_tasks`、`devplan_start_phase`、`devplan_create_main_task`、`devplan_add_sub_task`、`devplan_complete_task`
+- `memory`：`devplan_memory_save`、`devplan_recall_unified`
 
-| 工具 | 说明 |
-|------|------|
-| `devplan_create_module` | 创建功能模块 |
-| `devplan_list_modules` | 列出所有功能模块 |
-| `devplan_get_module` | 获取模块详情（关联任务和文档） |
-| `devplan_update_module` | 更新模块信息 |
+当前默认 `micro` 的 13 个工具完整清单：
 
-#### 🔧 工具
+- `devplan_init`
+- `devplan_save_prompt`
+- `devplan_get_section`
+- `devplan_search_sections`
+- `devplan_save_section`
+- `devplan_list_tasks`
+- `devplan_search_tasks`
+- `devplan_start_phase`
+- `devplan_create_main_task`
+- `devplan_add_sub_task`
+- `devplan_complete_task`
+- `devplan_memory_save`
+- `devplan_recall_unified`
 
-| 工具 | 说明 |
-|------|------|
-| `devplan_export_markdown` | 导出完整 Markdown 格式开发计划 |
-| `devplan_export_graph` | 导出图结构 `{ nodes, edges }` 用于可视化（仅 graph 引擎） |
-| `devplan_migrate_engine` | 在 `document` 和 `graph` 引擎间迁移数据 |
-| `devplan_sync_git` | 同步 Git 历史，检测代码回滚 |
-| `devplan_start_visual` | 启动项目图谱 HTTP 服务器并自动打开浏览器 |
+`slim` 扩展为上面的 25 个常用工具，`full` 则暴露全部工具目录。
 
 ### 双存储引擎
 

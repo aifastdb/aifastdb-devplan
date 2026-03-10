@@ -82,6 +82,59 @@ export async function handleTaskToolCall(name: string, args: ToolArgs, deps: { g
       }
     }
 
+    case 'devplan_delete_task': {
+      if (!args.projectName || !args.taskId) {
+        throw new McpError(ErrorCode.InvalidParams, 'Missing required: projectName, taskId');
+      }
+
+      const plan = getDevPlan(args.projectName);
+      try {
+        const result = plan.deleteTask(args.taskId, args.taskType as 'main' | 'sub' | undefined);
+        return JSON.stringify({
+          success: result.deleted,
+          ...result,
+        });
+      } catch (err) {
+        throw new McpError(
+          ErrorCode.InvalidParams,
+          err instanceof Error ? err.message : String(err)
+        );
+      }
+    }
+
+    case 'devplan_update_task_status': {
+      if (!args.projectName || !args.taskId || !args.taskType || !args.status) {
+        throw new McpError(ErrorCode.InvalidParams, 'Missing required: projectName, taskId, taskType, status');
+      }
+
+      const mutableStatuses: TaskStatus[] = ['pending', 'in_progress', 'cancelled'];
+      if (!mutableStatuses.includes(args.status as TaskStatus)) {
+        throw new McpError(
+          ErrorCode.InvalidParams,
+          'status must be one of: pending, in_progress, cancelled. Use devplan_complete_task for completed.'
+        );
+      }
+
+      const taskType = args.taskType as 'main' | 'sub';
+      if (taskType !== 'main' && taskType !== 'sub') {
+        throw new McpError(ErrorCode.InvalidParams, 'taskType must be "main" or "sub"');
+      }
+
+      const plan = getDevPlan(args.projectName);
+      try {
+        const result = plan.updateTaskStatus(args.taskId, taskType, args.status as TaskStatus);
+        return JSON.stringify({
+          success: result.updated,
+          ...result,
+        });
+      } catch (err) {
+        throw new McpError(
+          ErrorCode.InvalidParams,
+          err instanceof Error ? err.message : String(err)
+        );
+      }
+    }
+
 
     case 'devplan_upsert_task': {
       if (!args.projectName || !args.taskType || !args.taskId || !args.title) {

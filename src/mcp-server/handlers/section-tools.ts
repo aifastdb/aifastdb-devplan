@@ -134,6 +134,23 @@ export async function handleSectionToolCall(name: string, args: ToolArgs, deps: 
       });
     }
 
+    case 'devplan_delete_section': {
+      if (!args.projectName || !args.section) {
+        throw new McpError(ErrorCode.InvalidParams, 'Missing required: projectName, section');
+      }
+
+      const plan = getDevPlan(args.projectName);
+      const deleted = plan.deleteSection(args.section as DevPlanSection, args.subSection);
+
+      return JSON.stringify({
+        success: deleted,
+        deleted,
+        projectName: args.projectName,
+        section: args.section,
+        subSection: args.subSection || null,
+      });
+    }
+
 
 
 

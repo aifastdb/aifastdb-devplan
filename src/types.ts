@@ -253,6 +253,51 @@ export interface CompleteSubTaskResult {
 }
 
 /**
+ * 删除任务的返回结果
+ */
+export interface DeleteTaskResult {
+  /** 是否实际删除了任务 */
+  deleted: boolean;
+  /** 被删除的任务类型 */
+  taskType: 'main' | 'sub' | null;
+  /** 被删除的主任务 ID（如有） */
+  deletedMainTaskId?: string;
+  /** 被删除的子任务 ID 列表 */
+  deletedSubTaskIds: string[];
+  /** 便于调用方直接展示的所有被删除 taskId */
+  deletedTaskIds: string[];
+  /** 当删除子任务时，所属主任务 ID */
+  parentTaskId?: string | null;
+}
+
+/**
+ * 手动任务状态更新允许的目标状态
+ */
+export type MutableTaskStatus = 'pending' | 'in_progress' | 'cancelled';
+
+/**
+ * 更新任务状态的返回结果
+ */
+export interface UpdateTaskStatusResult {
+  /** 是否实际更新了任务 */
+  updated: boolean;
+  /** 被更新的任务类型 */
+  taskType: 'main' | 'sub' | null;
+  /** 被更新的任务 ID */
+  taskId: string;
+  /** 目标状态 */
+  status?: TaskStatus;
+  /** 当更新子任务时，所属主任务 ID */
+  parentTaskId?: string | null;
+  /** 更新后的主任务 */
+  mainTask?: MainTask;
+  /** 更新后的子任务 */
+  subTask?: SubTask;
+  /** 更新后的父主任务（当 taskType=sub 时） */
+  parentMainTask?: MainTask | null;
+}
+
+/**
  * devplan_sync_git 返回结果
  */
 export interface SyncGitResult {

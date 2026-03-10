@@ -44,7 +44,12 @@ import {
   type DevPlanEngine,
 } from '../dev-plan-factory';
 import type { IDevPlanStore } from '../dev-plan-interface';
-import { TOOLS, type ToolArgs } from './tool-definitions';
+import {
+  MCP_TOOL_MODE_ENV_VAR,
+  getExposedTools,
+  isExposedToolName,
+  type ToolArgs,
+} from './tool-definitions';
 import { resolveProjectName } from './tool-utils';
 import { handleTaskToolCall } from './handlers/task-tools';
 import { handleMemoryToolCall } from './handlers/memory-tools';
@@ -136,6 +141,13 @@ function getDevPlan(projectName: string, engine?: DevPlanEngine): IDevPlanStore 
 
 
 async function handleToolCall(name: string, args: ToolArgs): Promise<string> {
+  if (!isExposedToolName(name)) {
+    throw new McpError(
+      ErrorCode.InvalidRequest,
+      `Tool "${name}" is not exposed in the current MCP tool mode. Use ${MCP_TOOL_MODE_ENV_VAR}=micro|slim|full and set it to full when you need the complete tool catalog.`
+    );
+  }
+
   // 统一解析 projectName 默认值（devplan_init 例外）
   args.projectName = resolveProjectName(args, name);
 
@@ -181,7 +193,7 @@ async function main() {
 
   // List tools handler
   server.setRequestHandler(ListToolsRequestSchema, async () => ({
-    tools: TOOLS,
+    tools: getExposedTools(),
   }));
 
   // Call tool handler

@@ -135,32 +135,28 @@ aifastdb-devplan
 
 ---
 
-## 4. MCP 工具速查 (23 个)
+## 4. 默认 MCP 工具速查 (micro 13 个, slim 25 个)
 
-| 类别 | 工具 | 说明 |
-|------|------|------|
-| **初始化** | `devplan_init` | 初始化项目 / 列出已有计划 / 自动注册 |
-| **文档** | `devplan_save_section` | 保存/更新文档片段（含层级、模块关联） |
-| | `devplan_get_section` | 获取文档片段内容 |
-| | `devplan_list_sections` | 列出全部文档片段（含预览） |
-| | `devplan_search_sections` | 搜索文档（literal / semantic / hybrid） |
-| | `devplan_rebuild_index` | 重建语义搜索向量索引 |
-| **任务** | `devplan_create_main_task` | 创建主任务（开发阶段） |
-| | `devplan_add_sub_task` | 添加子任务 |
-| | `devplan_upsert_task` | 幂等导入（批量推荐） |
-| | `devplan_complete_task` | 完成任务（锚定 Git commit） |
-| | `devplan_list_tasks` | 查询任务（支持状态/模块/阶段过滤） |
-| | `devplan_start_phase` | 启动/恢复开发阶段（→ TodoList） |
-| **进度** | `devplan_get_progress` | 项目进度概览（进度条） |
-| | `devplan_export_markdown` | 导出 Markdown 报告 |
-| **Git** | `devplan_sync_git` | 检查已完成任务与 Git 一致性 |
-| **模块** | `devplan_create_module` | 创建功能模块 |
-| | `devplan_list_modules` | 列出所有模块 |
-| | `devplan_get_module` | 模块详情（含关联任务/文档） |
-| | `devplan_update_module` | 更新模块信息 |
-| **引擎** | `devplan_migrate_engine` | 双向数据迁移 (graph ↔ document) |
-| **可视化** | `devplan_start_visual` | 启动项目图谱 HTTP 服务 |
-| | `devplan_export_graph` | 导出图结构（vis-network 兼容） |
+默认 MCP 暴露面已收敛为分层模式：`micro` 默认只暴露 13 个核心工具，`slim` 暴露 25 个常用工具，`full` 才暴露完整目录。这样可以明显降低 Cursor 默认工具上下文噪音。
+
+工具暴露模式支持环境变量切换：
+- 默认 `micro`
+- 设置 `AIFASTDB_DEVPLAN_MCP_TOOL_MODE=slim` 可切到 25 个常用工具
+- 设置 `AIFASTDB_DEVPLAN_MCP_TOOL_MODE=full` 可临时暴露全量工具目录
+
+| 分组 | slim 工具 |
+|------|-----------|
+| `project` | `devplan_init`, `devplan_save_prompt`, `devplan_get_progress` |
+| `docs` | `devplan_save_section`, `devplan_get_section`, `devplan_list_sections`, `devplan_search_sections`, `devplan_delete_section` |
+| `tasks` | `devplan_create_main_task`, `devplan_add_sub_task`, `devplan_delete_task`, `devplan_update_task_status`, `devplan_complete_task`, `devplan_list_tasks`, `devplan_search_tasks`, `devplan_start_phase` |
+| `memory` | `devplan_memory_save`, `devplan_recall_unified`, `devplan_memory_context`, `devplan_memory_list`, `devplan_memory_delete`, `devplan_memory_generate` |
+| `batch` | `devplan_memory_batch_prepare`, `devplan_memory_batch_commit`, `devplan_memory_batch_status` |
+
+默认 `micro` 模式仅保留以下 13 个核心工具：
+- `project`: `devplan_init`, `devplan_save_prompt`
+- `docs`: `devplan_get_section`, `devplan_search_sections`, `devplan_save_section`
+- `tasks`: `devplan_list_tasks`, `devplan_search_tasks`, `devplan_start_phase`, `devplan_create_main_task`, `devplan_add_sub_task`, `devplan_complete_task`
+- `memory`: `devplan_memory_save`, `devplan_recall_unified`
 
 ---
 

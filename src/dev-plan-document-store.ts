@@ -26,6 +26,7 @@ import type {
   SubTaskInput,
   SubTask,
   CompleteSubTaskResult,
+  DeleteTaskResult,
   ProjectProgress,
   MainTaskProgress,
   ModuleInput,
@@ -593,7 +594,7 @@ export class DevPlanDocumentStore implements IDevPlanStore {
     this.deleteAndEnsureTimestampAdvance(this.taskStore, mainTask.id);
 
     const now = Date.now();
-    const completedAt = status === 'completed' ? now : mainTask.completedAt;
+    const completedAt = status === 'completed' ? now : null;
 
     const taskData = {
       taskId: mainTask.taskId,
@@ -642,6 +643,74 @@ export class DevPlanDocumentStore implements IDevPlanStore {
       status,
       updatedAt: now,
       completedAt,
+    };
+  }
+
+  deleteTask(taskId: string, taskType?: 'main' | 'sub'): DeleteTaskResult {
+    const resolvedType = this.resolveTaskDeleteType(taskId, taskType);
+    if (!resolvedType) {
+      return {
+        deleted: false,
+        taskType: null,
+        deletedSubTaskIds: [],
+        deletedTaskIds: [],
+        parentTaskId: null,
+      };
+    }
+
+    if (resolvedType === 'main') {
+      const subTasks = this.listSubTasks(taskId);
+      const mainDocs = this.taskStore.findByTag(`mtask:${taskId}`)
+        .filter((doc: any) =>
+          (doc.tags as string[]).includes(`plan:${this.projectName}`)
+          && (doc.tags as string[]).includes('type:main-task')
+        );
+      const subDocs = this.taskStore.findByTag(`parent:${taskId}`)
+        .filter((doc: any) =>
+          (doc.tags as string[]).includes(`plan:${this.projectName}`)
+          && (doc.tags as string[]).includes('type:sub-task')
+        );
+      const deletedCount = this.deleteManyAndEnsureTimestampAdvance(this.taskStore, [...mainDocs, ...subDocs]);
+      this.taskStore.flush();
+
+      return {
+        deleted: deletedCount > 0,
+        taskType: 'main',
+        deletedMainTaskId: taskId,
+        deletedSubTaskIds: subTasks.map(sub => sub.taskId),
+        deletedTaskIds: [taskId, ...subTasks.map(sub => sub.taskId)],
+        parentTaskId: null,
+      };
+    }
+
+    const subTask = this.getSubTask(taskId);
+    if (!subTask) {
+      return {
+        deleted: false,
+        taskType: null,
+        deletedSubTaskIds: [],
+        deletedTaskIds: [],
+        parentTaskId: null,
+      };
+    }
+
+    const subDocs = this.taskStore.findByTag(`stask:${taskId}`)
+      .filter((doc: any) =>
+        (doc.tags as string[]).includes(`plan:${this.projectName}`)
+        && (doc.tags as string[]).includes('type:sub-task')
+      );
+    const deletedCount = this.deleteManyAndEnsureTimestampAdvance(this.taskStore, subDocs);
+    if (deletedCount > 0) {
+      this.reconcileMainTaskAfterSubTaskDeletion(subTask.parentTaskId);
+      this.taskStore.flush();
+    }
+
+    return {
+      deleted: deletedCount > 0,
+      taskType: 'sub',
+      deletedSubTaskIds: [taskId],
+      deletedTaskIds: [taskId],
+      parentTaskId: subTask.parentTaskId,
     };
   }
 
@@ -947,11 +1016,11 @@ export class DevPlanDocumentStore implements IDevPlanStore {
     this.deleteAndEnsureTimestampAdvance(this.taskStore, subTask.id);
 
     const now = Date.now();
-    const completedAt = status === 'completed' ? now : (status === 'pending' ? null : subTask.completedAt);
+    const completedAt = status === 'completed' ? now : null;
     const completedAtCommit = status === 'completed'
       ? (options?.completedAtCommit || subTask.completedAtCommit)
-      : (status === 'pending' ? undefined : subTask.completedAtCommit);
-    const revertReason = options?.revertReason || (status === 'pending' ? undefined : subTask.revertReason);
+      : undefined;
+    const revertReason = status === 'pending' ? options?.revertReason : undefined;
 
     const taskData = {
       taskId: subTask.taskId,
@@ -997,6 +1066,53 @@ export class DevPlanDocumentStore implements IDevPlanStore {
       completedAt,
       completedAtCommit,
       revertReason,
+    };
+  }
+
+  updateTaskStatus(taskId: string, taskType: 'main' | 'sub', status: TaskStatus): import('./types').UpdateTaskStatusResult {
+    if (status === 'completed') {
+      throw new Error('Use completeSubTask/completeMainTask or devplan_complete_task for completed status');
+    }
+
+    if (taskType === 'main') {
+      const mainTask = this.updateMainTaskStatus(taskId, status);
+      return {
+        updated: !!mainTask,
+        taskType: mainTask ? 'main' : null,
+        taskId,
+        status: mainTask?.status,
+        parentTaskId: null,
+        mainTask: mainTask || undefined,
+      };
+    }
+
+    const subTask = this.updateSubTaskStatus(taskId, status);
+    if (!subTask) {
+      return {
+        updated: false,
+        taskType: null,
+        taskId,
+        parentTaskId: null,
+      };
+    }
+
+    const parentMainTaskBefore = this.getMainTask(subTask.parentTaskId);
+    let parentMainTask = this.refreshMainTaskCounts(subTask.parentTaskId);
+
+    if (status === 'in_progress') {
+      parentMainTask = this.updateMainTaskStatus(subTask.parentTaskId, 'in_progress') || parentMainTask;
+    } else if (parentMainTaskBefore?.status === 'completed' && parentMainTask && parentMainTask.completedSubtasks < parentMainTask.totalSubtasks) {
+      parentMainTask = this.updateMainTaskStatus(subTask.parentTaskId, 'in_progress') || parentMainTask;
+    }
+
+    return {
+      updated: true,
+      taskType: 'sub',
+      taskId,
+      status: subTask.status,
+      parentTaskId: subTask.parentTaskId,
+      subTask,
+      parentMainTask: parentMainTask || null,
     };
   }
 
@@ -1635,6 +1751,41 @@ export class DevPlanDocumentStore implements IDevPlanStore {
     }
   }
 
+  private deleteManyAndEnsureTimestampAdvance(
+    store: InstanceType<typeof EnhancedDocumentStore>,
+    docs: Array<{ id: string }>
+  ): number {
+    let deletedCount = 0;
+    let maxUpdatedAt = -1;
+
+    for (const doc of docs) {
+      const deleted = store.delete(doc.id);
+      if (!deleted) continue;
+      deletedCount++;
+      maxUpdatedAt = Math.max(maxUpdatedAt, this.getDocUpdatedAt(deleted));
+    }
+
+    if (maxUpdatedAt >= 0) {
+      this.ensureTimestampAfter(maxUpdatedAt);
+    }
+
+    return deletedCount;
+  }
+
+  private resolveTaskDeleteType(taskId: string, taskType?: 'main' | 'sub'): 'main' | 'sub' | null {
+    if (taskType === 'main') return this.getMainTask(taskId) ? 'main' : null;
+    if (taskType === 'sub') return this.getSubTask(taskId) ? 'sub' : null;
+
+    const hasMainTask = this.getMainTask(taskId) !== null;
+    const hasSubTask = this.getSubTask(taskId) !== null;
+    if (hasMainTask && hasSubTask) {
+      throw new Error(`Task "${taskId}" exists as both main and sub task. Please provide taskType explicitly.`);
+    }
+    if (hasMainTask) return 'main';
+    if (hasSubTask) return 'sub';
+    return null;
+  }
+
   /**
    * 对同一 taskId 的多个历史版本做去重，仅保留最新版（metadata.updatedAt 最大）。
    *
@@ -1926,6 +2077,21 @@ export class DevPlanDocumentStore implements IDevPlanStore {
       completedSubtasks: completedCount,
       updatedAt: now,
     };
+  }
+
+  private reconcileMainTaskAfterSubTaskDeletion(mainTaskId: string): MainTask | null {
+    const refreshed = this.refreshMainTaskCounts(mainTaskId);
+    if (!refreshed) return null;
+
+    if (
+      refreshed.status !== 'completed'
+      && refreshed.totalSubtasks > 0
+      && refreshed.completedSubtasks >= refreshed.totalSubtasks
+    ) {
+      return this.updateMainTaskStatus(mainTaskId, 'completed');
+    }
+
+    return refreshed;
   }
 
   /**

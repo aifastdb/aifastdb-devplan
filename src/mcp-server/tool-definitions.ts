@@ -1,7 +1,9 @@
 import { DEFAULT_PROJECT_NAME } from '../dev-plan-factory';
 import type { AutopilotConfig } from '../types';
 
-export const TOOLS = [
+// Keep the full tool catalog in source, but only expose the default high-frequency
+// workflow set to MCP clients so Cursor does not get flooded with niche tools.
+const ALL_TOOLS = [
   {
     name: 'devplan_capabilities',
     description: 'Output runtime capability diagnostics for ABI/version alignment. Shows project engine, package versions, and native feature readiness (memoryTreeSearch, anchorExtractFromText, applyMutations).\n输出运行时能力诊断信息，用于 ABI/版本对齐排查。包含项目引擎、包版本和 native 能力状态（memoryTreeSearch、anchorExtractFromText、applyMutations）。',
@@ -472,6 +474,29 @@ export const TOOLS = [
     },
   },
   {
+    name: 'devplan_delete_section',
+    description: 'Delete a document section from the dev plan.\n删除开发计划中的文档片段。',
+    inputSchema: {
+      type: 'object' as const,
+      properties: {
+        projectName: {
+          type: 'string',
+          description: `Project name (default: "${DEFAULT_PROJECT_NAME}")\n项目名称（默认："${DEFAULT_PROJECT_NAME}"）`,
+        },
+        section: {
+          type: 'string',
+          enum: ['overview', 'core_concepts', 'api_design', 'file_structure', 'config', 'examples', 'technical_notes', 'api_endpoints', 'milestones', 'changelog', 'custom'],
+          description: 'Document section type\n文档片段类型',
+        },
+        subSection: {
+          type: 'string',
+          description: 'Optional sub-section name\n可选子片段名称',
+        },
+      },
+      required: ['projectName', 'section'],
+    },
+  },
+  {
     name: 'devplan_create_main_task',
     description: 'Create a main task (development phase) in the dev plan. A main task groups multiple sub-tasks.\n在开发计划中创建主任务（开发阶段）。一个主任务下包含多个子任务。',
     inputSchema: {
@@ -560,6 +585,57 @@ export const TOOLS = [
         },
       },
       required: ['projectName', 'taskId', 'parentTaskId', 'title'],
+    },
+  },
+  {
+    name: 'devplan_delete_task',
+    description: 'Delete a main task or sub-task from the dev plan. Deleting a main task cascades to all of its sub-tasks. When taskType is omitted, the tool auto-detects by taskId.\n删除开发计划中的主任务或子任务。删除主任务时会级联删除其全部子任务。省略 taskType 时会按 taskId 自动识别。',
+    inputSchema: {
+      type: 'object' as const,
+      properties: {
+        projectName: {
+          type: 'string',
+          description: `Project name (default: "${DEFAULT_PROJECT_NAME}")\n项目名称（默认："${DEFAULT_PROJECT_NAME}"）`,
+        },
+        taskId: {
+          type: 'string',
+          description: 'Task ID to delete (main task like "phase-7" or sub-task like "T7.2")\n要删除的任务 ID（主任务如 "phase-7"，子任务如 "T7.2"）',
+        },
+        taskType: {
+          type: 'string',
+          enum: ['main', 'sub'],
+          description: 'Optional explicit task type. When omitted, auto-detect by taskId.\n可选显式任务类型；省略时按 taskId 自动识别。',
+        },
+      },
+      required: ['projectName', 'taskId'],
+    },
+  },
+  {
+    name: 'devplan_update_task_status',
+    description: 'Update a main task or sub-task status for non-complete workflow changes. Supports pending, in_progress, and cancelled only; completed must still use the completion workflow.\n更新主任务或子任务状态，用于非完成态的工作流变更。仅支持 pending、in_progress、cancelled；completed 仍需使用完成工作流。',
+    inputSchema: {
+      type: 'object' as const,
+      properties: {
+        projectName: {
+          type: 'string',
+          description: `Project name (default: "${DEFAULT_PROJECT_NAME}")\n项目名称（默认："${DEFAULT_PROJECT_NAME}"）`,
+        },
+        taskId: {
+          type: 'string',
+          description: 'Task ID (main task like "phase-7" or sub-task like "T7.2")\n任务 ID（主任务如 "phase-7"，子任务如 "T7.2"）',
+        },
+        taskType: {
+          type: 'string',
+          enum: ['main', 'sub'],
+          description: 'Task type: main task or sub-task\n任务类型：主任务 (main) 或子任务 (sub)',
+        },
+        status: {
+          type: 'string',
+          enum: ['pending', 'in_progress', 'cancelled'],
+          description: 'Target status. Use devplan_complete_task for completed.\n目标状态。completed 请使用 devplan_complete_task。',
+        },
+      },
+      required: ['projectName', 'taskId', 'taskType', 'status'],
     },
   },
   {
@@ -2060,6 +2136,348 @@ export const TOOLS = [
     },
   },
 ];
+
+export const TOOL_GROUPS = {
+  project: [
+    'devplan_init',
+    'devplan_get_progress',
+    'devplan_save_prompt',
+  ],
+  docs: [
+    'devplan_save_section',
+    'devplan_get_section',
+    'devplan_list_sections',
+    'devplan_search_sections',
+    'devplan_delete_section',
+  ],
+  tasks: [
+    'devplan_create_main_task',
+    'devplan_add_sub_task',
+    'devplan_delete_task',
+    'devplan_update_task_status',
+    'devplan_complete_task',
+    'devplan_list_tasks',
+    'devplan_search_tasks',
+    'devplan_start_phase',
+  ],
+  memory: [
+    'devplan_memory_save',
+    'devplan_recall_unified',
+    'devplan_memory_context',
+    'devplan_memory_list',
+    'devplan_memory_delete',
+    'devplan_memory_generate',
+  ],
+  batch: [
+    'devplan_memory_batch_prepare',
+    'devplan_memory_batch_commit',
+    'devplan_memory_batch_status',
+  ],
+} as const;
+
+type ToolGroup = keyof typeof TOOL_GROUPS;
+
+export const MICRO_EXPOSED_TOOL_NAMES = [
+  'devplan_init',
+  'devplan_save_prompt',
+  'devplan_get_section',
+  'devplan_search_sections',
+  'devplan_save_section',
+  'devplan_list_tasks',
+  'devplan_search_tasks',
+  'devplan_start_phase',
+  'devplan_create_main_task',
+  'devplan_add_sub_task',
+  'devplan_complete_task',
+  'devplan_memory_save',
+  'devplan_recall_unified',
+] as const;
+
+export const SLIM_EXPOSED_TOOL_NAMES = [
+  'devplan_init',
+  'devplan_save_prompt',
+  'devplan_get_progress',
+  'devplan_save_section',
+  'devplan_get_section',
+  'devplan_list_sections',
+  'devplan_search_sections',
+  'devplan_delete_section',
+  'devplan_create_main_task',
+  'devplan_add_sub_task',
+  'devplan_delete_task',
+  'devplan_update_task_status',
+  'devplan_complete_task',
+  'devplan_list_tasks',
+  'devplan_search_tasks',
+  'devplan_start_phase',
+  'devplan_memory_save',
+  'devplan_recall_unified',
+  'devplan_memory_context',
+  'devplan_memory_list',
+  'devplan_memory_delete',
+  'devplan_memory_generate',
+  'devplan_memory_batch_prepare',
+  'devplan_memory_batch_commit',
+  'devplan_memory_batch_status',
+] as const;
+
+export const DEFAULT_EXPOSED_TOOL_NAMES = MICRO_EXPOSED_TOOL_NAMES;
+export const MCP_TOOL_MODE_ENV_VAR = 'AIFASTDB_DEVPLAN_MCP_TOOL_MODE';
+export type ToolExposureMode = 'micro' | 'slim' | 'full';
+
+const TOOL_GROUP_BY_NAME: Record<string, ToolGroup> = Object.entries(TOOL_GROUPS)
+  .flatMap(([group, names]) => names.map(name => [name, group as ToolGroup] as const))
+  .reduce<Record<string, ToolGroup>>((acc, [name, group]) => {
+    acc[name] = group;
+    return acc;
+  }, {});
+
+const TOOL_SHORT_DESCRIPTION_BY_NAME: Record<string, string> = {
+  devplan_init: 'init or list projects',
+  devplan_save_prompt: 'log the raw user prompt',
+  devplan_get_progress: 'show overall project progress',
+  devplan_save_section: 'create or update a doc section',
+  devplan_get_section: 'read one doc section',
+  devplan_list_sections: 'list doc sections',
+  devplan_search_sections: 'search docs by keywords or semantics',
+  devplan_delete_section: 'delete a doc section',
+  devplan_create_main_task: 'create a phase/main task',
+  devplan_add_sub_task: 'add a sub-task',
+  devplan_delete_task: 'delete a main or sub task',
+  devplan_update_task_status: 'set task status (not completed)',
+  devplan_complete_task: 'complete a task',
+  devplan_list_tasks: 'list tasks or sub-tasks',
+  devplan_search_tasks: 'search tasks by taskId or title',
+  devplan_start_phase: 'start or resume a phase',
+  devplan_memory_save: 'save a memory',
+  devplan_recall_unified: 'recall memories and docs together',
+  devplan_memory_context: 'get recent context for a topic',
+  devplan_memory_list: 'list saved memories',
+  devplan_memory_delete: 'delete one memory',
+  devplan_memory_generate: 'generate memory candidates',
+  devplan_memory_batch_prepare: 'prepare batch memory import',
+  devplan_memory_batch_commit: 'commit batch memory import',
+  devplan_memory_batch_status: 'check batch import status',
+};
+
+const TOOL_COMPACT_PROPERTY_DESCRIPTIONS_BY_NAME: Record<string, Record<string, string>> = {
+  devplan_init: {
+    projectName: 'project name',
+  },
+  devplan_save_prompt: {
+    projectName: 'project name',
+    content: 'raw user prompt',
+    summary: 'short summary',
+    relatedTaskId: 'related phase',
+  },
+  devplan_get_progress: {
+    projectName: 'project name',
+  },
+  devplan_save_section: {
+    projectName: 'project name',
+    section: 'doc section type',
+    title: 'doc title',
+    content: 'markdown content',
+    subSection: 'doc key for multi-doc sections',
+  },
+  devplan_get_section: {
+    projectName: 'project name',
+    section: 'doc section type',
+    subSection: 'optional doc key',
+  },
+  devplan_list_sections: {
+    projectName: 'project name',
+    section: 'filter section',
+    moduleId: 'filter module',
+    limit: 'max results',
+    compact: 'compact output',
+  },
+  devplan_search_sections: {
+    projectName: 'project name',
+    query: 'search query',
+    mode: 'literal | semantic | hybrid',
+    moduleId: 'filter module',
+    limit: 'max results',
+  },
+  devplan_delete_section: {
+    projectName: 'project name',
+    section: 'doc section type',
+    subSection: 'optional doc key',
+  },
+  devplan_create_main_task: {
+    projectName: 'project name',
+    taskId: 'phase id',
+    title: 'phase title',
+    priority: 'P0 | P1 | P2',
+  },
+  devplan_add_sub_task: {
+    projectName: 'project name',
+    taskId: 'sub-task id',
+    parentTaskId: 'parent phase id',
+    title: 'sub-task title',
+  },
+  devplan_delete_task: {
+    projectName: 'project name',
+    taskId: 'task id',
+    taskType: 'main | sub',
+  },
+  devplan_update_task_status: {
+    projectName: 'project name',
+    taskId: 'task id',
+    taskType: 'main | sub',
+    status: 'pending | in_progress | cancelled',
+  },
+  devplan_complete_task: {
+    projectName: 'project name',
+    taskId: 'task id',
+    taskType: 'main | sub',
+  },
+  devplan_list_tasks: {
+    projectName: 'project name',
+    parentTaskId: 'list sub-tasks of phase',
+    status: 'filter status',
+    limit: 'max results',
+    compact: 'compact output',
+  },
+  devplan_search_tasks: {
+    projectName: 'project name',
+    query: 'task search query',
+    scope: 'all | active | completed',
+    includeSubTasks: 'include sub-tasks',
+    limit: 'max results',
+  },
+  devplan_start_phase: {
+    projectName: 'project name',
+    taskId: 'phase id',
+  },
+  devplan_memory_save: {
+    projectName: 'project name',
+    content: 'memory content',
+    memoryType: 'decision | pattern | bugfix | insight | preference | summary',
+    relatedTaskId: 'related phase',
+  },
+  devplan_recall_unified: {
+    projectName: 'project name',
+    query: 'recall query',
+    scope: 'optional task/module/anchor scope',
+    limit: 'max results',
+    depth: 'L1 | L2 | L3',
+  },
+  devplan_memory_context: {
+    projectName: 'project name',
+    query: 'topic query',
+    maxMemories: 'max memories',
+  },
+  devplan_memory_list: {
+    projectName: 'project name',
+    memoryType: 'filter memory type',
+    relatedTaskId: 'filter phase',
+    limit: 'max results',
+  },
+  devplan_memory_delete: {
+    projectName: 'project name',
+    memoryId: 'memory id',
+  },
+  devplan_memory_generate: {
+    projectName: 'project name',
+    source: 'tasks | docs | both',
+    taskId: 'phase id',
+    limit: 'max candidates',
+  },
+  devplan_memory_batch_prepare: {
+    projectName: 'project name',
+    source: 'tasks | docs | both',
+    limit: 'entries to prepare',
+    resume: 'resume existing cache',
+  },
+  devplan_memory_batch_commit: {
+    projectName: 'project name',
+    limit: 'entries to commit',
+    dryRun: 'preview only',
+  },
+  devplan_memory_batch_status: {
+    projectName: 'project name',
+    clear: 'clear cache after status',
+  },
+};
+
+const MICRO_EXPOSED_TOOL_NAME_SET = new Set<string>(MICRO_EXPOSED_TOOL_NAMES);
+const SLIM_EXPOSED_TOOL_NAME_SET = new Set<string>(SLIM_EXPOSED_TOOL_NAMES);
+const MICRO_EXPOSED_TOOL_NAME_INDEX = new Map<string, number>(
+  MICRO_EXPOSED_TOOL_NAMES.map((name, index) => [name, index])
+);
+const SLIM_EXPOSED_TOOL_NAME_INDEX = new Map<string, number>(
+  SLIM_EXPOSED_TOOL_NAMES.map((name, index) => [name, index])
+);
+const ALL_TOOL_NAME_SET = new Set<string>(ALL_TOOLS.map(tool => tool.name));
+
+function toCompactToolDefinition(tool: (typeof ALL_TOOLS)[number]) {
+  const group = TOOL_GROUP_BY_NAME[tool.name];
+  const shortDescription = TOOL_SHORT_DESCRIPTION_BY_NAME[tool.name];
+  const compactPropertyDescriptions = TOOL_COMPACT_PROPERTY_DESCRIPTIONS_BY_NAME[tool.name];
+  if (!group || !shortDescription) return tool;
+
+  const compactSchema = tool.inputSchema
+    ? {
+        ...tool.inputSchema,
+        properties: Object.fromEntries(
+          Object.entries(tool.inputSchema.properties || {}).map(([key, value]) => {
+            const compactDescription = compactPropertyDescriptions?.[key];
+            const compactValue = { ...(value as Record<string, unknown>) };
+            if (compactDescription) compactValue.description = compactDescription;
+            else delete compactValue.description;
+            return [key, compactValue];
+          })
+        ),
+      }
+    : tool.inputSchema;
+
+  return {
+    ...tool,
+    description: `[${group}] ${shortDescription}`,
+    inputSchema: compactSchema,
+  };
+}
+
+const MICRO_TOOLS = ALL_TOOLS
+  .filter(tool => MICRO_EXPOSED_TOOL_NAME_SET.has(tool.name))
+  .sort(
+    (a, b) =>
+      (MICRO_EXPOSED_TOOL_NAME_INDEX.get(a.name) ?? Number.MAX_SAFE_INTEGER)
+      - (MICRO_EXPOSED_TOOL_NAME_INDEX.get(b.name) ?? Number.MAX_SAFE_INTEGER)
+  )
+  .map(toCompactToolDefinition);
+
+const SLIM_TOOLS = ALL_TOOLS
+  .filter(tool => SLIM_EXPOSED_TOOL_NAME_SET.has(tool.name))
+  .sort(
+    (a, b) =>
+      (SLIM_EXPOSED_TOOL_NAME_INDEX.get(a.name) ?? Number.MAX_SAFE_INTEGER)
+      - (SLIM_EXPOSED_TOOL_NAME_INDEX.get(b.name) ?? Number.MAX_SAFE_INTEGER)
+  )
+  .map(toCompactToolDefinition);
+
+export function getToolExposureMode(envValue = process.env[MCP_TOOL_MODE_ENV_VAR]): ToolExposureMode {
+  const normalized = String(envValue || '').trim().toLowerCase();
+  if (normalized === 'full' || normalized === 'all') return 'full';
+  if (normalized === 'slim') return 'slim';
+  return 'micro';
+}
+
+export function getExposedTools(mode = getToolExposureMode()) {
+  if (mode === 'full') return ALL_TOOLS;
+  if (mode === 'slim') return SLIM_TOOLS;
+  return MICRO_TOOLS;
+}
+
+export const TOOLS = getExposedTools();
+
+export function isExposedToolName(name: string): boolean {
+  const mode = getToolExposureMode();
+  if (mode === 'full') return ALL_TOOL_NAME_SET.has(name);
+  if (mode === 'slim') return SLIM_EXPOSED_TOOL_NAME_SET.has(name);
+  return MICRO_EXPOSED_TOOL_NAME_SET.has(name);
+}
 
 export interface ToolArgs {
   projectName?: string;
