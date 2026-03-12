@@ -26,7 +26,7 @@
   "dependencies": {
     "@aifastdb/test-tools-hub": "file:./packages/test-tools-hub",
     "@modelcontextprotocol/sdk": "^1.0.0",
-    "aifastdb": "^3.3.9",
+    "aifastdb": "^3.8.5",
     "typescript": "^5.3.3"
   },
   "devDependencies": {

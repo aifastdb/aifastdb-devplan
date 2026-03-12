@@ -2645,28 +2645,20 @@ export class DevPlanGraphStore implements IDevPlanStore {
           mutations.push({
             type: 'PutRelation',
             relation: {
-              id: randomUUID(),
-              source: newMemoryId,
-              target: targetId,
+              source_id: newMemoryId,
+              target_id: targetId,
               relation_type: RT.MEMORY_RELATES,
               weight: score,
-              bidirectional: false,
-              metadata: {},
-              created_at: Date.now(),
             },
           });
           // 反向关系（双向）
           mutations.push({
             type: 'PutRelation',
             relation: {
-              id: randomUUID(),
-              source: targetId,
-              target: newMemoryId,
+              source_id: targetId,
+              target_id: newMemoryId,
               relation_type: RT.MEMORY_RELATES,
               weight: score,
-              bidirectional: false,
-              metadata: {},
-              created_at: Date.now(),
             },
           });
         }
@@ -2681,7 +2673,6 @@ export class DevPlanGraphStore implements IDevPlanStore {
         }
       }
 
-      console.log(`[DevPlan] Memory ${newMemoryId.slice(0, 8)}... auto-linked to ${relationsToCreate.length} similar memories`);
     } catch (e) {
       console.warn(`[DevPlan] autoLinkSimilarMemories failed: ${e instanceof Error ? e.message : String(e)}`);
     }
@@ -3336,11 +3327,6 @@ export class DevPlanGraphStore implements IDevPlanStore {
       }
 
       if (conflicts.length === 0) return undefined;
-
-      console.log(
-        `[DevPlan] Memory ${newEntity.id.slice(0, 8)}... conflict detection: ${conflicts.length} conflict(s) found ` +
-        `(${conflicts.filter(c => c.relationCreated).length} relations created)`
-      );
 
       return conflicts;
     } catch (e) {

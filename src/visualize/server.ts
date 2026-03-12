@@ -3037,6 +3037,31 @@ function startServer(projectName: string, basePath: string, port: number): void 
     }
   });
 
+  server.on('error', (err: NodeJS.ErrnoException) => {
+    if (err?.syscall !== 'listen') {
+      console.error('服务器启动失败:', err);
+      process.exit(1);
+      return;
+    }
+
+    if (err.code === 'EADDRINUSE') {
+      console.error(`错误: 端口 ${port} 已被占用，无法启动 DevPlan 图谱服务器。`);
+      console.error(`请先关闭占用该端口的进程，或改用其他端口（例如 --port ${port + 1}）。`);
+      process.exit(1);
+      return;
+    }
+
+    if (err.code === 'EACCES') {
+      console.error(`错误: 当前进程没有权限监听端口 ${port}。`);
+      console.error('请使用更高的端口号，或以有权限的方式重新运行该命令。');
+      process.exit(1);
+      return;
+    }
+
+    console.error(`错误: 无法监听端口 ${port}。`, err);
+    process.exit(1);
+  });
+
   server.listen(port, () => {
     const url = `http://localhost:${port}`;
     console.log('');
