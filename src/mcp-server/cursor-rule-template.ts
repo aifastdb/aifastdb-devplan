@@ -53,6 +53,31 @@ devplan_list_modules(projectName: "${projectName}")
 | 任务类型与当前 phase 主题不匹配（如依赖升级/运维/文档治理） | → **必须**新建 phase |
 | 仅同一里程碑连续任务或同任务内容更新 | → 允许继续挂当前 phase |
 
+### 任务 ID 命名规范
+
+- 主任务：\`phase-{N}\` 或 \`phase-{N}{Letter}\`（如 \`phase-14B\`）
+- 子任务：\`T{N}.{M}\`（如 \`T14B.1\`、\`T14B.2\`）
+
+### 主任务标题格式（强制）
+
+- 使用 \`devplan_create_main_task\` 新建主任务时，\`title\` **必须**显式包含对应的 phase 编号前缀，不能只写语义标题。
+- \`title\` 的推荐格式：\`Phase-{N}: <主题>\`、\`Phase-{N}{Letter}: <主题>\`，例如 \`Phase-43: DevPlan phase title prefix rule alignment\`。
+- 当 \`taskId = "phase-43"\` 时，\`title\` 必须写成带 \`phase-43\`/ \`Phase-43\` 前缀的形式，禁止只写不带编号的标题。
+- 创建新 phase 时，需要同时保证：
+  - \`taskId\` 使用 \`phase-{N}\` 或 \`phase-{N}{Letter}\`
+  - \`title\` 复用同一个 phase 编号前缀
+
+示例：
+
+\`\`\`
+devplan_create_main_task(
+  projectName: "${projectName}",
+  taskId: "phase-43",
+  title: "Phase-43: DevPlan phase title prefix rule alignment",
+  priority: "P1"
+)
+\`\`\`
+
 ## 注意事项
 
 1. **优先读概览文件**：初次了解项目时，先读概览文件（< 500 行），再按需深入完整设计文档
