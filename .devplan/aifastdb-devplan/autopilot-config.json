@@ -1,7 +1,0 @@
-{
-  "enabled": false,
-  "pollIntervalSeconds": 15,
-  "autoStartNextPhase": true,
-  "maxContinueRetries": 5,
-  "stuckTimeoutMinutes": 30
-}
