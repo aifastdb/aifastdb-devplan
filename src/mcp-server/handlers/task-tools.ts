@@ -326,7 +326,7 @@ export async function handleTaskToolCall(name: string, args: ToolArgs, deps: { g
 
       const plan = getDevPlan(args.projectName);
       const compact = args.compact === true;
-      const limit = typeof args.limit === 'number' ? args.limit : undefined;
+      const limit = typeof args.limit === 'number' ? args.limit : 10;
       const offset = typeof args.offset === 'number' ? args.offset : 0;
       // Phase-160B: sort 默认 desc（最新在前），方便获取最新任务和最大编号
       const sortDesc = args.sort !== 'asc';
@@ -334,7 +334,7 @@ export async function handleTaskToolCall(name: string, args: ToolArgs, deps: { g
       // Helper: apply sort + slice to an array
       const applySortAndSlice = <T>(arr: T[]): T[] => {
         const sorted = sortDesc ? [...arr].reverse() : arr;
-        return limit !== undefined ? sorted.slice(offset, offset + limit) : sorted.slice(offset);
+        return sorted.slice(offset, offset + limit);
       };
 
       if (args.parentTaskId) {
@@ -350,7 +350,9 @@ export async function handleTaskToolCall(name: string, args: ToolArgs, deps: { g
           count: sliced.length,
           total,
           sort: sortDesc ? 'desc' : 'asc',
-          ...(limit !== undefined || offset > 0 ? { offset, limit: limit ?? null, hasMore: offset + sliced.length < total } : {}),
+          offset,
+          limit,
+          hasMore: offset + sliced.length < total,
           subTasks: sliced.map(st => compact
             ? { taskId: st.taskId, title: st.title, status: st.status }
             : {
@@ -393,7 +395,9 @@ export async function handleTaskToolCall(name: string, args: ToolArgs, deps: { g
           count: sliced.length,
           total,
           sort: sortDesc ? 'desc' : 'asc',
-          ...(limit !== undefined || offset > 0 ? { offset, limit: limit ?? null, hasMore: offset + sliced.length < total } : {}),
+          offset,
+          limit,
+          hasMore: offset + sliced.length < total,
           subTasks: sliced,
         });
       } else {
@@ -413,7 +417,9 @@ export async function handleTaskToolCall(name: string, args: ToolArgs, deps: { g
           total,
           latestTaskId,
           sort: sortDesc ? 'desc' : 'asc',
-          ...(limit !== undefined || offset > 0 ? { offset, limit: limit ?? null, hasMore: offset + sliced.length < total } : {}),
+          offset,
+          limit,
+          hasMore: offset + sliced.length < total,
           mainTasks: sliced.map(mt => compact
             ? { taskId: mt.taskId, title: mt.title, status: mt.status }
             : {

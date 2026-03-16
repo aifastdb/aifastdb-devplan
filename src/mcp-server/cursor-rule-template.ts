@@ -35,9 +35,21 @@ devplan_complete_task(projectName: "${projectName}", taskId: "T1.1")
 devplan_sync_git(projectName: "${projectName}", dryRun: true)
 devplan_list_sections(projectName: "${projectName}")
 devplan_get_section(projectName: "${projectName}", section: "overview")
+devplan_search_sections(projectName: "${projectName}", query: "171e9a18-c7e9-430b-9e3d-fa6d384a0b4e", searchBy: "id")
+devplan_search_sections(projectName: "${projectName}", query: "向量存储", searchBy: "title")
+devplan_search_sections(projectName: "${projectName}", query: "BM25 中文分词", searchBy: "content")
+devplan_search_sections(projectName: "${projectName}", query: "文档搜索", searchBy: "auto", mode: "hybrid")
 devplan_export_markdown(projectName: "${projectName}", scope: "tasks")
 devplan_list_modules(projectName: "${projectName}")
 \`\`\`
+
+## 文档搜索约定
+
+- 调用 \`devplan_search_sections\` 时，默认优先显式传入 \`searchBy\`，避免把 ID、标题、正文搜索混在一起。
+- 当查询内容形如 UUID（例如 \`171e9a18-c7e9-430b-9e3d-fa6d384a0b4e\`）时，优先使用 \`searchBy: "id"\`。
+- 当目标是文档标题时，优先使用 \`searchBy: "title"\`。
+- 当目标是正文片段或术语时，优先使用 \`searchBy: "content"\`。
+- 仅在无法提前判断目标字段，或希望保留字面/语义/混合自动搜索行为时，使用 \`searchBy: "auto"\`；此时可再配合 \`mode: "literal" | "semantic" | "hybrid"\`。
 
 ## 开发阶段概览
 

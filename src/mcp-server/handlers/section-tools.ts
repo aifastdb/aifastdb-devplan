@@ -2,6 +2,7 @@ import { ErrorCode, McpError } from '@modelcontextprotocol/sdk/types.js';
 import type { ToolArgs } from '../tool-definitions';
 import type { IDevPlanStore } from '../../dev-plan-interface';
 import type { DevPlanSection, SearchMode } from '../../types';
+import { rankLiteralDocMatches, type DocSearchBy } from '../../doc-search-utils';
 
 type GetDevPlan = (projectName: string) => IDevPlanStore;
 
@@ -167,11 +168,16 @@ export async function handleSectionToolCall(name: string, args: ToolArgs, deps: 
 
       const plan = getDevPlan(args.projectName);
       const searchMode = (args.mode as SearchMode) || 'hybrid';
+      const searchBy = (args.searchBy as DocSearchBy | undefined) || 'auto';
       const searchModuleId = args.moduleId; // Phase-161: optional moduleId filter
       // Phase-161: request more results if moduleId filter will reduce them
       const searchLimit = searchModuleId ? Math.max((args.limit || 10) * 3, 30) : (args.limit || 10);
       const finalLimit = args.limit || 10;
       const searchMinScore = args.minScore || 0;
+
+      if (!['auto', 'id', 'title', 'content'].includes(searchBy)) {
+        throw new McpError(ErrorCode.InvalidParams, 'Invalid searchBy: must be auto, id, title, or content');
+      }
 
       // 判断是否支持高级搜索
       const isSemanticEnabled = plan.isSemanticSearchEnabled?.() ?? false;
@@ -181,6 +187,45 @@ export async function handleSectionToolCall(name: string, args: ToolArgs, deps: 
         if (!searchModuleId) return items;
         return items.filter(r => r.moduleId === searchModuleId);
       };
+
+      const buildResponse = <T extends {
+        id: string;
+        section: string;
+        subSection?: string;
+        title: string;
+        moduleId?: string;
+        score?: number | null;
+        content: string;
+        updatedAt?: number;
+      }>(results: T[], actualMode: SearchMode | 'literal') => JSON.stringify({
+        projectName: args.projectName,
+        query: args.query,
+        mode: searchMode,
+        searchBy,
+        semanticSearchEnabled: isSemanticEnabled,
+        actualMode,
+        ...(searchModuleId ? { filterModuleId: searchModuleId } : {}),
+        count: results.length,
+        results: results.map(r => ({
+          id: r.id,
+          section: r.section,
+          subSection: r.subSection || null,
+          title: r.title,
+          moduleId: r.moduleId || null,
+          score: r.score ?? null,
+          contentPreview: r.content.slice(0, 300) + (r.content.length > 300 ? '...' : ''),
+          updatedAt: r.updatedAt,
+        })),
+      });
+
+      if (searchBy !== 'auto') {
+        const ranked = rankLiteralDocMatches(args.query, plan.listSections(), searchLimit, searchBy);
+        const filtered = applyModuleFilter(ranked.map((match) => ({
+          ...match.doc,
+          score: match.score,
+        }))).slice(0, finalLimit);
+        return buildResponse(filtered, 'literal');
+      }
 
       if (plan.searchSectionsAdvanced) {
         let results = plan.searchSectionsAdvanced(args.query, {
@@ -192,50 +237,14 @@ export async function handleSectionToolCall(name: string, args: ToolArgs, deps: 
         // Phase-161: Post-filter by moduleId
         results = applyModuleFilter(results).slice(0, finalLimit);
 
-        return JSON.stringify({
-          projectName: args.projectName,
-          query: args.query,
-          mode: searchMode,
-          semanticSearchEnabled: isSemanticEnabled,
-          actualMode: isSemanticEnabled ? searchMode : 'literal',
-          ...(searchModuleId ? { filterModuleId: searchModuleId } : {}),
-          count: results.length,
-          results: results.map(r => ({
-            id: r.id,
-            section: r.section,
-            subSection: r.subSection || null,
-            title: r.title,
-            moduleId: r.moduleId || null,
-            score: r.score ?? null,
-            contentPreview: r.content.slice(0, 300) + (r.content.length > 300 ? '...' : ''),
-            updatedAt: r.updatedAt,
-          })),
-        });
+        return buildResponse(results, isSemanticEnabled ? searchMode : 'literal');
       } else {
         // 回退到基础搜索（document 引擎）
         let results = plan.searchSections(args.query, searchLimit);
         // Phase-161: Post-filter by moduleId
         const filtered = applyModuleFilter(results).slice(0, finalLimit);
 
-        return JSON.stringify({
-          projectName: args.projectName,
-          query: args.query,
-          mode: 'literal',
-          semanticSearchEnabled: false,
-          actualMode: 'literal',
-          ...(searchModuleId ? { filterModuleId: searchModuleId } : {}),
-          count: filtered.length,
-          results: filtered.map(r => ({
-            id: r.id,
-            section: r.section,
-            subSection: r.subSection || null,
-            title: r.title,
-            moduleId: r.moduleId || null,
-            score: null,
-            contentPreview: r.content.slice(0, 300) + (r.content.length > 300 ? '...' : ''),
-            updatedAt: r.updatedAt,
-          })),
-        });
+        return buildResponse(filtered, 'literal');
       }
     }
 

@@ -280,6 +280,23 @@ Initialize a development plan for my-app project
 
 The AI will call `devplan_init` and data will be stored in `.devplan/my-app/` under your project root (auto-detected via `.git` or `package.json`).
 
+If the project already has `.cursor/rules/dev-plan-management.mdc` and you want to upgrade it to the latest generated template, call:
+
+```ts
+devplan_init({
+  projectName: "my-app",
+  refreshCursorRule: true
+})
+```
+
+For document search, prefer explicit field targeting when possible:
+
+```ts
+devplan_search_sections({ projectName: "my-app", query: "171e9a18-c7e9-430b-9e3d-fa6d384a0b4e", searchBy: "id" })
+devplan_search_sections({ projectName: "my-app", query: "Vector Store", searchBy: "title" })
+devplan_search_sections({ projectName: "my-app", query: "BM25 tokenization", searchBy: "content" })
+```
+
 #### Method 2: Local Development Version
 
 If you're working with a local clone of `aifastdb-devplan` (not yet published or testing changes):
@@ -682,6 +699,23 @@ npm install -g aifastdb-devplan
 ```
 
 AI 会调用 `devplan_init`，数据自动存储在项目根目录下的 `.devplan/my-app/` 中（通过 `.git` 或 `package.json` 自动检测项目根目录）。
+
+如果项目已经存在 `.cursor/rules/dev-plan-management.mdc`，但你想把它升级到最新模板，可显式调用：
+
+```ts
+devplan_init({
+  projectName: "my-app",
+  refreshCursorRule: true
+})
+```
+
+在文档搜索时，推荐尽量显式指定目标字段：
+
+```ts
+devplan_search_sections({ projectName: "my-app", query: "171e9a18-c7e9-430b-9e3d-fa6d384a0b4e", searchBy: "id" })
+devplan_search_sections({ projectName: "my-app", query: "向量存储", searchBy: "title" })
+devplan_search_sections({ projectName: "my-app", query: "BM25 中文分词", searchBy: "content" })
+```
 
 #### 方式二：使用本地开发版本
 

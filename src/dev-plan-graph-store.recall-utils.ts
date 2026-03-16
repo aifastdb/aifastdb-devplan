@@ -1,5 +1,6 @@
 import type { VectorSearchHit } from 'aifastdb';
 import type { DevPlanDoc, MemoryType, ScoredDevPlanDoc, ScoredMemory } from './types';
+import { literalSearchDocs as literalSearchDocsUtil } from './doc-search-utils';
 import type { ResolvedRecallSearchTuning } from './dev-plan-graph-store.shared';
 
 // ---------------------------------------------------------------------------
@@ -149,12 +150,7 @@ export function rrfMergeMemories(
 }
 
 export function literalSearchDocs(query: string, docs: DevPlanDoc[]): DevPlanDoc[] {
-  const queryLower = query.toLowerCase();
-  return docs.filter(
-    (doc) =>
-      doc.content.toLowerCase().includes(queryLower) ||
-      doc.title.toLowerCase().includes(queryLower)
-  );
+  return literalSearchDocsUtil(query, docs);
 }
 
 export function rrfFusion(

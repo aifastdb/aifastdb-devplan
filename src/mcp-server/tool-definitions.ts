@@ -351,13 +351,17 @@ const ALL_TOOLS = [
   },
   {
     name: 'devplan_init',
-    description: 'Initialize a development plan for a project. Creates an empty plan structure. Also lists existing plans if no projectName is given. Auto-generates .cursor/rules/dev-plan-management.mdc template if not present.\n初始化项目的开发计划。创建空的计划结构。如果不提供 projectName 则列出已有的计划。自动生成 .cursor/rules/ 模板文件（仅首次）。',
+    description: 'Initialize a development plan for a project. Creates an empty plan structure. Also lists existing plans if no projectName is given. Auto-generates .cursor/rules/dev-plan-management.mdc template if not present, and can refresh the template when explicitly requested.\n初始化项目的开发计划。创建空的计划结构。如果不提供 projectName 则列出已有的计划。自动生成 .cursor/rules/ 模板文件（首次），并可在显式请求时刷新现有模板。',
     inputSchema: {
       type: 'object' as const,
       properties: {
         projectName: {
           type: 'string',
           description: `Project name. Omit to list existing plans. Default: "${DEFAULT_PROJECT_NAME}"\n项目名称。省略则列出已有计划。默认值："${DEFAULT_PROJECT_NAME}"`,
+        },
+        refreshCursorRule: {
+          type: 'boolean',
+          description: 'Optional: If true, rewrite .cursor/rules/dev-plan-management.mdc even when it already exists, so older projects can receive the latest template guidance.\n可选：若为 true，即使规则文件已存在也会重写 .cursor/rules/dev-plan-management.mdc，用于让旧项目拿到最新模板说明。',
         },
       },
     },
@@ -757,7 +761,7 @@ const ALL_TOOLS = [
         },
         limit: {
           type: 'number',
-          description: 'Optional: Maximum number of tasks to return. Default: all (no limit). Recommended: 20~50 for large projects to save tokens.\n可选：最大返回任务数。默认：全部。建议大项目用 20~50 以节省 token。',
+          description: 'Optional: Maximum number of tasks to return. Default: 10 newest items. Increase it only when you really need more history.\n可选：最大返回任务数。默认：最新 10 条。仅在确实需要更多历史时再调大。',
         },
         offset: {
           type: 'number',
@@ -1084,7 +1088,7 @@ const ALL_TOOLS = [
   },
   {
     name: 'devplan_search_sections',
-    description: 'Search document sections with support for literal, semantic, or hybrid (RRF fusion) search modes. Can also filter by moduleId to search only documents belonging to a specific feature module. Requires "graph" engine with enableSemanticSearch in .devplan/config.json for semantic/hybrid modes. Falls back to literal search when semantic search is unavailable.\n搜索文档片段，支持字面匹配、语义搜索或混合搜索（RRF 融合）模式。可通过 moduleId 过滤仅搜索特定功能模块关联的文档。语义/混合模式需要 graph 引擎且在 .devplan/config.json 中启用 enableSemanticSearch。语义搜索不可用时自动回退为字面搜索。',
+    description: 'Search document sections with support for document ID lookup, title/content text matching, and literal, semantic, or hybrid (RRF fusion) search modes. Can also filter by moduleId to search only documents belonging to a specific feature module. Requires "graph" engine with enableSemanticSearch in .devplan/config.json for semantic/hybrid modes. Falls back to literal search when semantic search is unavailable.\n搜索文档片段，支持按文档 ID 查找、标题/内容文本匹配，以及字面匹配、语义搜索或混合搜索（RRF 融合）模式。可通过 moduleId 过滤仅搜索特定功能模块关联的文档。语义/混合模式需要 graph 引擎且在 .devplan/config.json 中启用 enableSemanticSearch。语义搜索不可用时自动回退为字面搜索。',
     inputSchema: {
       type: 'object' as const,
       properties: {
@@ -1094,12 +1098,17 @@ const ALL_TOOLS = [
         },
         query: {
           type: 'string',
-          description: 'Search query text\n搜索查询文本',
+          description: 'Search query text. UUID-like input is treated as a document ID lookup first; otherwise title/content matching is used.\n搜索查询文本。形如 UUID 的输入会优先按文档 ID 查找；否则按标题/内容匹配。',
+        },
+        searchBy: {
+          type: 'string',
+          enum: ['auto', 'id', 'title', 'content'],
+          description: 'Optional: Control which field to search. "auto" keeps the current mixed behavior; "id", "title", and "content" force field-specific literal matching.\n可选：控制搜索字段。"auto" 保持当前自动混合行为；"id"、"title"、"content" 则强制按指定字段做字面匹配。',
         },
         mode: {
           type: 'string',
           enum: ['literal', 'semantic', 'hybrid'],
-          description: 'Search mode: "literal" for text matching, "semantic" for vector similarity, "hybrid" for RRF fusion of both (default: "hybrid")\n搜索模式："literal" 字面匹配、"semantic" 语义搜索、"hybrid" 混合融合（默认 "hybrid"）',
+          description: 'Search mode: "literal" for text matching, "semantic" for vector similarity, "hybrid" for RRF fusion of both (default: "hybrid"). Only applies when searchBy="auto"; field-specific searchBy uses literal matching.\n搜索模式："literal" 字面匹配、"semantic" 语义搜索、"hybrid" 混合融合（默认 "hybrid"）。仅在 searchBy="auto" 时生效；指定字段搜索时固定走字面匹配。',
         },
         limit: {
           type: 'number',
@@ -2481,6 +2490,8 @@ export function isExposedToolName(name: string): boolean {
 
 export interface ToolArgs {
   projectName?: string;
+  /** devplan_init: 是否刷新已有 Cursor Rule 模板 */
+  refreshCursorRule?: boolean;
   repoPath?: string;
   // DevPlan-specific args
   section?: string;
@@ -2540,6 +2551,8 @@ export interface ToolArgs {
   port?: number;
   /** devplan_search_sections: 搜索查询文本 */
   query?: string;
+  /** devplan_search_sections: 搜索字段控制 */
+  searchBy?: string;
   /** devplan_search_sections: 搜索模式 */
   mode?: string;
   /** devplan_search_sections: 最大结果数 */

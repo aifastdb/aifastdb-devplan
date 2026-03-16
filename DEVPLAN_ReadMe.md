@@ -335,9 +335,16 @@ MainTask ◀──N:M──▶ DevPlanDoc   (通过 task_has_doc 关系双向关
 
 | 工具名 | 说明 | 必需参数 | 可选参数 |
 |--------|------|---------|---------|
-| `devplan_init` | 初始化项目开发计划；不传 `projectName` 则列出已有计划 | — | `projectName` |
+| `devplan_init` | 初始化项目开发计划；不传 `projectName` 则列出已有计划 | — | `projectName`, `refreshCursorRule` |
 
 返回值包含 `engine`（当前引擎类型）、`availableEngines`（可用引擎列表）、`availableSections`（11 种文档类型）。
+
+**`devplan_init` 参数补充：**
+
+| 参数 | 类型 | 默认值 | 说明 |
+|------|------|--------|------|
+| `projectName` | string | — | 项目名称；省略时列出已有项目 |
+| `refreshCursorRule` | boolean | `false` | 若为 `true`，即使 `.cursor/rules/dev-plan-management.mdc` 已存在，也会用最新模板刷新覆盖；默认仅在文件不存在时生成 |
 
 ### 4.2 文档管理（3 个）
 
@@ -467,7 +474,7 @@ MainTask ◀──N:M──▶ DevPlanDoc   (通过 task_has_doc 关系双向关
 
 | 工具名 | 说明 | 必需参数 | 可选参数 |
 |--------|------|---------|---------|
-| `devplan_search_sections` | 搜索文档片段（支持字面/语义/混合三种模式） | `projectName`, `query` | `mode`, `limit`, `minScore` |
+| `devplan_search_sections` | 搜索文档片段（支持按 ID / 标题 / 内容字段控制，以及字面/语义/混合三种模式） | `projectName`, `query` | `searchBy`, `mode`, `limit`, `minScore` |
 | `devplan_rebuild_index` | 重建所有文档的向量 Embedding 索引 | `projectName` | — |
 
 **`devplan_search_sections` — 三种搜索模式：**
@@ -483,9 +490,17 @@ MainTask ◀──N:M──▶ DevPlanDoc   (通过 task_has_doc 关系双向关
 | 参数 | 类型 | 默认值 | 说明 |
 |------|------|--------|------|
 | `query` | string | (必需) | 搜索查询文本 |
-| `mode` | `"literal"` \| `"semantic"` \| `"hybrid"` | `"hybrid"` | 搜索模式 |
+| `searchBy` | `"auto"` \| `"id"` \| `"title"` \| `"content"` | `"auto"` | 搜索字段控制；推荐优先显式指定字段 |
+| `mode` | `"literal"` \| `"semantic"` \| `"hybrid"` | `"hybrid"` | 搜索模式；仅在 `searchBy="auto"` 时生效 |
 | `limit` | number | 10 | 最大返回结果数 |
 | `minScore` | number | 0 | 最低相关性评分阈值（0~1） |
+
+**字段搜索建议：**
+
+- UUID 形态查询优先使用 `searchBy: "id"`
+- 标题检索优先使用 `searchBy: "title"`
+- 正文片段或术语检索优先使用 `searchBy: "content"`
+- 无法确定字段时再使用 `searchBy: "auto"`，并按需要配合 `mode`
 
 **语义搜索前置条件**：需要 graph 引擎 + `.devplan/config.json` 中启用 `enableSemanticSearch: true`。VibeSynapse（Candle MiniLM-L6-v2，384 维）自动初始化。语义搜索不可用时，`semantic`/`hybrid` 模式自动降级为 `literal`。
 

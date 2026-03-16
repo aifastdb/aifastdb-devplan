@@ -42,6 +42,7 @@ import type {
   PromptInput,
   Prompt,
 } from './types';
+import { literalSearchDocs } from './doc-search-utils';
 
 // ============================================================================
 // Helper Functions
@@ -325,14 +326,10 @@ export class DevPlanDocumentStore implements IDevPlanStore {
       }
     }
 
-    const queryLower = query.toLowerCase();
-    return Array.from(latestMap.values())
-      .filter((doc: any) =>
-        doc.content.toLowerCase().includes(queryLower) ||
-        (doc.metadata?.title || '').toLowerCase().includes(queryLower)
-      )
-      .slice(0, limit)
+    const latestDocs = Array.from(latestMap.values())
       .map((doc: any) => this.docToDevPlanDoc(doc));
+
+    return literalSearchDocs(query, latestDocs, limit);
   }
 
   /**

@@ -109,6 +109,122 @@ describe('MCP tool surface', () => {
     });
   });
 
+  it('supports field-specific title search through devplan_search_sections', async () => {
+    const listSections = jest.fn(() => [
+      {
+        id: 'doc-1',
+        section: 'overview',
+        title: 'Planner Overview',
+        content: 'General architecture',
+        moduleId: 'planner',
+        updatedAt: 5,
+      },
+      {
+        id: 'doc-2',
+        section: 'technical_notes',
+        subSection: 'memo',
+        title: 'Other Note',
+        content: 'Planner Overview appears only in content',
+        moduleId: 'planner',
+        updatedAt: 4,
+      },
+    ]);
+    const getDevPlan = jest.fn(() => ({
+      listSections,
+      isSemanticSearchEnabled: () => true,
+    }) as any);
+
+    const result = await handleSectionToolCall(
+      'devplan_search_sections',
+      { projectName: 'demo', query: 'Planner Overview', searchBy: 'title' },
+      { getDevPlan }
+    );
+    const parsed = JSON.parse(result!);
+
+    expect(parsed.searchBy).toBe('title');
+    expect(parsed.actualMode).toBe('literal');
+    expect(parsed.results).toHaveLength(1);
+    expect(parsed.results[0].id).toBe('doc-1');
+  });
+
+  it('supports field-specific content search through devplan_search_sections', async () => {
+    const listSections = jest.fn(() => [
+      {
+        id: 'doc-1',
+        section: 'overview',
+        title: 'Planner Overview',
+        content: 'General architecture',
+        moduleId: 'planner',
+        updatedAt: 5,
+      },
+      {
+        id: 'doc-2',
+        section: 'technical_notes',
+        subSection: 'memo',
+        title: 'Other Note',
+        content: 'Planner Overview appears only in content',
+        moduleId: 'planner',
+        updatedAt: 4,
+      },
+    ]);
+    const getDevPlan = jest.fn(() => ({
+      listSections,
+      isSemanticSearchEnabled: () => false,
+    }) as any);
+
+    const result = await handleSectionToolCall(
+      'devplan_search_sections',
+      { projectName: 'demo', query: 'Planner Overview', searchBy: 'content' },
+      { getDevPlan }
+    );
+    const parsed = JSON.parse(result!);
+
+    expect(parsed.searchBy).toBe('content');
+    expect(parsed.results).toHaveLength(1);
+    expect(parsed.results[0].id).toBe('doc-2');
+  });
+
+  it('supports field-specific id search through devplan_search_sections', async () => {
+    const listSections = jest.fn(() => [
+      {
+        id: '171e9a18-c7e9-430b-9e3d-fa6d384a0b4e',
+        section: 'overview',
+        title: 'Planner Overview',
+        content: 'General architecture',
+        moduleId: 'planner',
+        updatedAt: 5,
+      },
+      {
+        id: 'doc-2',
+        section: 'technical_notes',
+        subSection: 'memo',
+        title: 'ID mentioned in content',
+        content: '171e9a18-c7e9-430b-9e3d-fa6d384a0b4e appears here too',
+        moduleId: 'planner',
+        updatedAt: 4,
+      },
+    ]);
+    const getDevPlan = jest.fn(() => ({
+      listSections,
+      isSemanticSearchEnabled: () => true,
+    }) as any);
+
+    const result = await handleSectionToolCall(
+      'devplan_search_sections',
+      {
+        projectName: 'demo',
+        query: '171e9a18-c7e9-430b-9e3d-fa6d384a0b4e',
+        searchBy: 'id',
+      },
+      { getDevPlan }
+    );
+    const parsed = JSON.parse(result!);
+
+    expect(parsed.searchBy).toBe('id');
+    expect(parsed.results).toHaveLength(1);
+    expect(parsed.results[0].id).toBe('171e9a18-c7e9-430b-9e3d-fa6d384a0b4e');
+  });
+
   it('supports deleting a task through the task handler', async () => {
     const deleteTask = jest.fn(() => ({
       deleted: true,
@@ -178,5 +294,47 @@ describe('MCP tool surface', () => {
       status: 'in_progress',
       parentTaskId: 'phase-9',
     });
+  });
+
+  it('defaults devplan_list_tasks to the latest 10 items', async () => {
+    const listMainTasks = jest.fn(() => Array.from({ length: 12 }, (_, index) => ({
+      taskId: `phase-${index + 1}`,
+      title: `Phase ${index + 1}`,
+      priority: 'P1',
+      status: 'pending',
+      totalSubtasks: 0,
+      completedSubtasks: 0,
+      estimatedHours: 0,
+      completedAt: null,
+      order: index + 1,
+    })));
+    const getDevPlan = jest.fn(() => ({
+      listMainTasks,
+    }) as any);
+
+    const result = await handleTaskToolCall(
+      'devplan_list_tasks',
+      { projectName: 'demo' },
+      { getDevPlan }
+    );
+    const parsed = JSON.parse(result!);
+
+    expect(listMainTasks).toHaveBeenCalledWith({
+      status: undefined,
+      priority: undefined,
+      moduleId: undefined,
+    });
+    expect(parsed).toMatchObject({
+      projectName: 'demo',
+      count: 10,
+      total: 12,
+      latestTaskId: 'phase-12',
+      sort: 'desc',
+      offset: 0,
+      limit: 10,
+      hasMore: true,
+    });
+    expect(parsed.mainTasks[0].taskId).toBe('phase-12');
+    expect(parsed.mainTasks[9].taskId).toBe('phase-3');
   });
 });

@@ -82,6 +82,7 @@ v5.0.0  (规划) 多项目路由 + Autopilot 模块 — cursor_auto 融合
 
 **关键特性：**
 - 项目路径注册表 + 自动发现（devplan_init 时自动注册）
+- `devplan_init(refreshCursorRule: true)` 可显式刷新已有 `.cursor/rules/dev-plan-management.mdc`
 - 注册路径不存在时优雅降级到默认 basePath
 - Git 操作在正确的项目目录下执行（gitCwd 传递）
 - 每个项目有独立的 config.json（项目级配置）
@@ -157,6 +158,13 @@ aifastdb-devplan
 - `docs`: `devplan_get_section`, `devplan_search_sections`, `devplan_save_section`
 - `tasks`: `devplan_list_tasks`, `devplan_search_tasks`, `devplan_start_phase`, `devplan_create_main_task`, `devplan_add_sub_task`, `devplan_complete_task`
 - `memory`: `devplan_memory_save`, `devplan_recall_unified`
+
+文档搜索补充约定：
+- `devplan_search_sections` 支持 `searchBy: "auto" | "id" | "title" | "content"`
+- UUID 形态查询优先用 `searchBy: "id"`
+- 标题检索优先用 `searchBy: "title"`
+- 正文片段检索优先用 `searchBy: "content"`
+- `searchBy: "auto"` 时再根据需要配合 `mode: "literal" | "semantic" | "hybrid"`
 
 ---
 

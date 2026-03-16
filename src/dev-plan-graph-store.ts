@@ -133,11 +133,11 @@ import {
   docSectionToMemoryType as docSectionToMemoryTypeUtil,
   rrfMergeResults as rrfMergeResultsUtil,
   rrfMergeMemories as rrfMergeMemoriesUtil,
-  literalSearchDocs as literalSearchDocsUtil,
   rrfFusionThreeWay as rrfFusionThreeWayUtil,
   runTreeIndexDocRecall as runTreeIndexDocRecallUtil,
   runVectorDocRecall as runVectorDocRecallUtil,
 } from './dev-plan-graph-store.recall-utils';
+import { isUuidLikeQuery, rankLiteralDocMatches } from './doc-search-utils';
 import { MemoryGatewayAdapter, type MemoryGatewayTelemetry } from './memory-gateway-adapter';
 
 // ============================================================================
@@ -1130,6 +1130,17 @@ export class DevPlanGraphStore implements IDevPlanStore {
     const limit = options?.limit || 10;
     const minScore = options?.minScore || 0;
     const skipRerank = options?._skipRerank === true;
+    const allDocs = this.listSections();
+    const literalMatches = rankLiteralDocMatches(query, allDocs, limit * 3);
+    const exactIdMatch = isUuidLikeQuery(query)
+      ? literalMatches.find((match) => match.doc.id.toLowerCase() === query.trim().toLowerCase())
+      : undefined;
+    const preferredLiteralMatches = literalMatches.filter(
+      (match) => match.matchedFields.includes('id') || match.matchedFields.includes('title'),
+    );
+    const secondaryLiteralMatches = literalMatches.filter(
+      (match) => !match.matchedFields.includes('id') && !match.matchedFields.includes('title'),
+    );
 
     // Phase-54: LLM Reranking 包装 — 仅在非跳过时执行
     const maybeRerank = <T extends { id: string; content?: string; title?: string }>(results: T[]): T[] =>
@@ -1141,7 +1152,7 @@ export class DevPlanGraphStore implements IDevPlanStore {
     if (this.textSearchReady) {
       try {
         const bm25Hits: TextSearchHit[] = this.graph.searchEntitiesByText(query, ET.DOC, limit * 2);
-        textResults = bm25Hits
+        const bm25Results = bm25Hits
           .filter(h => (h.entity.properties as any)?.projectName === this.projectName)
           .map(h => {
             const doc = this.entityToDevPlanDoc(h.entity);
@@ -1158,14 +1169,31 @@ export class DevPlanGraphStore implements IDevPlanStore {
             };
           })
           .sort((a, b) => (b.score || 0) - (a.score || 0));
+        const merged = new Map<string, { id: string; score?: number; doc?: DevPlanDoc }>();
+        const pushResult = (item: { id: string; score?: number; doc?: DevPlanDoc }) => {
+          if (!merged.has(item.id)) merged.set(item.id, item);
+        };
+        if (exactIdMatch) {
+          pushResult({ id: exactIdMatch.doc.id, score: exactIdMatch.score, doc: exactIdMatch.doc });
+        }
+        for (const match of preferredLiteralMatches) {
+          pushResult({ id: match.doc.id, score: match.score, doc: match.doc });
+        }
+        for (const item of bm25Results) {
+          pushResult(item);
+        }
+        for (const match of secondaryLiteralMatches) {
+          pushResult({ id: match.doc.id, score: match.score, doc: match.doc });
+        }
+        textResults = Array.from(merged.values());
       } catch (e) {
         console.warn(`[DevPlan] Tantivy BM25 search failed: ${e instanceof Error ? e.message : String(e)}. Falling back to literal.`);
         // 降级为朴素字面搜索
-        textResults = literalSearchDocsUtil(query, this.listSections()).map(d => ({ id: d.id, doc: d }));
+        textResults = literalMatches.map(match => ({ id: match.doc.id, score: match.score, doc: match.doc }));
       }
     } else {
       // 无 Tantivy：使用朴素字面匹配
-      textResults = literalSearchDocsUtil(query, this.listSections()).map(d => ({ id: d.id, doc: d }));
+      textResults = literalMatches.map(match => ({ id: match.doc.id, score: match.score, doc: match.doc }));
     }
 
     // ---- If no semantic search or literal-only mode ----

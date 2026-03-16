@@ -99,21 +99,31 @@ export async function handleInitToolCall(name: string, args: ToolArgs, deps: { g
       const engine = getProjectEngine(args.projectName) || 'graph';
 
       // 自动生成 .cursor/rules/dev-plan-management.mdc 模板
-      // 仅当项目根目录可确定、且规则文件不存在时生成
+      // 默认仅首次生成；当 refreshCursorRule=true 时允许显式刷新现有模板
       let cursorRuleGenerated = false;
+      let cursorRuleRefreshed = false;
+      const refreshCursorRule = args.refreshCursorRule === true;
       const projectRoot = path.dirname(projectBase); // projectBase = xxx/.devplan → projectRoot = xxx
       const cursorRulesDir = path.join(projectRoot, '.cursor', 'rules');
       const cursorRuleFile = path.join(cursorRulesDir, 'dev-plan-management.mdc');
 
-      if (projectRoot && !fs.existsSync(cursorRuleFile)) {
+      if (projectRoot) {
         try {
-          if (!fs.existsSync(cursorRulesDir)) {
-            fs.mkdirSync(cursorRulesDir, { recursive: true });
+          const ruleFileExists = fs.existsSync(cursorRuleFile);
+          if (!ruleFileExists || refreshCursorRule) {
+            if (!fs.existsSync(cursorRulesDir)) {
+              fs.mkdirSync(cursorRulesDir, { recursive: true });
+            }
+            const ruleContent = generateCursorRuleTemplate(args.projectName);
+            fs.writeFileSync(cursorRuleFile, ruleContent, 'utf-8');
+            cursorRuleGenerated = !ruleFileExists;
+            cursorRuleRefreshed = ruleFileExists;
+            console.error(
+              ruleFileExists
+                ? `[devplan] Refreshed Cursor Rule template at ${cursorRuleFile}`
+                : `[devplan] Generated Cursor Rule template at ${cursorRuleFile}`
+            );
           }
-          const ruleContent = generateCursorRuleTemplate(args.projectName);
-          fs.writeFileSync(cursorRuleFile, ruleContent, 'utf-8');
-          cursorRuleGenerated = true;
-          console.error(`[devplan] Generated Cursor Rule template at ${cursorRuleFile}`);
         } catch (err) {
           console.error(`[devplan] Failed to generate Cursor Rule: ${err}`);
         }
@@ -126,7 +136,8 @@ export async function handleInitToolCall(name: string, args: ToolArgs, deps: { g
         basePath: projectBase,
         autoRegistered,
         cursorRuleGenerated,
-        cursorRulePath: cursorRuleGenerated ? cursorRuleFile : null,
+        cursorRuleRefreshed,
+        cursorRulePath: cursorRuleGenerated || cursorRuleRefreshed ? cursorRuleFile : null,
         configDefaultProject: readDevPlanConfig()?.defaultProject || null,
         registeredProjects: Object.keys(readDevPlanConfig(defaultBase)?.projects || {}),
         availableSections: ALL_SECTIONS,
