@@ -297,6 +297,18 @@ devplan_search_sections({ projectName: "my-app", query: "Vector Store", searchBy
 devplan_search_sections({ projectName: "my-app", query: "BM25 tokenization", searchBy: "content" })
 ```
 
+For task search, you can also explicitly control which field to search:
+
+```ts
+devplan_search_tasks({ projectName: "my-app", query: "phase-14", searchBy: "taskId" })
+devplan_search_tasks({ projectName: "my-app", query: "Vector Search Refactor", searchBy: "title" })
+devplan_search_tasks({ projectName: "my-app", query: "refresh cursor rule template", searchBy: "description" })
+devplan_search_tasks({ projectName: "my-app", query: "rebuild search ranking helper", searchBy: "subTask" })
+devplan_search_tasks({ projectName: "my-app", query: "search ranking", includeSubTasks: true })
+```
+
+When a sub-task matches, `matchedSubTasks` returns the matched child items. If `includeSubTasks: true`, the response also includes all sub-tasks under each matched main task.
+
 #### Method 2: Local Development Version
 
 If you're working with a local clone of `aifastdb-devplan` (not yet published or testing changes):
@@ -716,6 +728,18 @@ devplan_search_sections({ projectName: "my-app", query: "171e9a18-c7e9-430b-9e3d
 devplan_search_sections({ projectName: "my-app", query: "向量存储", searchBy: "title" })
 devplan_search_sections({ projectName: "my-app", query: "BM25 中文分词", searchBy: "content" })
 ```
+
+在任务搜索时，也推荐尽量显式指定目标字段：
+
+```ts
+devplan_search_tasks({ projectName: "my-app", query: "phase-14", searchBy: "taskId" })
+devplan_search_tasks({ projectName: "my-app", query: "向量搜索重构", searchBy: "title" })
+devplan_search_tasks({ projectName: "my-app", query: "刷新 cursor rule 模板", searchBy: "description" })
+devplan_search_tasks({ projectName: "my-app", query: "重建搜索排序 helper", searchBy: "subTask" })
+devplan_search_tasks({ projectName: "my-app", query: "搜索排序", includeSubTasks: true })
+```
+
+当命中的是子任务时，返回结果中的 `matchedSubTasks` 会列出命中的子任务；如果传入 `includeSubTasks: true`，还会额外附带该主任务下的全部子任务。
 
 #### 方式二：使用本地开发版本
 

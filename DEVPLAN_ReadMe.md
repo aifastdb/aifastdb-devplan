@@ -356,7 +356,7 @@ MainTask ◀──N:M──▶ DevPlanDoc   (通过 task_has_doc 关系双向关
 
 `section` 可选值：`overview`, `core_concepts`, `api_design`, `file_structure`, `config`, `examples`, `technical_notes`, `api_endpoints`, `milestones`, `changelog`, `custom`
 
-### 4.3 任务管理（6 个）
+### 4.3 任务管理（7 个）
 
 | 工具名 | 说明 | 必需参数 | 可选参数 |
 |--------|------|---------|---------|
@@ -365,7 +365,33 @@ MainTask ◀──N:M──▶ DevPlanDoc   (通过 task_has_doc 关系双向关
 | `devplan_upsert_task` | 幂等导入（upsert）主任务或子任务，防止重复 | `projectName`, `taskType`, `taskId`, `title` | `priority`, `parentTaskId`, `description`, `estimatedHours`, `status`, `preserveStatus`, `moduleId`, `relatedDocSections`, `order` |
 | `devplan_complete_task` | 完成任务（自动更新主任务进度、锚定 Git commit） | `projectName`, `taskId` | `taskType`（默认 `"sub"`） |
 | `devplan_list_tasks` | 列出任务（支持多种查询模式） | `projectName` | `parentTaskId`, `status`, `priority`, `moduleId` |
+| `devplan_search_tasks` | 搜索任务（支持 taskId / 标题 / 描述 / 子任务字段控制） | `projectName`, `query` | `searchBy`, `scope`, `limit`, `includeSubTasks` |
 | `devplan_start_phase` | 启动/恢复开发阶段（自动标记 in_progress，返回全部子任务） | `projectName`, `taskId` | — |
+
+**`devplan_search_tasks` 参数说明：**
+
+| 参数 | 类型 | 默认值 | 说明 |
+|------|------|--------|------|
+| `query` | string | (必需) | 搜索文本，可匹配 taskId、标题、描述或子任务文本 |
+| `searchBy` | `"auto"` \| `"taskId"` \| `"title"` \| `"description"` \| `"subTask"` | `"auto"` | 搜索字段控制；`auto` 会跨字段搜索，并优先排序 taskId/title 命中 |
+| `scope` | `"all"` \| `"active"` \| `"completed"` | `"all"` | 搜索范围：全部、活跃任务（pending + in_progress）或已完成任务 |
+| `limit` | number | 20 | 最大返回主任务数 |
+| `includeSubTasks` | boolean | `false` | 若为 `true`，返回每个匹配主任务下的全部子任务；否则仅在命中子任务时返回 `matchedSubTasks` |
+
+**任务搜索建议：**
+
+- 已知阶段号时优先使用 `searchBy: "taskId"`，例如 `phase-14`、`T14.2`
+- 按主任务标题找历史阶段时优先使用 `searchBy: "title"`
+- 按任务说明中的术语或决策原因检索时优先使用 `searchBy: "description"`
+- 已知要找的是子任务标题/说明时优先使用 `searchBy: "subTask"`
+- 不确定字段时使用 `searchBy: "auto"`，让 taskId/title 命中优先排序
+
+**返回值补充：**
+
+- `matchedFields`：当前主任务命中的字段列表
+- `matchScore`：内部排序分值，用于解释结果排序
+- `matchedSubTasks`：仅返回真正命中的子任务摘要
+- `subTasks`：仅在 `includeSubTasks: true` 时返回该主任务下的全部子任务摘要
 
 **`devplan_list_tasks` 的三种查询模式：**
 

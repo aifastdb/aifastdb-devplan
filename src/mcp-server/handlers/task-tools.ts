@@ -1,5 +1,6 @@
 import { ErrorCode, McpError } from '@modelcontextprotocol/sdk/types.js';
 import type { TaskPriority, TaskStatus } from '../../types';
+import { rankTaskMatches, type TaskSearchBy } from '../../task-search-utils';
 
 import type { ToolArgs } from '../tool-definitions';
 import type { IDevPlanStore } from '../../dev-plan-interface';
@@ -444,11 +445,14 @@ export async function handleTaskToolCall(name: string, args: ToolArgs, deps: { g
       }
 
       const plan = getDevPlan(args.projectName);
-      const searchQuery = args.query.toLowerCase();
-      const keywords = searchQuery.split(/\s+/).filter(Boolean);
+      const searchBy = (args.searchBy as TaskSearchBy | undefined) || 'auto';
       const searchLimit = typeof args.limit === 'number' ? args.limit : 20;
       const searchScope = (args.scope as string) || 'all';
       const includeSubTasks = args.includeSubTasks === true;
+
+      if (!['auto', 'taskId', 'title', 'description', 'subTask'].includes(searchBy)) {
+        throw new McpError(ErrorCode.InvalidParams, 'Invalid searchBy: must be auto, taskId, title, description, or subTask');
+      }
 
       // Get all main tasks and filter by scope
       const allMainTasks = plan.listMainTasks();
@@ -458,17 +462,13 @@ export async function handleTaskToolCall(name: string, args: ToolArgs, deps: { g
         return true; // 'all'
       });
 
-      // Search: match ALL keywords in title or taskId (AND logic)
-      const matchedTasks = scopedTasks.filter(mt => {
-        const haystack = `${mt.taskId} ${mt.title} ${mt.description || ''}`.toLowerCase();
-        return keywords.every(kw => haystack.includes(kw));
-      });
-
-      // Limit results
-      const limited = matchedTasks.slice(0, searchLimit);
+      const subTasksByParent = new Map(scopedTasks.map((task) => [task.taskId, plan.listSubTasks(task.taskId)]));
+      const rankedMatches = rankTaskMatches(args.query, scopedTasks, subTasksByParent, undefined, searchBy);
+      const limitedMatches = rankedMatches.slice(0, searchLimit);
 
       // Build response
-      const results: Array<Record<string, unknown>> = limited.map(mt => {
+      const results: Array<Record<string, unknown>> = limitedMatches.map((match) => {
+        const mt = match.task;
         const entry: Record<string, unknown> = {
           taskId: mt.taskId,
           title: mt.title,
@@ -476,9 +476,18 @@ export async function handleTaskToolCall(name: string, args: ToolArgs, deps: { g
           status: mt.status,
           totalSubtasks: mt.totalSubtasks,
           completedSubtasks: mt.completedSubtasks,
+          matchedFields: match.matchedFields,
+          matchScore: match.score,
         };
+        if (match.matchedSubTasks.length > 0) {
+          entry.matchedSubTasks = match.matchedSubTasks.map((sub) => ({
+            taskId: sub.taskId,
+            title: sub.title,
+            status: sub.status,
+          }));
+        }
         if (includeSubTasks) {
-          const subs = plan.listSubTasks(mt.taskId);
+          const subs = subTasksByParent.get(mt.taskId) || [];
           entry.subTasks = subs.map(s => ({
             taskId: s.taskId,
             title: s.title,
@@ -492,9 +501,10 @@ export async function handleTaskToolCall(name: string, args: ToolArgs, deps: { g
         projectName: args.projectName,
         query: args.query,
         scope: searchScope,
-        matchCount: matchedTasks.length,
+        searchBy,
+        matchCount: rankedMatches.length,
         returnedCount: results.length,
-        hasMore: matchedTasks.length > searchLimit,
+        hasMore: rankedMatches.length > searchLimit,
         results,
       });
     }

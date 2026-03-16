@@ -166,6 +166,14 @@ aifastdb-devplan
 - 正文片段检索优先用 `searchBy: "content"`
 - `searchBy: "auto"` 时再根据需要配合 `mode: "literal" | "semantic" | "hybrid"`
 
+任务搜索补充约定：
+- `devplan_search_tasks` 支持 `searchBy: "auto" | "taskId" | "title" | "description" | "subTask"`
+- 阶段号 / 子任务号检索优先用 `searchBy: "taskId"`
+- 按主任务标题检索优先用 `searchBy: "title"`
+- 按任务说明中的术语检索优先用 `searchBy: "description"`
+- 已知要找的是子任务时优先用 `searchBy: "subTask"`
+- 命中子任务时返回 `matchedSubTasks`；如需完整子任务列表，再加 `includeSubTasks: true`
+
 ---
 
 ## 5. HTTP API 端点

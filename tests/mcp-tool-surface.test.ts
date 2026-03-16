@@ -225,6 +225,188 @@ describe('MCP tool surface', () => {
     expect(parsed.results[0].id).toBe('171e9a18-c7e9-430b-9e3d-fa6d384a0b4e');
   });
 
+  it('supports field-specific task title search through devplan_search_tasks', async () => {
+    const listMainTasks = jest.fn(() => [
+      {
+        id: 'main-1',
+        projectName: 'demo',
+        taskId: 'phase-1',
+        title: 'Document Search Upgrade',
+        priority: 'P1',
+        description: 'Improve task search behavior',
+        totalSubtasks: 1,
+        completedSubtasks: 0,
+        status: 'in_progress',
+        createdAt: 10,
+        updatedAt: 20,
+        completedAt: null,
+      },
+      {
+        id: 'main-2',
+        projectName: 'demo',
+        taskId: 'phase-2',
+        title: 'Release Cleanup',
+        priority: 'P1',
+        description: 'Document search upgrade mentioned only in description',
+        totalSubtasks: 0,
+        completedSubtasks: 0,
+        status: 'pending',
+        createdAt: 11,
+        updatedAt: 19,
+        completedAt: null,
+      },
+    ]);
+    const listSubTasks = jest.fn(() => []);
+    const getDevPlan = jest.fn(() => ({
+      listMainTasks,
+      listSubTasks,
+    }) as any);
+
+    const result = await handleTaskToolCall(
+      'devplan_search_tasks',
+      { projectName: 'demo', query: 'Document Search Upgrade', searchBy: 'title' },
+      { getDevPlan }
+    );
+    const parsed = JSON.parse(result!);
+
+    expect(parsed.searchBy).toBe('title');
+    expect(parsed.matchCount).toBe(1);
+    expect(parsed.results[0]).toMatchObject({
+      taskId: 'phase-1',
+      matchedFields: ['title'],
+    });
+  });
+
+  it('supports sub-task search through devplan_search_tasks', async () => {
+    const listMainTasks = jest.fn(() => [
+      {
+        id: 'main-1',
+        projectName: 'demo',
+        taskId: 'phase-1',
+        title: 'Task Search Refactor',
+        priority: 'P1',
+        description: 'Refactor handler',
+        totalSubtasks: 2,
+        completedSubtasks: 0,
+        status: 'in_progress',
+        createdAt: 10,
+        updatedAt: 20,
+        completedAt: null,
+      },
+    ]);
+    const listSubTasks = jest.fn(() => [
+      {
+        id: 'sub-1',
+        projectName: 'demo',
+        taskId: 'T1.1',
+        parentTaskId: 'phase-1',
+        title: 'Implement fuzzy ranking helper',
+        description: 'Support title and taskId matching',
+        status: 'in_progress',
+        createdAt: 10,
+        updatedAt: 20,
+        completedAt: null,
+      },
+      {
+        id: 'sub-2',
+        projectName: 'demo',
+        taskId: 'T1.2',
+        parentTaskId: 'phase-1',
+        title: 'Update docs',
+        description: 'No search relevance',
+        status: 'pending',
+        createdAt: 11,
+        updatedAt: 19,
+        completedAt: null,
+      },
+    ]);
+    const getDevPlan = jest.fn(() => ({
+      listMainTasks,
+      listSubTasks,
+    }) as any);
+
+    const result = await handleTaskToolCall(
+      'devplan_search_tasks',
+      { projectName: 'demo', query: 'fuzzy ranking helper', searchBy: 'subTask' },
+      { getDevPlan }
+    );
+    const parsed = JSON.parse(result!);
+
+    expect(parsed.searchBy).toBe('subTask');
+    expect(parsed.results).toHaveLength(1);
+    expect(parsed.results[0]).toMatchObject({
+      taskId: 'phase-1',
+      matchedFields: ['subTask'],
+    });
+    expect(parsed.results[0].matchedSubTasks).toEqual([
+      {
+        taskId: 'T1.1',
+        title: 'Implement fuzzy ranking helper',
+        status: 'in_progress',
+      },
+    ]);
+  });
+
+  it('returns all sub-tasks for matched phases when includeSubTasks is true', async () => {
+    const listMainTasks = jest.fn(() => [
+      {
+        id: 'main-1',
+        projectName: 'demo',
+        taskId: 'phase-1',
+        title: 'Task Search Refactor',
+        priority: 'P1',
+        description: 'Refactor handler',
+        totalSubtasks: 2,
+        completedSubtasks: 0,
+        status: 'in_progress',
+        createdAt: 10,
+        updatedAt: 20,
+        completedAt: null,
+      },
+    ]);
+    const subTasks = [
+      {
+        id: 'sub-1',
+        projectName: 'demo',
+        taskId: 'T1.1',
+        parentTaskId: 'phase-1',
+        title: 'Implement fuzzy ranking helper',
+        description: 'Support title and taskId matching',
+        status: 'in_progress',
+        createdAt: 10,
+        updatedAt: 20,
+        completedAt: null,
+      },
+      {
+        id: 'sub-2',
+        projectName: 'demo',
+        taskId: 'T1.2',
+        parentTaskId: 'phase-1',
+        title: 'Update docs',
+        description: 'No search relevance',
+        status: 'pending',
+        createdAt: 11,
+        updatedAt: 19,
+        completedAt: null,
+      },
+    ];
+    const listSubTasks = jest.fn(() => subTasks);
+    const getDevPlan = jest.fn(() => ({
+      listMainTasks,
+      listSubTasks,
+    }) as any);
+
+    const result = await handleTaskToolCall(
+      'devplan_search_tasks',
+      { projectName: 'demo', query: 'refactor', includeSubTasks: true },
+      { getDevPlan }
+    );
+    const parsed = JSON.parse(result!);
+
+    expect(parsed.results[0].subTasks).toHaveLength(2);
+    expect(parsed.results[0].matchedFields).toContain('title');
+  });
+
   it('supports deleting a task through the task handler', async () => {
     const deleteTask = jest.fn(() => ({
       deleted: true,

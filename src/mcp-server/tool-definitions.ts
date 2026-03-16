@@ -782,7 +782,7 @@ const ALL_TOOLS = [
   },
   {
     name: 'devplan_search_tasks',
-    description: 'Search tasks by keyword in title or taskId. Returns matching main tasks and their sub-tasks. Use this to find specific historical tasks without loading the entire task list. Much more token-efficient than devplan_list_tasks for targeted lookups.\n按关键词搜索任务标题或 taskId。返回匹配的主任务及其子任务。用于查找特定历史任务，无需加载完整列表。比 devplan_list_tasks 更节省 token。',
+    description: 'Search tasks by taskId, title, description, or matching sub-tasks. Returns matching main tasks and can include all sub-tasks for matched phases. Use this to find specific historical tasks without loading the entire task list. Much more token-efficient than devplan_list_tasks for targeted lookups.\n按 taskId、标题、描述或匹配子任务搜索任务。返回匹配的主任务，并可附带这些主任务下的全部子任务。用于查找特定历史任务，无需加载完整列表。比 devplan_list_tasks 更节省 token。',
     inputSchema: {
       type: 'object' as const,
       properties: {
@@ -792,7 +792,12 @@ const ALL_TOOLS = [
         },
         query: {
           type: 'string',
-          description: 'Search query text. Matches against task title and taskId (case-insensitive). Supports multiple keywords separated by spaces (AND logic).\n搜索查询文本。不区分大小写匹配任务标题和 taskId。支持空格分隔多关键词（AND 逻辑）。',
+          description: 'Search query text. Can match taskId, title, description, or sub-task text depending on searchBy.\n搜索查询文本。可根据 searchBy 匹配 taskId、标题、描述或子任务文本。',
+        },
+        searchBy: {
+          type: 'string',
+          enum: ['auto', 'taskId', 'title', 'description', 'subTask'],
+          description: 'Optional: Control which task field to search. "auto" searches across all supported fields and ranks taskId/title hits highest.\n可选：控制搜索字段。"auto" 会跨所有支持字段搜索，并优先排序 taskId/title 命中。',
         },
         scope: {
           type: 'string',
@@ -805,7 +810,7 @@ const ALL_TOOLS = [
         },
         includeSubTasks: {
           type: 'boolean',
-          description: 'Optional: If true, also return sub-tasks of matching main tasks. Default: false.\n可选：为 true 时同时返回匹配主任务的子任务。默认：false。',
+          description: 'Optional: If true, also return all sub-tasks of matching main tasks. Matched sub-tasks are returned separately even when this is false. Default: false.\n可选：为 true 时同时返回匹配主任务下的全部子任务。即使为 false，命中的子任务也会单独返回。默认：false。',
         },
       },
       required: ['projectName', 'query'],
