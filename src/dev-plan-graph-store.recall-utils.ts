@@ -34,6 +34,81 @@ export function tokenizeQuery(query: string): string[] {
   return Array.from(new Set(tokens));
 }
 
+// ---------------------------------------------------------------------------
+// Phase-215: Tag Boost — query token 与记忆 tags 交集加分
+// ---------------------------------------------------------------------------
+
+/**
+ * 对召回结果应用 tag-query 交集加分。
+ * 当 query 中的 token 命中记忆的 tags 时，每命中 1 个 tag 增加 `tagBoostFactor` 倍分数。
+ *
+ * @example
+ *   query="anchor dedup upsert", tags=["anchor","dedup","fix"]
+ *   matchedCount=2, boost = 1 + 2 * 0.15 = 1.3
+ *   newScore = score * 1.3
+ */
+export function applyTagBoost(
+  memories: ScoredMemory[],
+  query: string,
+  tagBoostFactor: number,
+): ScoredMemory[] {
+  if (tagBoostFactor <= 0) return memories;
+  const tokens = tokenizeQuery(query);
+  if (tokens.length === 0) return memories;
+
+  return memories.map(mem => {
+    const tags = mem.tags;
+    if (!tags || tags.length === 0) return mem;
+
+    const tagsLower = tags.map(t => t.toLowerCase());
+    let matchCount = 0;
+    for (const token of tokens) {
+      if (tagsLower.some(tag => tag.includes(token) || token.includes(tag))) {
+        matchCount++;
+      }
+    }
+
+    if (matchCount === 0) return mem;
+    const boost = 1 + matchCount * tagBoostFactor;
+    return { ...mem, score: mem.score * boost };
+  });
+}
+
+// ---------------------------------------------------------------------------
+// Phase-215: Score 归一化 — 将 RRF 分数映射到 [0, 1] 区间
+// ---------------------------------------------------------------------------
+
+/**
+ * 对召回结果进行 min-max 归一化，将 score 映射到 [0, 1]。
+ * 原始分数保留在 rawScore 字段中。
+ *
+ * 如果所有分数相同（maxScore == minScore），所有结果归一化为 1.0。
+ */
+export function normalizeScores(
+  memories: ScoredMemory[],
+): ScoredMemory[] {
+  if (memories.length === 0) return memories;
+  if (memories.length === 1) {
+    return memories.map(m => ({ ...m, rawScore: m.score, score: 1.0 }));
+  }
+
+  const scores = memories.map(m => m.score);
+  const maxScore = Math.max(...scores);
+  const minScore = Math.min(...scores);
+  const range = maxScore - minScore;
+
+  if (range < 1e-10) {
+    // 所有分数相同
+    return memories.map(m => ({ ...m, rawScore: m.score, score: 1.0 }));
+  }
+
+  return memories.map(m => ({
+    ...m,
+    rawScore: m.score,
+    score: (m.score - minScore) / range,
+  }));
+}
+
 export function docSectionToMemoryType(section: string): MemoryType {
   const mapping: Record<string, MemoryType> = {
     overview: 'summary',

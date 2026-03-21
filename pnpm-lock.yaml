@@ -15,8 +15,8 @@ importers:
         specifier: ^1.0.0
         version: 1.26.0(zod@3.25.76)
       aifastdb:
-        specifier: ^3.8.5
-        version: 3.8.5
+        specifier: ^3.8.9
+        version: 3.8.9
       typescript:
         specifier: ^5.3.3
         version: 5.9.3
@@ -392,8 +392,8 @@ packages:
     resolution: {integrity: sha512-kja8j7PjmncONqaTsB8fQ+wE2mSU2DJ9D4XKoJ5PFWIdRMa6SLSN1ff4mOr4jCbfRSsxR4keIiySJU0N9T5hIQ==}
     engines: {node: '>= 8.0.0'}
 
-  aifastdb@3.8.5:
-    resolution: {integrity: sha512-Rme8WgzR6Y8UFpoMR0ZNkzJbE4t5d6TrGguZ3VX8/uTCxzoQP+3gvHCLi56gFB16dMsDlQ8o3i1yXSs6OiSSSg==}
+  aifastdb@3.8.9:
+    resolution: {integrity: sha512-ZGFoZMQD7aMQEUrG4feDwQfCPF5na+wqq3p4Pig3cSKC0MpfG4OcXAG4WgFvXeq0fdUzqOZRgrIGRGYS8Qx5Dw==}
     engines: {node: '>= 18'}
     hasBin: true
 
@@ -2195,7 +2195,7 @@ snapshots:
     dependencies:
       humanize-ms: 1.2.1
 
-  aifastdb@3.8.5:
+  aifastdb@3.8.9:
     dependencies:
       '@modelcontextprotocol/sdk': 1.26.0(zod@3.25.76)
       openai: 4.104.0(zod@3.25.76)

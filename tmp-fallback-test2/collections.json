@@ -1,0 +1,18 @@
+{
+  "version": 1,
+  "collections": {
+    "default": {
+      "config": {
+        "name": "default",
+        "dimension": 4096,
+        "metadata": {}
+      },
+      "created_at": 1774093684521,
+      "updated_at": 1774093684521,
+      "document_count": 0,
+      "vector_count": 0
+    }
+  },
+  "created_at": 1774093684520,
+  "updated_at": 1774093684521
+}

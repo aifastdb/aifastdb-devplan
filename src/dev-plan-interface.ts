@@ -528,4 +528,31 @@ export interface IDevPlanStore {
    * 检查语义搜索是否可用
    */
   isSemanticSearchEnabled?(): boolean;
+
+  /**
+   * Phase-216: 获取向量搜索诊断信息
+   */
+  getVectorStatus?(): VectorSearchStatus;
+}
+
+/**
+ * Phase-216: 向量搜索诊断状态
+ */
+export interface VectorSearchStatus {
+  semanticSearchReady: boolean;
+  textSearchReady: boolean;
+  perceptionModel: string | null;
+  dimension: number | null;
+  hasPerception: boolean;
+  /** 配置来源（preset / perceptionConfig / default） */
+  configSource: 'preset' | 'perceptionConfig' | 'default';
+  configValue: string | null;
+  /** 是否有回退引擎 */
+  hasFallback: boolean;
+  fallbackInfo: string | null;
+  /** 向量索引中的实体数量 */
+  indexedDocCount: number;
+  indexedMemoryCount: number;
+  /** 附加说明 */
+  notes: string[];
 }

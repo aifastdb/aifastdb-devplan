@@ -294,6 +294,32 @@ export async function handleSectionToolCall(name: string, args: ToolArgs, deps: 
       }
     }
 
+    case 'devplan_vector_status': {
+      if (!args.projectName) {
+        throw new McpError(ErrorCode.InvalidParams, 'Missing required: projectName');
+      }
+      const plan = getDevPlan(args.projectName);
+
+      if (!plan.getVectorStatus) {
+        return JSON.stringify({
+          success: false,
+          error: 'Vector status is only available for graph engine stores.',
+          hint: 'Use .devplan/config.json with enableSemanticSearch: true',
+        });
+      }
+
+      const status = plan.getVectorStatus();
+      const statusEmoji = status.semanticSearchReady ? '✅' : '❌';
+      return JSON.stringify({
+        success: true,
+        ...status,
+        summary: `${statusEmoji} Semantic: ${status.semanticSearchReady ? 'ON' : 'OFF'} | ` +
+          `Model: ${status.perceptionModel ?? 'none'} | Dim: ${status.dimension ?? '?'} | ` +
+          `Docs: ${status.indexedDocCount} | Memories: ${status.indexedMemoryCount} | ` +
+          `Fallback: ${status.hasFallback ? status.fallbackInfo : 'none'}`,
+      });
+    }
+
     // ==================================================================
     // Autopilot Tool Handlers
     // ==================================================================

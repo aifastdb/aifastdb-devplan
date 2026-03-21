@@ -12,6 +12,8 @@ export type ResolvedRecallSearchTuningLike = {
   bm25TermBoost: number;
   bm25DomainTerms: string[];
   bm25UserDictPath?: string;
+  /** Phase-215: 记忆标签匹配加分因子 */
+  tagBoostFactor: number;
 };
 
 export const DEFAULT_BM25_DOMAIN_TERMS = [
@@ -36,16 +38,20 @@ export function resolvePerceptionConfig(config: DevPlanGraphStoreConfig): Percep
   if (config.perceptionPreset) {
     const presetFn = PerceptionPresets[config.perceptionPreset];
     if (presetFn) {
-      const preset = presetFn();
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any -- preset signatures vary (some accept optional args)
+      const preset = (presetFn as (...args: any[]) => PerceptionConfig)();
       return { ...preset, autoDownload: preset.autoDownload ?? true };
     }
     console.warn(
       `[DevPlan] Unknown perception preset "${config.perceptionPreset}", ` +
-      `available: ${Object.keys(PerceptionPresets).join(', ')}. Falling back to miniLM.`
+      `available: ${Object.keys(PerceptionPresets).join(', ')}. Falling back to qwen3Local06b.`
     );
   }
 
-  return { ...PerceptionPresets.miniLM(), autoDownload: true };
+  // Phase-216: 默认从 miniLM(384d) 升级为 qwen3Local06b(1024d)
+  // qwen3Local06b 是本地推理（无需 Ollama），中文支持更好，维度更高
+  const defaultPreset = PerceptionPresets.qwen3Local06b?.() ?? PerceptionPresets.miniLM();
+  return { ...defaultPreset, autoDownload: true };
 }
 
 export function resolveRecallSearchTuning(
@@ -73,6 +79,7 @@ export function resolveRecallSearchTuning(
     bm25TermBoost: safeNumber(config?.bm25TermBoost, 2),
     bm25DomainTerms,
     bm25UserDictPath: config?.bm25UserDictPath,
+    tagBoostFactor: safeNumber(config?.tagBoostFactor, 0.15),
   };
 }
 

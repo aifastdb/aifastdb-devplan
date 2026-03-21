@@ -40,7 +40,7 @@
  */
 
 // Interface & Types
-export type { IDevPlanStore } from './dev-plan-interface';
+export type { IDevPlanStore, VectorSearchStatus } from './dev-plan-interface';
 export {
   ALL_SECTIONS,
   SECTION_DESCRIPTIONS,

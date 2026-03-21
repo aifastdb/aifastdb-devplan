@@ -1133,13 +1133,27 @@ const ALL_TOOLS = [
   },
   {
     name: 'devplan_rebuild_index',
-    description: 'Rebuild the vector embedding index for all document sections. Reads all documents, generates embeddings via VibeSynapse (Candle MiniLM), and indexes them into SocialGraphV2. Use when: first enabling semantic search, switching embedding models, or repairing a corrupted index. Shows progress and duration.\n重建所有文档片段的向量 Embedding 索引。读取全部文档，通过 VibeSynapse（Candle MiniLM）生成 Embedding，索引到 SocialGraphV2。适用于：首次启用语义搜索、切换 Embedding 模型、修复损坏的索引。显示进度和耗时。',
+    description: 'Rebuild the vector embedding index for all documents and memories. Reads all documents & memories, generates embeddings via VibeSynapse (auto-detects model from config), and indexes them into SocialGraphV2. Use when: first enabling semantic search, switching embedding models, changing dimension, or repairing a corrupted index.\n重建所有文档和记忆的向量 Embedding 索引。从 config.json 自动检测 Embedding 模型。适用于：首次启用语义搜索、切换 Embedding 模型、变更维度、修复损坏的索引。',
     inputSchema: {
       type: 'object' as const,
       properties: {
         projectName: {
           type: 'string',
           description: `Project name (default: "${DEFAULT_PROJECT_NAME}")\n项目名称（默认："${DEFAULT_PROJECT_NAME}"）`,
+        },
+      },
+      required: ['projectName'],
+    },
+  },
+  {
+    name: 'devplan_vector_status',
+    description: 'Diagnose vector search status: perception engine, embedding model, dimension, index counts, and semantic search readiness.\n向量搜索诊断：感知引擎、Embedding 模型、维度、索引数量、语义搜索就绪状态。',
+    inputSchema: {
+      type: 'object' as const,
+      properties: {
+        projectName: {
+          type: 'string',
+          description: `Project name (required)\n项目名称（必需）`,
         },
       },
       required: ['projectName'],

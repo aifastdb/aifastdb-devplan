@@ -46,6 +46,8 @@ export type ResolvedRecallSearchTuning = {
   bm25TermBoost: number;
   bm25DomainTerms: string[];
   bm25UserDictPath?: string;
+  /** Phase-215: 记忆标签匹配加分因子 */
+  tagBoostFactor: number;
 };
 
 /** 触点类型常量 */

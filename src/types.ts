@@ -459,23 +459,35 @@ export interface DevPlanStoreConfig {
  *
  * | 预设名 | 模型 | 维度 | 后端 | 适用场景 |
  * |--------|------|------|------|---------|
- * | miniLM | all-MiniLM-L6-v2 | 384 | candle | 轻量英文（默认） |
- * | bgeSmall | bge-small-en-v1.5 | 384 | candle | 高质量英文 |
- * | multilingualE5 | multilingual-e5-small | 384 | candle | 多语言 |
- * | embeddingGemma | embedding-gemma | 768 | candle | 高维度 |
- * | ollamaEmbeddingGemma | embeddinggemma | 768 | ollama | Ollama EmbeddingGemma |
+ * | qwen3Local06b | Qwen3-Embedding-0.6B | 1024 | qwen3_local | **默认**，本地推理无需 Ollama |
+ * | qwen3Hybrid06b | qwen3-embedding | 1024 | ollama+fallback | Ollama 优先，回退本地 |
  * | ollamaQwen3Embedding | qwen3-embedding | 1024 | ollama | Ollama Qwen3 0.6B |
  * | ollamaQwen3Embedding8b | qwen3-embedding:8b | 4096 | ollama | Ollama Qwen3 8B（最高质量） |
+ * | miniLM | all-MiniLM-L6-v2 | 384 | candle | 轻量英文（旧默认） |
+ * | bgeSmall | bge-small-en-v1.5 | 384 | candle | 高质量英文 |
+ * | bgeM3 | BAAI/bge-m3 | 1024 | candle | 多语言大模型 |
+ * | multilingualE5 | multilingual-e5-small | 384 | candle | 多语言 |
+ * | embeddingGemma | embedding-gemma | 768 | candle | 高维度 |
+ * | embeddingGemmaMatryoshka | embedding-gemma | 可配置 | candle | Matryoshka 截断 |
+ * | modernBertEmbedLarge | ModernBERT-embed-large | 1024 | candle | 高质量大模型 |
+ * | ollamaEmbeddingGemma | embeddinggemma | 768 | ollama | Ollama EmbeddingGemma |
+ * | ollamaWithFallback | 可配置 | 可配置 | ollama+fallback | 通用 Ollama + 本地回退 |
  * | none | — | — | — | 禁用感知引擎 |
  */
 export type PerceptionPresetName =
-  | 'miniLM'
-  | 'bgeSmall'
-  | 'multilingualE5'
-  | 'embeddingGemma'
-  | 'ollamaEmbeddingGemma'
+  | 'qwen3Local06b'
+  | 'qwen3Hybrid06b'
   | 'ollamaQwen3Embedding'
   | 'ollamaQwen3Embedding8b'
+  | 'miniLM'
+  | 'bgeSmall'
+  | 'bgeM3'
+  | 'multilingualE5'
+  | 'embeddingGemma'
+  | 'embeddingGemmaMatryoshka'
+  | 'modernBertEmbedLarge'
+  | 'ollamaEmbeddingGemma'
+  | 'ollamaWithFallback'
   | 'none';
 
 /**
@@ -504,6 +516,11 @@ export interface RecallSearchTuningConfig {
    * 未配置时自动在项目 .devplan 下生成并维护。
    */
   bm25UserDictPath?: string;
+  /**
+   * Phase-215: 记忆标签匹配加分因子（默认 0.15）。
+   * 当 query token 命中记忆的 tags 时，每命中一个 tag 加分 score * tagBoostFactor。
+   */
+  tagBoostFactor?: number;
 }
 
 /**
@@ -532,13 +549,13 @@ export interface DevPlanGraphStoreConfig {
   embeddingDimension?: number;
 
   /**
-   * Phase-52: Perception 预设名称 — 快捷选择 Embedding 模型
+   * Phase-52/216: Perception 预设名称 — 快捷选择 Embedding 模型
    *
-   * 优先级：perceptionConfig > perceptionPreset > 默认 miniLM
+   * 优先级：perceptionConfig > perceptionPreset > 默认 qwen3Local06b(1024d)
    *
    * 在 .devplan/config.json 中配置：
    * ```json
-   * { "perceptionPreset": "bgeSmall" }
+   * { "perceptionPreset": "ollamaQwen3Embedding8b" }
    * ```
    */
   perceptionPreset?: PerceptionPresetName;
@@ -548,32 +565,25 @@ export interface DevPlanGraphStoreConfig {
    *
    * 当需要使用非预设模型时，提供完整配置。优先级高于 perceptionPreset。
    *
-   * 示例（本地 Candle）:
-   * ```json
-   * { "perceptionConfig": { "engineType": "candle", "modelId": "BAAI/bge-small-en-v1.5", "autoDownload": true } }
-   * ```
-   *
-   * 示例（Ollama qwen3-embedding:8b，维度自动解析为 4096d）:
+   * 🏆 推荐配置（8b 质量 + 自动回退到本地 0.6b，维度对齐 1024d）:
    * ```json
    * { "perceptionConfig": {
    *     "engineType": "ollama",
    *     "modelId": "qwen3-embedding:8b",
-   *     "endpoint": "http://localhost:11434/v1"
-   *   }
-   * }
-   * ```
-   *
-   * 示例（Matryoshka 截断到 1024d + Ollama fallback）:
-   * ```json
-   * { "perceptionConfig": {
-   *     "engineType": "ollama",
-   *     "modelId": "qwen3-embedding:8b",
-   *     "dimension": 1024,
    *     "endpoint": "http://localhost:11434/v1",
-   *     "fallbackEngineType": "candle",
-   *     "fallbackModelId": "sentence-transformers/all-MiniLM-L6-v2"
+   *     "dimension": 1024,
+   *     "fallbackEngineType": "qwen3_local",
+   *     "fallbackModelId": "Qwen/Qwen3-Embedding-0.6B"
    *   }
    * }
+   * ```
+   * - 有 Ollama → 8b Matryoshka 截断到 1024d（高质量）
+   * - 无 Ollama → 自动回退本地 qwen3 0.6b（原生 1024d）
+   * - HNSW 维度始终 1024d，不会因回退导致索引损坏
+   *
+   * 示例（纯本地，无需 Ollama）:
+   * ```json
+   * { "perceptionConfig": { "engineType": "qwen3_local", "modelId": "Qwen/Qwen3-Embedding-0.6B" } }
    * ```
    */
   perceptionConfig?: {
@@ -1574,8 +1584,10 @@ export interface RecallObservability {
  * 带评分的记忆召回结果
  */
 export interface ScoredMemory extends Memory {
-  /** 相关性评分 (0~1) */
+  /** 相关性评分 (0~1)，经过 Phase-215 归一化后的值 */
   score: number;
+  /** Phase-215: 归一化前的原始分数（RRF/BM25/hotness 混合分数），供调试使用 */
+  rawScore?: number;
   /** 来源类型（统一召回时区分 memory / doc） */
   sourceKind?: 'memory' | 'doc';
   /** 当 sourceKind='doc' 时，文档的 section */

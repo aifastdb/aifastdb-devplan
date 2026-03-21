@@ -45,7 +45,7 @@ import { randomUUID } from 'crypto';
 
 import * as path from 'path';
 import * as fs from 'fs';
-import type { IDevPlanStore } from './dev-plan-interface';
+import type { IDevPlanStore, VectorSearchStatus } from './dev-plan-interface';
 import {
   DEVPLAN_SHARD_NAMES,
   DEVPLAN_TYPE_SHARD_MAPPING,
@@ -136,6 +136,8 @@ import {
   rrfFusionThreeWay as rrfFusionThreeWayUtil,
   runTreeIndexDocRecall as runTreeIndexDocRecallUtil,
   runVectorDocRecall as runVectorDocRecallUtil,
+  applyTagBoost as applyTagBoostUtil,
+  normalizeScores as normalizeScoresUtil,
 } from './dev-plan-graph-store.recall-utils';
 import { isUuidLikeQuery, rankLiteralDocMatches } from './doc-search-utils';
 import { MemoryGatewayAdapter, type MemoryGatewayTelemetry } from './memory-gateway-adapter';
@@ -177,6 +179,13 @@ export class DevPlanGraphStore implements IDevPlanStore {
   private nativeAnchorExtractReady: boolean = false;
   /** NAPI 能力探测：applyMutations 是否可用 */
   private nativeApplyMutationsReady: boolean = false;
+  /** Phase-216: 向量搜索诊断快照（构造时写入，getVectorStatus 时读取） */
+  private vectorDiag: {
+    configSource: 'preset' | 'perceptionConfig' | 'default';
+    configValue: string | null;
+    hasFallback: boolean;
+    fallbackInfo: string | null;
+  } = { configSource: 'default', configValue: null, hasFallback: false, fallbackInfo: null };
   /** Phase-52/T52.5: 文档 TreeIndex 检索是否启用（需 LLM Gateway 可用） */
   private treeIndexRetrievalEnabled: boolean = false;
   /** TreeIndex 候选节点上限 */
@@ -203,6 +212,7 @@ export class DevPlanGraphStore implements IDevPlanStore {
     graphWeight: 1,
     bm25TermBoost: 2,
     bm25DomainTerms: [...DEFAULT_BM25_DOMAIN_TERMS],
+    tagBoostFactor: 0.15,
   };
 
   constructor(projectName: string, config: DevPlanGraphStoreConfig) {
@@ -381,6 +391,19 @@ export class DevPlanGraphStore implements IDevPlanStore {
       config.embeddingDimension ?? perception.dimension,
     );
     const modelLabel = perception.modelId || perception.engineType || 'unknown';
+
+    // Phase-216: 记录诊断快照
+    this.vectorDiag = {
+      configSource: config.perceptionConfig ? 'perceptionConfig'
+        : config.perceptionPreset ? 'preset' : 'default',
+      configValue: config.perceptionConfig
+        ? `${perception.engineType}/${perception.modelId} (dim=${perception.dimension ?? 'auto'})`
+        : config.perceptionPreset ?? null,
+      hasFallback: !!(perception as any).fallbackEngineType,
+      fallbackInfo: (perception as any).fallbackEngineType
+        ? `${(perception as any).fallbackEngineType}/${(perception as any).fallbackModelId}`
+        : null,
+    };
 
     try {
       const synapsePath = path.resolve(config.graphPath, '..', 'synapse-data');
@@ -1348,6 +1371,52 @@ export class DevPlanGraphStore implements IDevPlanStore {
    */
   isSemanticSearchEnabled(): boolean {
     return this.semanticSearchReady;
+  }
+
+  /**
+   * Phase-216: 获取向量搜索完整诊断状态
+   */
+  getVectorStatus(): VectorSearchStatus {
+    let vectorCount = 0;
+    let vectorDim = 0;
+    try { vectorCount = this.graph.vectorCount?.() ?? 0; } catch { /* may not be available */ }
+    try { vectorDim = this.graph.vectorDimension?.() ?? 0; } catch { /* may not be available */ }
+
+    // 统计文档和记忆数量
+    const docCount = this.listSections?.().length ?? 0;
+    const memCount = this.listMemories?.().length ?? 0;
+
+    const notes: string[] = [];
+    if (this.semanticSearchReady && vectorCount === 0) {
+      notes.push('Vector index is empty. Run devplan_rebuild_index to populate.');
+    }
+    if (!this.semanticSearchReady && this.textSearchReady) {
+      notes.push('Semantic search disabled; using BM25 text search only.');
+    }
+    if (!this.semanticSearchReady && !this.textSearchReady) {
+      notes.push('Both semantic and text search unavailable; using literal matching.');
+    }
+    if (this.vectorDiag.hasFallback) {
+      notes.push(`Fallback engine: ${this.vectorDiag.fallbackInfo}. Dimension-safe if both produce ${vectorDim}d.`);
+    }
+    if (vectorCount > 0 && vectorCount < (docCount + memCount)) {
+      notes.push(`${docCount + memCount - vectorCount} entities missing vectors. Consider devplan_rebuild_index.`);
+    }
+
+    return {
+      semanticSearchReady: this.semanticSearchReady,
+      textSearchReady: this.textSearchReady,
+      perceptionModel: this.synapse?.perceptionModel ?? null,
+      dimension: vectorDim || (this.synapse?.dimension ?? null),
+      hasPerception: this.synapse?.hasPerception ?? false,
+      configSource: this.vectorDiag.configSource,
+      configValue: this.vectorDiag.configValue,
+      hasFallback: this.vectorDiag.hasFallback,
+      fallbackInfo: this.vectorDiag.fallbackInfo,
+      indexedDocCount: docCount,
+      indexedMemoryCount: memCount,
+      notes,
+    };
   }
 
   deleteSection(section: DevPlanSection, subSection?: string): boolean {
@@ -3764,9 +3833,20 @@ export class DevPlanGraphStore implements IDevPlanStore {
       memoryResults = this.applyDeterministicRecallFilter(memoryResults, options);
     }
 
+    // Phase-215: 对 memory 结果应用 tag-query 交集加分
+    memoryResults = applyTagBoostUtil(
+      memoryResults, augmentedQuery, this.recallSearchTuning.tagBoostFactor,
+    );
+
+    // Phase-215: 统一结果最终化方法（enrich + rerank + normalize）
+    const finalizeResults = (results: ScoredMemory[]): ScoredMemory[] => {
+      this.enrichMemoriesWithAnchorInfo(results, depth);
+      const reranked = this.rerankSearchResults(augmentedQuery, results, limit);
+      return normalizeScoresUtil(reranked);
+    };
+
     if (docStrategy === 'none' || options?.memoryType) {
-      this.enrichMemoriesWithAnchorInfo(memoryResults, depth);
-        return this.rerankSearchResults(augmentedQuery, memoryResults, limit);
+      return finalizeResults(memoryResults);
     }
 
     if (docStrategy === 'guided') {
@@ -3794,8 +3874,7 @@ export class DevPlanGraphStore implements IDevPlanStore {
         finalResults = [...memoryResults, ...guidedDocs].slice(0, limit);
       }
 
-      this.enrichMemoriesWithAnchorInfo(finalResults, depth);
-        return this.rerankSearchResults(augmentedQuery, finalResults, limit);
+      return finalizeResults(finalResults);
     }
 
       const docResults = this.vectorSearchDocuments(augmentedQuery, limit, minScore);
@@ -3818,8 +3897,7 @@ export class DevPlanGraphStore implements IDevPlanStore {
       finalResults = rrfMergeResultsUtil(memoryResults, mergedDocResults, limit);
     }
 
-    this.enrichMemoriesWithAnchorInfo(finalResults, depth);
-      return this.rerankSearchResults(augmentedQuery, finalResults, limit);
+    return finalizeResults(finalResults);
     } finally {
       const elapsed = Date.now() - t0;
       this.recallObservabilityRaw.totalCalls += 1;
@@ -4104,6 +4182,23 @@ export class DevPlanGraphStore implements IDevPlanStore {
     } catch (e) {
       console.warn(`[DevPlan] Document recall failed: ${e instanceof Error ? e.message : String(e)}`);
     }
+
+    // Phase-215: 当 vector 搜索返回 0 条时，使用 tree-index 兜底
+    if (docResults.length === 0) {
+      try {
+        const treeResults = this.treeIndexSearchDocuments(
+          query,
+          Math.max(3, Math.floor(limit / 2)),
+          minScore,
+        );
+        if (treeResults.length > 0) {
+          docResults.push(...treeResults);
+        }
+      } catch (e) {
+        console.warn(`[DevPlan] Tree-index doc fallback failed: ${e instanceof Error ? e.message : String(e)}`);
+      }
+    }
+
     return docResults;
   }
 

@@ -9,6 +9,7 @@ export function getStatsModalScript(): string {
 // ========== Stats Modal ==========
 var _statsMainTaskMoreMenu = null;
 var _statsMainTaskMoreBtn = null;
+var CANCELABLE_MAIN_TASK_STATUSES = { pending: true, in_progress: true };
 
 function closeMainTaskMoreMenu() {
   if (_statsMainTaskMoreMenu && _statsMainTaskMoreMenu.parentNode) {
@@ -39,6 +40,8 @@ function toggleMainTaskMoreMenu(btn, taskId, nodeId, status) {
   menuHtml += '<button class="stats-modal-more-item" onclick="event.stopPropagation();refreshSingleMainTask(\\x27' + safeNodeId + '\\x27,\\x27' + safeTaskId + '\\x27,event)">🔄 刷新</button>';
   if (status === 'pending') {
     menuHtml += '<button class="stats-modal-more-item" onclick="event.stopPropagation();markMainTaskStatus(\\x27' + safeNodeId + '\\x27,\\x27' + safeTaskId + '\\x27,\\x27completed\\x27,event)">✅ 标记为完成</button>';
+  }
+  if (CANCELABLE_MAIN_TASK_STATUSES[status]) {
     menuHtml += '<button class="stats-modal-more-item" onclick="event.stopPropagation();markMainTaskStatus(\\x27' + safeNodeId + '\\x27,\\x27' + safeTaskId + '\\x27,\\x27cancelled\\x27,event)">🚫 标记为废弃</button>';
   }
   menu.innerHTML = menuHtml;
