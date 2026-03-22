@@ -304,3 +304,4 @@ devplan_memory_context(projectName: "aifastdb-devplan")
 1. **优先读概览文件**：初次了解项目时，先读 [aifastdb-devplan-overview.md](mdc:docs/aifastdb-devplan-overview.md)（< 500 行），再按需深入 [DEVPLAN_ReadMe.md](mdc:DEVPLAN_ReadMe.md) 的具体章节
 2. **数据存储位置**：本项目的 devplan 数据存储在 `D:\Project\git\aifastdb-devplan\.devplan\aifastdb-devplan\`（非 ai_db 目录下）
 3. **源码即产品**：本项目的 `src/` 目录就是 DevPlan MCP Server 的源码，修改后需 `npm run build` 并重启 Cursor
+

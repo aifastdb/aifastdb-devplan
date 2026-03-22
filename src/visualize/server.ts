@@ -1205,6 +1205,7 @@ function startServer(projectName: string, basePath: string, port: number): void 
               sourceRef: saveBody.sourceRef || undefined,
               provenance: saveProvenance || undefined,
               importance: saveBody.importance ?? 0.5,
+              anchorMergeMode: saveBody.anchorMergeMode || undefined,
             });
             res.writeHead(200, { 'Content-Type': 'application/json; charset=utf-8' });
             res.end(JSON.stringify({ status: 'saved', memory: saved }));
@@ -2271,6 +2272,7 @@ function startServer(projectName: string, basePath: string, port: number): void 
               anchorName: batchSaveBody.anchorName || undefined,
               anchorType: batchSaveBody.anchorType || undefined,
               anchorOverview: batchSaveBody.anchorOverview || undefined,
+              anchorMergeMode: batchSaveBody.anchorMergeMode || undefined,
               changeType: batchSaveBody.changeType || undefined,
             });
             // Phase-78B: shutdown 确保 HNSW 向量索引持久化到磁盘

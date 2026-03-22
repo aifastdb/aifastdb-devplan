@@ -1049,6 +1049,8 @@ export type MemoryType =
   | 'preference'  // 用户偏好和项目约定
   | 'summary';    // 会话/阶段摘要
 
+export type AnchorMergeMode = 'merge' | 'soft_merge' | 'create_distinct';
+
 /**
  * 记忆输入
  */
@@ -1160,6 +1162,15 @@ export interface MemoryInput {
    * 在批量导入中由 LLM 自动生成。
    */
   anchorOverview?: string;
+
+  /**
+   * 触点合并策略（可选）
+   *
+   * - `merge`: 默认，按 `(anchorName, anchorType)` 合并
+   * - `soft_merge`: 仅在描述/概览接近重复时合并
+   * - `create_distinct`: 始终创建独立触点
+   */
+  anchorMergeMode?: AnchorMergeMode;
 
   /**
    * 变更类型（可选）— Phase-57 新增

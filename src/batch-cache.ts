@@ -55,6 +55,8 @@ export interface BatchCacheEntry {
   anchorType?: string;
   /** 触点概览（L2 目录索引，类似 OpenViking .overview.md） */
   anchorOverview?: string;
+  /** 触点合并策略 */
+  anchorMergeMode?: 'merge' | 'soft_merge' | 'create_distinct';
   /** 变更类型 */
   changeType?: string;
   /** 候选项的原始标题（用于日志） */

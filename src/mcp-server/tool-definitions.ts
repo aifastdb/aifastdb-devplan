@@ -1386,6 +1386,11 @@ const ALL_TOOLS = [
           type: 'string',
           description: 'Optional (Phase-63): Anchor overview — a 3~5 sentence directory-index summary listing key sub-items, core flow entries, and structural components. Similar to OpenViking .overview.md. Helps Agent quickly decide whether to dive deeper.\n可选（Phase-63）：触点概览 — 3~5句话的目录索引式摘要。',
         },
+        anchorMergeMode: {
+          type: 'string',
+          enum: ['merge', 'soft_merge', 'create_distinct'],
+          description: 'Optional (Phase-193B): Anchor merge policy — merge | soft_merge | create_distinct. Default: merge.\n可选（Phase-193B）：触点合并策略。默认 merge。',
+        },
         changeType: {
           type: 'string',
           description: 'Optional (Phase-57): Change type — created | upgraded | modified | removed | deprecated. Auto-inferred if omitted.\n可选（Phase-57）：变更类型。不提供则自动推断（新触点=created，已有=modified）。',
@@ -2696,6 +2701,8 @@ export interface ToolArgs {
   components?: Array<{ anchorId: string; role: string; versionHint?: string }>;
   /** Phase-63: devplan_memory_save / devplan_anchor_create: 触点概览（L2 目录索引） */
   anchorOverview?: string;
+  /** Phase-193B: devplan_memory_save: 触点合并策略 */
+  anchorMergeMode?: string;
   /** Phase-63: devplan_anchor_create: overview 别名 */
   overview?: string;
   // ---- Phase-57B: 触点驱动工具集 ----

@@ -803,6 +803,7 @@ export async function handleBatchToolCall(name: string, args: ToolArgs, deps: { 
                 anchorName: entry.anchorName,
                 anchorType: entry.anchorType,
                 anchorOverview: entry.anchorOverview,
+                anchorMergeMode: entry.anchorMergeMode,
                 changeType: entry.changeType,
               });
               entry.committed = true;
@@ -873,6 +874,7 @@ export async function handleBatchToolCall(name: string, args: ToolArgs, deps: { 
             anchorName: entry.anchorName,
             anchorType: entry.anchorType,
             anchorOverview: entry.anchorOverview,
+            anchorMergeMode: entry.anchorMergeMode,
             changeType: entry.changeType,
           });
 

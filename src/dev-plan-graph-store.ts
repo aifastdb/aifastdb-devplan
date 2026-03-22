@@ -2886,14 +2886,17 @@ export class DevPlanGraphStore implements IDevPlanStore {
     // Phase-63: anchorOverview → L2 目录索引层（inspired by OpenViking .overview.md）
     const description = (input.contentL1 || input.content.slice(0, 100)).replace(/\n/g, ' ');
     const overview = input.anchorOverview || undefined;
+    const anchorOptions = input.anchorMergeMode
+      ? { mergeMode: input.anchorMergeMode }
+      : undefined;
     let anchorInfo: NativeAnchorInfo;
     let isNew = false;
 
     try {
       // 先检查是否已有同名触点
       const existing: NativeAnchorInfo | null = g.anchorFind(anchorName, anchorType);
-      isNew = !existing;
-      anchorInfo = g.anchorUpsert(anchorName, anchorType, description, overview);
+      anchorInfo = g.anchorUpsert(anchorName, anchorType, description, overview, anchorOptions);
+      isNew = !existing || existing.id !== anchorInfo.id;
     } catch (e) {
       console.warn(`[DevPlan] anchorUpsert failed for "${anchorName}": ${e instanceof Error ? e.message : String(e)}`);
       return null;

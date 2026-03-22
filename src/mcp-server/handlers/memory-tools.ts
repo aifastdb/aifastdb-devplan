@@ -73,6 +73,7 @@ export async function handleMemoryToolCall(name: string, args: ToolArgs, deps: {
           anchorName: args.anchorName,
           anchorType: args.anchorType,
           anchorOverview: args.anchorOverview,
+          anchorMergeMode: args.anchorMergeMode as any,
           changeType: args.changeType,
           structureComponents: args.structureComponents,
         });

@@ -15,5 +15,6 @@ describe('generateCursorRuleTemplate', () => {
     expect(template).toContain('searchBy: "title"');
     expect(template).toContain('searchBy: "content"');
     expect(template).toContain('searchBy: "auto", mode: "hybrid"');
+    expect(template).not.toContain('## Anchor Merge Mode 选择规则');
   });
 });
