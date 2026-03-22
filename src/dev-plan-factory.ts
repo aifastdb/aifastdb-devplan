@@ -159,6 +159,10 @@ export interface DevPlanConfig {
     bm25TermBoost?: number;
     bm25DomainTerms?: string[];
     bm25UserDictPath?: string;
+    tagBoostFactor?: number;
+    queryCoverageBoost?: number;
+    relatedTaskBoost?: number;
+    testMemoryPenalty?: number;
   };
 
   /**

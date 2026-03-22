@@ -18,20 +18,51 @@ export type TreeIndexRawCandidate = {
 };
 
 export type SearchDocsForRecall = (opts: {
-  mode: 'hybrid' | 'literal';
+  mode: 'semantic' | 'hybrid' | 'literal';
   limit: number;
   minScore?: number;
   _skipRerank: true;
+  _queryEmbedding?: number[];
 }) => ScoredDevPlanDoc[];
 
 // ---------------------------------------------------------------------------
 // Generic recall helpers
 // ---------------------------------------------------------------------------
 
+function splitToSearchTokens(text: string): string[] {
+  const raw = String(text || '').trim();
+  if (!raw) return [];
+  const expanded = raw
+    .replace(/([a-z0-9])([A-Z])/g, '$1 $2')
+    .replace(/[\\/]+/g, ' ');
+  const tokens = new Set<string>();
+  const pushToken = (token: string) => {
+    const normalized = token.trim().toLowerCase();
+    if (!normalized) return;
+    const isChinese = /^[\u4e00-\u9fa5]+$/.test(normalized);
+    if ((isChinese && normalized.length >= 1) || normalized.length >= 2) {
+      tokens.add(normalized);
+    }
+  };
+
+  const compoundMatches = raw.match(/[A-Za-z0-9]+(?:[_-][A-Za-z0-9]+)*|[\u4e00-\u9fa5]+/g) || [];
+  for (const match of compoundMatches) {
+    pushToken(match);
+    for (const part of match.split(/[_-]+/)) {
+      pushToken(part);
+    }
+  }
+
+  const expandedMatches = expanded.match(/[A-Za-z0-9]+|[\u4e00-\u9fa5]+/g) || [];
+  for (const match of expandedMatches) {
+    pushToken(match);
+  }
+
+  return Array.from(tokens);
+}
+
 export function tokenizeQuery(query: string): string[] {
-  const tokens = (query.toLowerCase().match(/[a-z0-9_\-\u4e00-\u9fa5]+/g) || [])
-    .filter((t) => t.length >= 2);
-  return Array.from(new Set(tokens));
+  return splitToSearchTokens(query);
 }
 
 // ---------------------------------------------------------------------------
@@ -60,10 +91,10 @@ export function applyTagBoost(
     const tags = mem.tags;
     if (!tags || tags.length === 0) return mem;
 
-    const tagsLower = tags.map(t => t.toLowerCase());
+    const tagTokens = new Set(tags.flatMap(tag => splitToSearchTokens(tag)));
     let matchCount = 0;
     for (const token of tokens) {
-      if (tagsLower.some(tag => tag.includes(token) || token.includes(tag))) {
+      if (tagTokens.has(token)) {
         matchCount++;
       }
     }
@@ -72,6 +103,108 @@ export function applyTagBoost(
     const boost = 1 + matchCount * tagBoostFactor;
     return { ...mem, score: mem.score * boost };
   });
+}
+
+const TEST_LIKE_TOKENS = new Set([
+  'test',
+  'tests',
+  'probe',
+  'validation',
+  'fixture',
+  'smoke',
+  'sandbox',
+  'demo',
+  'mock',
+  'sample',
+  'benchmark',
+  'experiment',
+]);
+
+function buildMemorySearchText(memory: ScoredMemory): string {
+  const parts = [
+    memory.content,
+    memory.docTitle,
+    memory.relatedTaskId,
+    memory.sourceRef?.sourceId,
+    memory.sourceRef?.variant,
+    memory.anchorInfo?.name,
+    memory.anchorInfo?.description,
+    memory.anchorInfo?.overview || '',
+    (memory.tags || []).join(' '),
+    (memory.guidedReasons || []).join(' '),
+  ];
+  return parts.filter(Boolean).join('\n');
+}
+
+function hasTestIntent(tokens: string[]): boolean {
+  return tokens.some(token => TEST_LIKE_TOKENS.has(token));
+}
+
+function looksLikeTestMemory(memory: ScoredMemory): boolean {
+  if (memory.recallProfile === 'test_probe') return true;
+  const tokens = splitToSearchTokens(buildMemorySearchText(memory));
+  return tokens.some(token => TEST_LIKE_TOKENS.has(token));
+}
+
+export function rerankMemoriesByQuery(
+  memories: ScoredMemory[],
+  query: string,
+  tuning: Pick<ResolvedRecallSearchTuning, 'queryCoverageBoost' | 'relatedTaskBoost' | 'testMemoryPenalty'>,
+): ScoredMemory[] {
+  if (memories.length <= 1) return memories;
+
+  const queryTokens = splitToSearchTokens(query);
+  if (queryTokens.length === 0) return memories;
+  const queryHasTestIntent = hasTestIntent(queryTokens);
+
+  return memories
+    .map((memory, index) => {
+      if (memory.sourceKind === 'doc') {
+        return {
+          memory,
+          adjustedScore: memory.score,
+          index,
+        };
+      }
+
+      const searchableTokens = new Set(splitToSearchTokens(buildMemorySearchText(memory)));
+      let matched = 0;
+      for (const token of queryTokens) {
+        if (searchableTokens.has(token)) matched += 1;
+      }
+      const coverage = matched / queryTokens.length;
+      const hasRelatedTask = Boolean(memory.relatedTaskId);
+      const importanceBonus = Math.max(0, (memory.importance || 0.5) - 0.5) * 0.2;
+      const coverageBonus = coverage * tuning.queryCoverageBoost;
+      const taskBonus = hasRelatedTask ? tuning.relatedTaskBoost : 0;
+      const testPenalty = !queryHasTestIntent && looksLikeTestMemory(memory)
+        ? tuning.testMemoryPenalty
+        : 0;
+      const multiplier = Math.max(0.25, 1 + coverageBonus + taskBonus + importanceBonus - testPenalty);
+      const adjustedScore = memory.score * multiplier
+        + coverage * 0.01
+        + (hasRelatedTask ? 0.002 : 0);
+
+      return {
+        memory,
+        adjustedScore,
+        index,
+      };
+    })
+    .sort((a, b) => {
+      if (b.adjustedScore !== a.adjustedScore) return b.adjustedScore - a.adjustedScore;
+      if ((b.memory.importance || 0) !== (a.memory.importance || 0)) {
+        return (b.memory.importance || 0) - (a.memory.importance || 0);
+      }
+      if (Boolean(b.memory.relatedTaskId) !== Boolean(a.memory.relatedTaskId)) {
+        return Number(Boolean(b.memory.relatedTaskId)) - Number(Boolean(a.memory.relatedTaskId));
+      }
+      if ((b.memory.createdAt || 0) !== (a.memory.createdAt || 0)) {
+        return (b.memory.createdAt || 0) - (a.memory.createdAt || 0);
+      }
+      return a.index - b.index;
+    })
+    .map(({ memory, adjustedScore }) => ({ ...memory, score: adjustedScore }));
 }
 
 // ---------------------------------------------------------------------------
@@ -459,7 +592,7 @@ export function buildVectorRecallMemories(params: {
   searchDocs: SearchDocsForRecall;
 }): ScoredMemory[] {
   const docHits = params.searchDocs({
-    mode: params.semanticSearchReady ? 'hybrid' : 'literal',
+    mode: params.semanticSearchReady ? 'semantic' : 'literal',
     limit: Math.max(5, Math.floor(params.limit / 2)),
     minScore: params.minScore > 0 ? params.minScore : undefined,
     _skipRerank: true,

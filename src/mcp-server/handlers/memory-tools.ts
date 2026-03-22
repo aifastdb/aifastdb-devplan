@@ -56,6 +56,7 @@ export async function handleMemoryToolCall(name: string, args: ToolArgs, deps: {
           content,
           memoryType: memoryType as any,
           importance: args.importance,
+          recallProfile: args.recallProfile as any,
           tags: args.tags,
           relatedTaskId: args.relatedTaskId,
           sourceRef: args.sourceRef,

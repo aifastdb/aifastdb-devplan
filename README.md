@@ -270,6 +270,31 @@ Create `.cursor/mcp.json` in your project root:
 }
 ```
 
+This `npx` form is the portable default for npm-installed usage because it relies on the package `bin` entry that npm generates for the current machine.
+
+If you hit a Cursor reload/reconnect issue where a split `command` + `args` startup can be resumed incompletely, prefer wrapping the full startup command in a single launcher script and point `command` to that script instead of `node`:
+
+Windows launcher example:
+
+```bat
+@echo off
+"C:\Program Files\nodejs\node.exe" "D:\Project\git\aifastdb-devplan\dist\mcp-server\index.js" %*
+```
+
+Then use:
+
+```json
+{
+  "mcpServers": {
+    "aifastdb-devplan": {
+      "command": "D:\\Project\\git\\aifastdb-devplan\\scripts\\start-mcp.cmd"
+    }
+  }
+}
+```
+
+This is the most stable Cursor configuration for local development because Cursor only has to remember one launcher path, not a separate `node` command plus script `args`.
+
 **Step 3: Start using with AI assistant**
 
 Open Cursor in your project directory and tell the AI:
@@ -329,8 +354,7 @@ Create `.cursor/mcp.json` in your target project:
 {
   "mcpServers": {
     "aifastdb-devplan": {
-      "command": "node",
-      "args": ["/path/to/aifastdb-devplan/dist/mcp-server/index.js"]
+      "command": "/path/to/aifastdb-devplan/scripts/start-mcp.sh"
     }
   }
 }
@@ -342,12 +366,29 @@ Windows example:
 {
   "mcpServers": {
     "aifastdb-devplan": {
-      "command": "node",
-      "args": ["D:/Project/git/aifastdb-devplan/dist/mcp-server/index.js"]
+      "command": "D:\\Project\\git\\aifastdb-devplan\\scripts\\start-mcp.cmd"
     }
   }
 }
 ```
+
+Recommended local launcher scripts:
+
+Unix-like:
+
+```bash
+#!/usr/bin/env bash
+node "/path/to/aifastdb-devplan/dist/mcp-server/index.js" "$@"
+```
+
+Windows:
+
+```bat
+@echo off
+"D:\Program Files\nodejs\node.exe" "D:\Project\git\aifastdb-devplan\dist\mcp-server\index.js" %*
+```
+
+Use the direct `node` + `args` form only if you specifically want the simplest config and have not seen reload-related startup truncation in Cursor.
 
 #### Controlling Data Storage Location
 
@@ -702,6 +743,31 @@ npm install -g aifastdb-devplan
 }
 ```
 
+这种 `npx` 写法适合通过 npm 安装后的通用接入，因为它依赖 npm 为当前机器自动生成的 `bin` 启动入口。
+
+如果你遇到 Cursor 在 reload / 自动重连后把拆分的 `command` + `args` 启动命令恢复不完整，建议把完整启动命令包进一个单独的 launcher 脚本里，然后让 `command` 直接指向该脚本，而不是裸 `node`。
+
+Windows launcher 示例：
+
+```bat
+@echo off
+"C:\Program Files\nodejs\node.exe" "D:\Project\git\aifastdb-devplan\dist\mcp-server\index.js" %*
+```
+
+然后在 `.cursor/mcp.json` 中改成：
+
+```json
+{
+  "mcpServers": {
+    "aifastdb-devplan": {
+      "command": "D:\\Project\\git\\aifastdb-devplan\\scripts\\start-mcp.cmd"
+    }
+  }
+}
+```
+
+对于本地开发，这种“单一 launcher 路径”是目前更稳的 Cursor 配置方式，因为 Cursor 只需要记住一个启动文件，而不是分别记住 `node` 和脚本参数。
+
 **第 3 步：通过 AI 助手开始使用**
 
 在 Cursor 中打开你的项目目录，对 AI 说：
@@ -761,8 +827,7 @@ npm run build
 {
   "mcpServers": {
     "aifastdb-devplan": {
-      "command": "node",
-      "args": ["/path/to/aifastdb-devplan/dist/mcp-server/index.js"]
+      "command": "/path/to/aifastdb-devplan/scripts/start-mcp.sh"
     }
   }
 }
@@ -774,12 +839,29 @@ Windows 示例：
 {
   "mcpServers": {
     "aifastdb-devplan": {
-      "command": "node",
-      "args": ["D:/Project/git/aifastdb-devplan/dist/mcp-server/index.js"]
+      "command": "D:\\Project\\git\\aifastdb-devplan\\scripts\\start-mcp.cmd"
     }
   }
 }
 ```
+
+推荐的本地 launcher 脚本：
+
+类 Unix：
+
+```bash
+#!/usr/bin/env bash
+node "/path/to/aifastdb-devplan/dist/mcp-server/index.js" "$@"
+```
+
+Windows：
+
+```bat
+@echo off
+"D:\Program Files\nodejs\node.exe" "D:\Project\git\aifastdb-devplan\dist\mcp-server\index.js" %*
+```
+
+只有在你明确想保留最简单配置、并且没有遇到 Cursor reload 后启动命令截断问题时，才建议继续使用 `node` + `args` 的拆分写法。
 
 #### 控制数据存储位置
 

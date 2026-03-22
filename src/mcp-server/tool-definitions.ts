@@ -1315,6 +1315,11 @@ const ALL_TOOLS = [
           type: 'number',
           description: 'Optional: Importance score 0~1 (default: 0.5)\n可选：重要性评分 0~1（默认 0.5）',
         },
+        recallProfile: {
+          type: 'string',
+          enum: ['default', 'test_probe'],
+          description: 'Optional: Recall profile. Use "test_probe" for test/validation memories so non-test queries can rank business memories ahead of them.\n可选：召回画像。测试/验证记忆可设为 "test_probe"，以便非测试查询时降低其排序优先级。',
+        },
         sourceRef: {
           type: 'object',
           description: 'Optional: Unified source reference (ai_db source_ref). sourceId identifies logical origin, variant distinguishes multiple memories from same source.\n可选：统一来源标识（ai_db source_ref）。sourceId 表示逻辑来源，variant 用于同源多记忆区分。',
@@ -2605,6 +2610,8 @@ export interface ToolArgs {
   memoryType?: string;
   /** devplan_memory_save: 重要性评分 (0~1) */
   importance?: number;
+  /** devplan_memory_save: 召回画像（default | test_probe） */
+  recallProfile?: string;
   /** devplan_memory_delete: 记忆 ID */
   memoryId?: string;
   /** devplan_memory_context: 最大记忆数 */

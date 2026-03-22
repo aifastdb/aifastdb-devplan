@@ -1205,6 +1205,7 @@ function startServer(projectName: string, basePath: string, port: number): void 
               sourceRef: saveBody.sourceRef || undefined,
               provenance: saveProvenance || undefined,
               importance: saveBody.importance ?? 0.5,
+              recallProfile: saveBody.recallProfile || undefined,
               anchorMergeMode: saveBody.anchorMergeMode || undefined,
             });
             res.writeHead(200, { 'Content-Type': 'application/json; charset=utf-8' });
@@ -2265,6 +2266,7 @@ function startServer(projectName: string, basePath: string, port: number): void 
               sourceRef: batchSaveBody.sourceRef || undefined,
               provenance: batchSaveProvenance || undefined,
               importance: batchSaveBody.importance ?? 0.5,
+              recallProfile: batchSaveBody.recallProfile || undefined,
               source: 'batch_import_ui',
               contentL1: batchSaveBody.contentL1 || undefined,
               contentL2: batchSaveBody.contentL2 || undefined,

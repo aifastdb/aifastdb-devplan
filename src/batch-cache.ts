@@ -45,6 +45,8 @@ export interface BatchCacheEntry {
   content: string;
   /** 重要性评分 */
   importance: number;
+  /** 召回画像 */
+  recallProfile?: 'default' | 'test_probe';
   /** 标签 */
   tags: string[];
   /** 关联任务 ID */

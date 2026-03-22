@@ -37,7 +37,6 @@ import {
   type MemoryTreeEmbeddingInput,
   type MemoryTreeStoreResult,
   type ActivatedMemory as RustActivatedMemory,
-  type ActivationResult,
   type MemoryScanReport,
   // ConflictResult — TS 层冲突检测已重写为直接向量搜索，不再委托 Rust 层
 } from 'aifastdb';
@@ -87,6 +86,7 @@ import type {
   MemoryInput,
   Memory,
   MemoryType,
+  MemoryRecallProfile,
   ScoredMemory,
   MemoryContext,
   MemoryCandidate,
@@ -103,8 +103,6 @@ import type {
 } from './types';
 import {
   mapGroupToDevPlanType as mapGroupToDevPlanTypeUtil,
-  getCurrentGitCommit as getCurrentGitCommitUtil,
-  isAncestor as isAncestorUtil,
   progressBar as progressBarUtil,
   DEFAULT_BM25_DOMAIN_TERMS,
   resolvePerceptionConfig,
@@ -131,14 +129,115 @@ import {
 } from './dev-plan-graph-store.shared';
 import {
   docSectionToMemoryType as docSectionToMemoryTypeUtil,
-  rrfMergeResults as rrfMergeResultsUtil,
-  rrfMergeMemories as rrfMergeMemoriesUtil,
   rrfFusionThreeWay as rrfFusionThreeWayUtil,
-  runTreeIndexDocRecall as runTreeIndexDocRecallUtil,
-  runVectorDocRecall as runVectorDocRecallUtil,
-  applyTagBoost as applyTagBoostUtil,
-  normalizeScores as normalizeScoresUtil,
 } from './dev-plan-graph-store.recall-utils';
+import {
+  applyDeterministicRecallFilter as applyDeterministicRecallFilterImpl,
+  expandMemoriesByGraph as expandMemoriesByGraphImpl,
+  expandMemoriesByManualTraversal as expandMemoriesByManualTraversalImpl,
+  expandMemoriesBySubgraph as expandMemoriesBySubgraphImpl,
+  getFeatureFlags as getFeatureFlagsImpl,
+  getRecallObservability as getRecallObservabilityImpl,
+  hebbianStrengthen as hebbianStrengthenImpl,
+  processMemorySearchHits as processMemorySearchHitsImpl,
+  recallMemory as recallMemoryImpl,
+  recallUnified as recallUnifiedImpl,
+  recallUnifiedViaAdapter as recallUnifiedViaAdapterImpl,
+  recallViaActivationEngine as recallViaActivationEngineImpl,
+  recallViaLegacySearch as recallViaLegacySearchImpl,
+  resetRecallObservability as resetRecallObservabilityImpl,
+  setFeatureFlags as setFeatureFlagsImpl,
+  shouldPersistRecallAccessUpdate as shouldPersistRecallAccessUpdateImpl,
+  treeIndexSearchDocuments as treeIndexSearchDocumentsImpl,
+  vectorSearchDocuments as vectorSearchDocumentsImpl,
+  type RecallStoreBindings,
+} from './dev-plan-graph-store.recall';
+import {
+  autoLinkMemoryToDoc as autoLinkMemoryToDocImpl,
+  autoLinkMemoryToModule as autoLinkMemoryToModuleImpl,
+  autoLinkSimilarMemories as autoLinkSimilarMemoriesImpl,
+  findDuplicateMemory as findDuplicateMemoryImpl,
+  generateMemoryCandidates as generateMemoryCandidatesImpl,
+  resolveMemoryRecallProfile as resolveMemoryRecallProfileImpl,
+  saveMemory as saveMemoryImpl,
+  type MemoryWriteStoreBindings,
+} from './dev-plan-graph-store.memory-write';
+import {
+  enrichMemoriesWithAnchorInfo as enrichMemoriesWithAnchorInfoImpl,
+  getAnchorStructure as getAnchorStructureImpl,
+  getStructureDiff as getStructureDiffImpl,
+  integrateAnchorFlowStructure as integrateAnchorFlowStructureImpl,
+  listAnchors as listAnchorsImpl,
+  queryAnchorFlow as queryAnchorFlowImpl,
+  type AnchorFlowStructureStoreBindings,
+} from './dev-plan-graph-store.anchor';
+import {
+  addSubTask as addSubTaskImpl,
+  completeMainTask as completeMainTaskImpl,
+  completeSubTask as completeSubTaskImpl,
+  createMainTask as createMainTaskImpl,
+  deleteTask as deleteTaskImpl,
+  getMainTask as getMainTaskImpl,
+  getNextMainTaskOrder as getNextMainTaskOrderImpl,
+  getNextSubTaskOrder as getNextSubTaskOrderImpl,
+  getProgress as getProgressImpl,
+  getSubTask as getSubTaskImpl,
+  listMainTasks as listMainTasksImpl,
+  listSubTasks as listSubTasksImpl,
+  reconcileMainTaskAfterSubTaskDeletion as reconcileMainTaskAfterSubTaskDeletionImpl,
+  refreshMainTaskCounts as refreshMainTaskCountsImpl,
+  repairAllMainTaskCounts as repairAllMainTaskCountsImpl,
+  resolveTaskDeleteType as resolveTaskDeleteTypeImpl,
+  updateMainTaskStatus as updateMainTaskStatusImpl,
+  updateSubTaskStatus as updateSubTaskStatusImpl,
+  updateTaskStatus as updateTaskStatusImpl,
+  upsertMainTask as upsertMainTaskImpl,
+  upsertSubTask as upsertSubTaskImpl,
+  type TaskStoreBindings,
+} from './dev-plan-graph-store.tasks';
+import {
+  buildDocTree as buildDocTreeImpl,
+  findDocEntityBySection as findDocEntityBySectionImpl,
+  getChildDocs as getChildDocsImpl,
+  getDocRelatedTasks as getDocRelatedTasksImpl,
+  getDocTree as getDocTreeImpl,
+  getSection as getSectionImpl,
+  getTaskRelatedDocs as getTaskRelatedDocsImpl,
+  listSections as listSectionsImpl,
+  searchSections as searchSectionsImpl,
+  searchSectionsAdvanced as searchSectionsAdvancedImpl,
+  type DocStoreBindings,
+} from './dev-plan-graph-store.docs';
+import {
+  entityToPrompt as entityToPromptImpl,
+  getTaskRelatedPrompts as getTaskRelatedPromptsImpl,
+  listPrompts as listPromptsImpl,
+  savePrompt as savePromptImpl,
+  type PromptStoreBindings,
+} from './dev-plan-graph-store.prompts';
+import {
+  createModule as createModuleImpl,
+  deleteModule as deleteModuleImpl,
+  entityToModule as entityToModuleImpl,
+  getModule as getModuleImpl,
+  getModuleDetail as getModuleDetailImpl,
+  listModules as listModulesImpl,
+  updateModule as updateModuleImpl,
+  type ModuleStoreBindings,
+} from './dev-plan-graph-store.modules';
+import {
+  exportGraph as exportGraphImpl,
+  exportGraphCompact as exportGraphCompactImpl,
+  exportGraphPaginated as exportGraphPaginatedImpl,
+  exportTaskSummary as exportTaskSummaryImpl,
+  exportToMarkdown as exportToMarkdownImpl,
+  getEntityGroupSummary as getEntityGroupSummaryImpl,
+  type VisualizeStoreBindings,
+} from './dev-plan-graph-store.visualize';
+import {
+  syncWithGit as syncWithGitImpl,
+  type GitStoreBindings,
+} from './dev-plan-graph-store.git';
 import { isUuidLikeQuery, rankLiteralDocMatches } from './doc-search-utils';
 import { MemoryGatewayAdapter, type MemoryGatewayTelemetry } from './memory-gateway-adapter';
 
@@ -161,8 +260,14 @@ export class DevPlanGraphStore implements IDevPlanStore {
   private projectEntityId: string | null = null;
   /** VibeSynapse 实例（用于 Embedding 生成），仅启用语义搜索时可用 */
   private synapse: VibeSynapse | null = null;
+  /** 语义搜索是否在配置上启用（懒初始化前为 true，ready 仍可能为 false） */
+  private semanticSearchConfigured: boolean = false;
   /** 语义搜索是否成功初始化 */
   private semanticSearchReady: boolean = false;
+  /** 是否已经尝试过初始化 Synapse（避免失败后每次请求都重复冷启动） */
+  private synapseInitAttempted: boolean = false;
+  /** 懒初始化 Synapse 时复用的配置 */
+  private synapseConfig: DevPlanGraphStoreConfig | null = null;
   /** Phase-52: Tantivy BM25 全文搜索是否可用 */
   private textSearchReady: boolean = false;
   /** Phase-54: LlmGateway 实例（用于 LLM Reranking），仅启用重排时可用 */
@@ -213,11 +318,56 @@ export class DevPlanGraphStore implements IDevPlanStore {
     bm25TermBoost: 2,
     bm25DomainTerms: [...DEFAULT_BM25_DOMAIN_TERMS],
     tagBoostFactor: 0.15,
+    queryCoverageBoost: 0.35,
+    relatedTaskBoost: 0.12,
+    testMemoryPenalty: 0.3,
   };
+
+  /**
+   * Provide an explicit typed binding view for extracted modules.
+   * This avoids structural typing friction from DevPlanGraphStore private fields.
+   */
+  private get recallStoreBindings(): RecallStoreBindings {
+    return this as unknown as RecallStoreBindings;
+  }
+
+  private get memoryWriteStoreBindings(): MemoryWriteStoreBindings {
+    return this as unknown as MemoryWriteStoreBindings;
+  }
+
+  private get anchorFlowStructureBindings(): AnchorFlowStructureStoreBindings {
+    return this as unknown as AnchorFlowStructureStoreBindings;
+  }
+
+  private get taskStoreBindings(): TaskStoreBindings {
+    return this as unknown as TaskStoreBindings;
+  }
+
+  private get docStoreBindings(): DocStoreBindings {
+    return this as unknown as DocStoreBindings;
+  }
+
+  private get promptStoreBindings(): PromptStoreBindings {
+    return this as unknown as PromptStoreBindings;
+  }
+
+  private get moduleStoreBindings(): ModuleStoreBindings {
+    return this as unknown as ModuleStoreBindings;
+  }
+
+  private get visualizeStoreBindings(): VisualizeStoreBindings {
+    return this as unknown as VisualizeStoreBindings;
+  }
+
+  private get gitStoreBindings(): GitStoreBindings {
+    return this as unknown as GitStoreBindings;
+  }
 
   constructor(projectName: string, config: DevPlanGraphStoreConfig) {
     this.projectName = projectName;
     this.gitCwd = config.gitCwd;
+    this.semanticSearchConfigured = Boolean(config.enableSemanticSearch);
+    this.synapseConfig = this.semanticSearchConfigured ? config : null;
 
     // ── WAL 目录迁移：旧名 → 语义化新名 ──
     // 必须在 SocialGraphV2 构造之前执行，否则 recover() 会找不到旧数据
@@ -294,9 +444,9 @@ export class DevPlanGraphStore implements IDevPlanStore {
     }
     this.recallSearchTuning = recallSearchTuning;
 
-    // 初始化 VibeSynapse（用于 Embedding 生成）
+    // 记录向量诊断快照；Synapse 改为首次使用时懒初始化
     if (config.enableSemanticSearch) {
-      this.initSynapse(config);
+      this.setVectorDiag(config);
     }
 
     // Phase-52: 向量索引启动诊断
@@ -306,7 +456,7 @@ export class DevPlanGraphStore implements IDevPlanStore {
         const vd = this.graph.vectorDimension();
         if (vc > 0) {
           console.error(`[DevPlan] Vector index recovered: ${vc} vectors (dim=${vd})`);
-        } else if (this.semanticSearchReady) {
+        } else if (this.semanticSearchConfigured) {
           console.warn(
             `[DevPlan] Vector index is empty (dim=${vd}). ` +
             'Run devplan_rebuild_index to populate vectors for semantic search.'
@@ -376,6 +526,36 @@ export class DevPlanGraphStore implements IDevPlanStore {
   }
 
   /**
+   * 记录向量搜索诊断配置（不触发 Synapse 初始化）
+   */
+  private setVectorDiag(config: DevPlanGraphStoreConfig): void {
+    const perception = resolvePerceptionConfig(config);
+    this.vectorDiag = {
+      configSource: config.perceptionConfig ? 'perceptionConfig'
+        : config.perceptionPreset ? 'preset' : 'default',
+      configValue: config.perceptionConfig
+        ? `${perception.engineType}/${perception.modelId} (dim=${perception.dimension ?? 'auto'})`
+        : config.perceptionPreset ?? null,
+      hasFallback: !!(perception as any).fallbackEngineType,
+      fallbackInfo: (perception as any).fallbackEngineType
+        ? `${(perception as any).fallbackEngineType}/${(perception as any).fallbackModelId}`
+        : null,
+    };
+  }
+
+  /**
+   * 首次需要语义能力时再初始化 Synapse，避免 store 冷启动即加载 embedding 模型。
+   */
+  private ensureSynapseReady(): boolean {
+    if (this.semanticSearchReady && this.synapse) return true;
+    if (!this.semanticSearchConfigured || !this.synapseConfig) return false;
+    if (this.synapseInitAttempted) return false;
+    this.synapseInitAttempted = true;
+    this.initSynapse(this.synapseConfig);
+    return Boolean(this.semanticSearchReady && this.synapse);
+  }
+
+  /**
    * 初始化 VibeSynapse Embedding 引擎
    *
    * Phase-52: 支持通过 perceptionPreset / perceptionConfig 配置不同模型。
@@ -391,19 +571,6 @@ export class DevPlanGraphStore implements IDevPlanStore {
       config.embeddingDimension ?? perception.dimension,
     );
     const modelLabel = perception.modelId || perception.engineType || 'unknown';
-
-    // Phase-216: 记录诊断快照
-    this.vectorDiag = {
-      configSource: config.perceptionConfig ? 'perceptionConfig'
-        : config.perceptionPreset ? 'preset' : 'default',
-      configValue: config.perceptionConfig
-        ? `${perception.engineType}/${perception.modelId} (dim=${perception.dimension ?? 'auto'})`
-        : config.perceptionPreset ?? null,
-      hasFallback: !!(perception as any).fallbackEngineType,
-      fallbackInfo: (perception as any).fallbackEngineType
-        ? `${(perception as any).fallbackEngineType}/${(perception as any).fallbackModelId}`
-        : null,
-    };
 
     try {
       const synapsePath = path.resolve(config.graphPath, '..', 'synapse-data');
@@ -472,22 +639,34 @@ export class DevPlanGraphStore implements IDevPlanStore {
       const gwPath = path.resolve(config.graphPath, '..', 'llm-gateway-data');
       this.llmGateway = new LlmGateway(gwPath);
       // Optional: initialize gateway memory for ai_db-compatible recall/dedup/outbox ops.
-      try {
-        if (config.llmGatewayMemory?.enable && typeof this.llmGateway.enableMemory === 'function') {
-          this.llmGateway.enableMemory({
+      // Some aifastdb versions expose enableMemory() as an async API. We must
+      // attach a rejection handler explicitly; otherwise a delayed rejection can
+      // surface as an unhandled promise and terminate the MCP stdio process.
+      if (config.llmGatewayMemory?.enable && typeof this.llmGateway.enableMemory === 'function') {
+        try {
+          const enableResult = this.llmGateway.enableMemory({
             graphDataDir: config.llmGatewayMemory.graphDataDir,
             enableDedupWindow: config.llmGatewayMemory.enableDedupWindow,
             dedupWindowMs: config.llmGatewayMemory.dedupWindowMs,
             dedupScope: config.llmGatewayMemory.dedupScope,
             enableCursorMemoryProfile: config.llmGatewayMemory.enableCursorMemoryProfile,
           });
+          if (enableResult && typeof enableResult.then === 'function') {
+            void enableResult.catch((e: unknown) => {
+              console.warn(
+                `[DevPlan] LlmGateway.enableMemory initialization failed (non-fatal): ${
+                  e instanceof Error ? e.message : String(e)
+                }`
+              );
+            });
+          }
+        } catch (e) {
+          console.warn(
+            `[DevPlan] LlmGateway.enableMemory initialization failed (non-fatal): ${
+              e instanceof Error ? e.message : String(e)
+            }`
+          );
         }
-      } catch (e) {
-        console.warn(
-          `[DevPlan] LlmGateway.enableMemory initialization failed (non-fatal): ${
-            e instanceof Error ? e.message : String(e)
-          }`
-        );
       }
 
       // 注册 Ollama Provider（幂等 — 已存在则从 store hydrate）
@@ -770,12 +949,7 @@ export class DevPlanGraphStore implements IDevPlanStore {
 
   /** 按 section + subSection 查找文档实体（返回原始 Entity） */
   private findDocEntityBySection(section: string, subSection?: string): Entity | null {
-    const key = sectionKey(section, subSection);
-    const docs = this.findEntitiesByType(ET.DOC);
-    return docs.find((e) => {
-      const p = e.properties as any;
-      return sectionKey(p.section, p.subSection || undefined) === key;
-    }) || null;
+    return findDocEntityBySectionImpl(this.docStoreBindings, section, subSection);
   }
 
   // ==========================================================================
@@ -862,36 +1036,7 @@ export class DevPlanGraphStore implements IDevPlanStore {
   }
 
   private entityToModule(e: Entity): Module {
-    const p = e.properties as any;
-    const moduleId = p.moduleId || '';
-
-    // 计算关联计数
-    const mainTasks = this.listMainTasks({ moduleId });
-    let subTaskCount = 0;
-    let completedSubTaskCount = 0;
-    for (const mt of mainTasks) {
-      const subs = this.listSubTasks(mt.taskId);
-      subTaskCount += subs.length;
-      completedSubTaskCount += subs.filter((s) => s.status === 'completed').length;
-    }
-
-    const docRelations = this.getOutRelations(e.id, RT.MODULE_HAS_DOC);
-    const docCount = docRelations.length;
-
-    return {
-      id: e.id,
-      projectName: this.projectName,
-      moduleId,
-      name: p.name || e.name,
-      description: p.description || undefined,
-      status: p.status || 'active',
-      mainTaskCount: mainTasks.length,
-      subTaskCount,
-      completedSubTaskCount,
-      docCount,
-      createdAt: p.createdAt || e.created_at,
-      updatedAt: p.updatedAt || e.updated_at,
-    };
+    return entityToModuleImpl(this.moduleStoreBindings, e);
   }
 
   // ==========================================================================
@@ -1087,23 +1232,11 @@ export class DevPlanGraphStore implements IDevPlanStore {
   }
 
   getSection(section: DevPlanSection, subSection?: string): DevPlanDoc | null {
-    const docs = this.findEntitiesByType(ET.DOC);
-    const key = sectionKey(section, subSection);
-
-    for (const doc of docs) {
-      const p = doc.properties as any;
-      const docKey = sectionKey(p.section, p.subSection || undefined);
-      if (docKey === key) {
-        return this.entityToDevPlanDoc(doc);
-      }
-    }
-    return null;
+    return getSectionImpl(this.docStoreBindings, section, subSection);
   }
 
   listSections(): DevPlanDoc[] {
-    const entities = this.findEntitiesByType(ET.DOC);
-    // Phase-23: 引擎层 upsertEntityByProp(sectionKey) 已保证不会新增重复，无需上层去重
-    return entities.map((e) => this.entityToDevPlanDoc(e));
+    return listSectionsImpl(this.docStoreBindings);
   }
 
   updateSection(section: DevPlanSection, content: string, subSection?: string): string {
@@ -1125,9 +1258,7 @@ export class DevPlanGraphStore implements IDevPlanStore {
   }
 
   searchSections(query: string, limit: number = 10): DevPlanDoc[] {
-    // 默认使用 hybrid 模式（语义+字面），无语义搜索时回退字面
-    const mode: SearchMode = this.semanticSearchReady ? 'hybrid' : 'literal';
-    return this.searchSectionsAdvanced(query, { mode, limit }).map(({ score, ...doc }) => doc);
+    return searchSectionsImpl(this.docStoreBindings, query, limit);
   }
 
   /**
@@ -1148,134 +1279,10 @@ export class DevPlanGraphStore implements IDevPlanStore {
     minScore?: number;
     /** @internal Phase-54: 跳过 LLM 重排（recallMemory 内部调用时设为 true，避免双重重排） */
     _skipRerank?: boolean;
+    /** @internal Phase-201E: 复用上层已生成的 query embedding，避免重复 embed */
+    _queryEmbedding?: number[];
   }): ScoredDevPlanDoc[] {
-    const mode = options?.mode || 'hybrid';
-    const limit = options?.limit || 10;
-    const minScore = options?.minScore || 0;
-    const skipRerank = options?._skipRerank === true;
-    const allDocs = this.listSections();
-    const literalMatches = rankLiteralDocMatches(query, allDocs, limit * 3);
-    const exactIdMatch = isUuidLikeQuery(query)
-      ? literalMatches.find((match) => match.doc.id.toLowerCase() === query.trim().toLowerCase())
-      : undefined;
-    const preferredLiteralMatches = literalMatches.filter(
-      (match) => match.matchedFields.includes('id') || match.matchedFields.includes('title'),
-    );
-    const secondaryLiteralMatches = literalMatches.filter(
-      (match) => !match.matchedFields.includes('id') && !match.matchedFields.includes('title'),
-    );
-
-    // Phase-54: LLM Reranking 包装 — 仅在非跳过时执行
-    const maybeRerank = <T extends { id: string; content?: string; title?: string }>(results: T[]): T[] =>
-      skipRerank ? results : this.rerankSearchResults(query, results, limit);
-
-    // ---- BM25 / Literal Search ----
-    // Phase-52: 当 Tantivy 可用时，优先使用 BM25 搜索替代朴素字面匹配
-    let textResults: Array<{ id: string; score?: number; doc?: DevPlanDoc }> = [];
-    if (this.textSearchReady) {
-      try {
-        const bm25Hits: TextSearchHit[] = this.graph.searchEntitiesByText(query, ET.DOC, limit * 2);
-        const bm25Results = bm25Hits
-          .filter(h => (h.entity.properties as any)?.projectName === this.projectName)
-          .map(h => {
-            const doc = this.entityToDevPlanDoc(h.entity);
-            const score = applyBm25TermBoostUtil(
-              Number(h.score || 0),
-              query,
-              `${h.snippet || ''}\n${doc.title}\n${doc.content}`,
-              this.recallSearchTuning,
-            );
-            return {
-              id: h.entityId,
-              score,
-              doc,
-            };
-          })
-          .sort((a, b) => (b.score || 0) - (a.score || 0));
-        const merged = new Map<string, { id: string; score?: number; doc?: DevPlanDoc }>();
-        const pushResult = (item: { id: string; score?: number; doc?: DevPlanDoc }) => {
-          if (!merged.has(item.id)) merged.set(item.id, item);
-        };
-        if (exactIdMatch) {
-          pushResult({ id: exactIdMatch.doc.id, score: exactIdMatch.score, doc: exactIdMatch.doc });
-        }
-        for (const match of preferredLiteralMatches) {
-          pushResult({ id: match.doc.id, score: match.score, doc: match.doc });
-        }
-        for (const item of bm25Results) {
-          pushResult(item);
-        }
-        for (const match of secondaryLiteralMatches) {
-          pushResult({ id: match.doc.id, score: match.score, doc: match.doc });
-        }
-        textResults = Array.from(merged.values());
-      } catch (e) {
-        console.warn(`[DevPlan] Tantivy BM25 search failed: ${e instanceof Error ? e.message : String(e)}. Falling back to literal.`);
-        // 降级为朴素字面搜索
-        textResults = literalMatches.map(match => ({ id: match.doc.id, score: match.score, doc: match.doc }));
-      }
-    } else {
-      // 无 Tantivy：使用朴素字面匹配
-      textResults = literalMatches.map(match => ({ id: match.doc.id, score: match.score, doc: match.doc }));
-    }
-
-    // ---- If no semantic search or literal-only mode ----
-    if (mode === 'literal' || !this.semanticSearchReady || !this.synapse) {
-      const results = textResults.slice(0, limit).map(r => ({
-        ...(r.doc || this.entityToDevPlanDoc(this.graph.getEntity(r.id)!)),
-        score: r.score,
-      }));
-      // Phase-54: LLM Reranking（即使 literal 模式也可受益）
-      return maybeRerank(results);
-    }
-
-    // ---- Semantic Search ----
-    let semanticHits: VectorSearchHit[] = [];
-    try {
-      const embedding = this.synapse.embed(query);
-      semanticHits = this.graph.searchEntitiesByVector(embedding, limit * 2, ET.DOC);
-    } catch (e) {
-      console.warn(`[DevPlan] Semantic search failed: ${e instanceof Error ? e.message : String(e)}`);
-      // 降级为 text-only 搜索
-      const results = textResults.slice(0, limit).map(r => ({
-        ...(r.doc || this.entityToDevPlanDoc(this.graph.getEntity(r.id)!)),
-        score: r.score,
-      }));
-      return maybeRerank(results);
-    }
-
-    if (mode === 'semantic') {
-      // 纯语义模式：直接返回语义搜索结果
-      const docs: ScoredDevPlanDoc[] = [];
-      for (const hit of semanticHits) {
-        if (minScore > 0 && hit.score < minScore) continue;
-        const entity = this.graph.getEntity(hit.entityId);
-        if (entity && (entity.properties as any)?.projectName === this.projectName) {
-          docs.push({ ...this.entityToDevPlanDoc(entity), score: hit.score });
-        }
-        if (docs.length >= limit) break;
-      }
-      // Phase-54: LLM Reranking
-      return maybeRerank(docs);
-    }
-
-    // ---- Hybrid Mode: Three-way RRF Fusion (vector + BM25/literal) ----
-    const rrfResults = rrfFusionThreeWayUtil(
-      semanticHits,
-      textResults,
-      limit,
-      minScore,
-      this.recallSearchTuning,
-      (id) => {
-        const entity = this.graph.getEntity(id);
-        if (entity && (entity.properties as any)?.projectName === this.projectName) {
-          return this.entityToDevPlanDoc(entity);
-        }
-        return undefined;
-      },
-    );
-    // Phase-54: LLM Reranking 作为最终精排步骤
-    return maybeRerank(rrfResults);
+    return searchSectionsAdvancedImpl(this.docStoreBindings, query, options);
   }
 
   /**
@@ -1293,7 +1300,7 @@ export class DevPlanGraphStore implements IDevPlanStore {
     let failed = 0;
     const failedDocIds: string[] = [];
 
-    if (!this.semanticSearchReady || !this.synapse) {
+    if (!this.ensureSynapseReady() || !this.synapse) {
       return {
         total: docs.length,
         indexed: 0,
@@ -1370,7 +1377,7 @@ export class DevPlanGraphStore implements IDevPlanStore {
    * 检查语义搜索是否可用
    */
   isSemanticSearchEnabled(): boolean {
-    return this.semanticSearchReady;
+    return this.semanticSearchConfigured;
   }
 
   /**
@@ -1387,13 +1394,16 @@ export class DevPlanGraphStore implements IDevPlanStore {
     const memCount = this.listMemories?.().length ?? 0;
 
     const notes: string[] = [];
-    if (this.semanticSearchReady && vectorCount === 0) {
+    if (this.semanticSearchConfigured && vectorCount === 0) {
       notes.push('Vector index is empty. Run devplan_rebuild_index to populate.');
     }
-    if (!this.semanticSearchReady && this.textSearchReady) {
+    if (this.semanticSearchConfigured && !this.synapseInitAttempted) {
+      notes.push('Semantic search is configured and will initialize lazily on first semantic request.');
+    }
+    if (!this.semanticSearchConfigured && this.textSearchReady) {
       notes.push('Semantic search disabled; using BM25 text search only.');
     }
-    if (!this.semanticSearchReady && !this.textSearchReady) {
+    if (!this.semanticSearchConfigured && !this.textSearchReady) {
       notes.push('Both semantic and text search unavailable; using literal matching.');
     }
     if (this.vectorDiag.hasFallback) {
@@ -1443,7 +1453,7 @@ export class DevPlanGraphStore implements IDevPlanStore {
     }
 
     // 语义搜索：删除文档对应的向量索引
-    if (this.semanticSearchReady) {
+    if (this.semanticSearchConfigured) {
       try {
         this.graph.removeEntityVector(existing.id);
       } catch {
@@ -1461,158 +1471,18 @@ export class DevPlanGraphStore implements IDevPlanStore {
   // ==========================================================================
 
   createMainTask(input: MainTaskInput): MainTask {
-    const existing = this.getMainTask(input.taskId);
-    if (existing) {
-      // 已存在 → 返回现有任务（幂等）
-      return existing;
-    }
-
-    const now = Date.now();
-    // 如果未指定 order，自动分配为当前最大 order + 1
-    const order = input.order != null ? input.order : this.getNextMainTaskOrder();
-    const entity = this.graph.upsertEntityByProp(
-      ET.MAIN_TASK, 'taskId', input.taskId, input.title, {
-      projectName: this.projectName,
-      taskId: input.taskId,
-      title: input.title,
-      priority: input.priority,
-      description: input.description || '',
-      estimatedHours: input.estimatedHours || 0,
-      relatedSections: input.relatedSections || [],
-      relatedPromptIds: input.relatedPromptIds || [],
-      moduleId: input.moduleId || null,
-      totalSubtasks: 0,
-      completedSubtasks: 0,
-      status: 'pending',
-      order,
-      createdAt: now,
-      updatedAt: now,
-      completedAt: null,
-      }
-    );
-
-    // project -> main task 关系
-    this.graph.putRelation(this.getProjectId(), entity.id, RT.HAS_MAIN_TASK);
-
-    // module -> main task 关系
-    if (input.moduleId) {
-      const modEntity = this.findEntityByProp(ET.MODULE, 'moduleId', input.moduleId);
-      if (modEntity) {
-        this.graph.putRelation(modEntity.id, entity.id, RT.MODULE_HAS_TASK);
-      }
-    }
-
-    // task -> doc 关系（通过 relatedSections 建立）
-    if (input.relatedSections?.length) {
-      for (const sk of input.relatedSections) {
-        const [sec, sub] = sk.split('|');
-        const docEntity = this.findDocEntityBySection(sec, sub);
-        if (docEntity) {
-          this.graph.putRelation(entity.id, docEntity.id, RT.TASK_HAS_DOC);
-        }
-      }
-    }
-
-    // task -> prompt 关系（通过 relatedPromptIds 建立）
-    if (input.relatedPromptIds?.length) {
-      for (const promptId of input.relatedPromptIds) {
-        const promptEntity = this.graph.getEntity(promptId);
-        if (promptEntity && promptEntity.entity_type === ET.PROMPT) {
-          this.graph.putRelation(entity.id, promptEntity.id, RT.TASK_HAS_PROMPT);
-        }
-      }
-    }
-
-    this.graph.flush();
-    return this.entityToMainTask(entity);
+    return createMainTaskImpl(this.taskStoreBindings, input);
   }
 
   upsertMainTask(input: MainTaskInput, options?: {
     preserveStatus?: boolean;
     status?: TaskStatus;
   }): MainTask {
-    const preserveStatus = options?.preserveStatus !== false;
-    const targetStatus = options?.status || 'pending';
-    const existing = this.getMainTask(input.taskId);
-
-    if (!existing) {
-      const task = this.createMainTask(input);
-      if (targetStatus !== 'pending') {
-        return this.updateMainTaskStatus(task.taskId, targetStatus) || task;
-      }
-      return task;
-    }
-
-    // 决定最终状态
-    let finalStatus = targetStatus;
-    if (preserveStatus) {
-      const statusPriority: Record<TaskStatus, number> = {
-        cancelled: 0, pending: 1, in_progress: 2, completed: 3,
-      };
-      if (statusPriority[existing.status] >= statusPriority[targetStatus]) {
-        finalStatus = existing.status;
-      }
-    }
-
-    const now = Date.now();
-    const completedAt = finalStatus === 'completed' ? (existing.completedAt || now) : null;
-    const finalModuleId = input.moduleId || existing.moduleId;
-    const finalOrder = input.order != null ? input.order : existing.order;
-
-    // Phase-45: 使用 upsertEntityByProp 代替 updateEntity（修复分片路由不一致）
-    const upsertedEntity = this.graph.upsertEntityByProp(
-      ET.MAIN_TASK, 'taskId', input.taskId, input.title, {
-        projectName: this.projectName,
-        taskId: input.taskId,
-        title: input.title,
-        priority: input.priority,
-        description: input.description || existing.description || '',
-        estimatedHours: input.estimatedHours || existing.estimatedHours || 0,
-        relatedSections: input.relatedSections || existing.relatedSections || [],
-        relatedPromptIds: input.relatedPromptIds || existing.relatedPromptIds || [],
-        moduleId: finalModuleId || null,
-        totalSubtasks: existing.totalSubtasks,
-        completedSubtasks: existing.completedSubtasks,
-        status: finalStatus,
-        order: finalOrder,
-        createdAt: existing.createdAt,
-        updatedAt: now,
-        completedAt,
-      }
-    );
-    const upsertedId = upsertedEntity?.id || existing.id;
-
-    // 更新模块关系
-    if (finalModuleId && finalModuleId !== existing.moduleId) {
-      this.updateModuleTaskRelation(upsertedId, existing.moduleId, finalModuleId);
-    }
-
-    // 更新 task -> doc 关系
-    const newRelatedSections = input.relatedSections || existing.relatedSections || [];
-    if (newRelatedSections.length) {
-      // 删除旧的 TASK_HAS_DOC 关系
-      const oldDocRels = this.getOutRelations(upsertedId, RT.TASK_HAS_DOC);
-      for (const rel of oldDocRels) {
-        this.graph.deleteRelation(rel.id);
-      }
-      // 建立新的 TASK_HAS_DOC 关系
-      for (const sk of newRelatedSections) {
-        const [sec, sub] = sk.split('|');
-        const docEntity = this.findDocEntityBySection(sec, sub);
-        if (docEntity) {
-          this.graph.putRelation(upsertedId, docEntity.id, RT.TASK_HAS_DOC);
-        }
-      }
-    }
-
-    this.graph.flush();
-
-    return this.getMainTask(input.taskId) || existing;
+    return upsertMainTaskImpl(this.taskStoreBindings, input, options);
   }
 
   getMainTask(taskId: string): MainTask | null {
-    const entity = this.findEntityByProp(ET.MAIN_TASK, 'taskId', taskId);
-    return entity ? this.entityToMainTask(entity) : null;
+    return getMainTaskImpl(this.taskStoreBindings, taskId);
   }
 
   listMainTasks(filter?: {
@@ -1620,122 +1490,15 @@ export class DevPlanGraphStore implements IDevPlanStore {
     priority?: TaskPriority;
     moduleId?: string;
   }): MainTask[] {
-    let entities = this.findEntitiesByType(ET.MAIN_TASK);
-
-    // Phase-23: 引擎层 upsertEntityByProp 已保证不会新增重复，无需上层去重
-
-    if (filter?.status) {
-      entities = entities.filter((e) => (e.properties as any).status === filter.status);
-    }
-    if (filter?.priority) {
-      entities = entities.filter((e) => (e.properties as any).priority === filter.priority);
-    }
-    if (filter?.moduleId) {
-      entities = entities.filter((e) => (e.properties as any).moduleId === filter.moduleId);
-    }
-
-    const tasks = entities.map((e) => this.entityToMainTask(e));
-    return this.sortByOrder(tasks);
+    return listMainTasksImpl(this.taskStoreBindings, filter);
   }
 
   updateMainTaskStatus(taskId: string, status: TaskStatus): MainTask | null {
-    const mainTask = this.getMainTask(taskId);
-    if (!mainTask) return null;
-
-    const now = Date.now();
-    const completedAt = status === 'completed' ? now : null;
-
-    // Phase-45: 使用 upsertEntityByProp 代替 updateEntity
-    // 原因：updateEntity 依赖 UUID 直接查找，在分片路由变更后可能写入错误分片，
-    //       导致更新不可见。upsertEntityByProp 按属性查找实体，路由始终正确。
-    this.graph.upsertEntityByProp(
-      ET.MAIN_TASK, 'taskId', taskId, mainTask.title, {
-        projectName: this.projectName,
-        taskId,
-        title: mainTask.title,
-        priority: mainTask.priority,
-        description: mainTask.description || '',
-        estimatedHours: mainTask.estimatedHours || 0,
-        relatedSections: mainTask.relatedSections || [],
-        relatedPromptIds: mainTask.relatedPromptIds || [],
-        moduleId: mainTask.moduleId || null,
-        totalSubtasks: mainTask.totalSubtasks,
-        completedSubtasks: mainTask.completedSubtasks,
-        status,
-        order: mainTask.order,
-        createdAt: mainTask.createdAt,
-        updatedAt: now,
-        completedAt,
-      }
-    );
-
-    this.graph.flush();
-    return this.getMainTask(taskId);
+    return updateMainTaskStatusImpl(this.taskStoreBindings, taskId, status);
   }
 
   deleteTask(taskId: string, taskType?: 'main' | 'sub'): DeleteTaskResult {
-    const resolvedType = this.resolveTaskDeleteType(taskId, taskType);
-    if (!resolvedType) {
-      return {
-        deleted: false,
-        taskType: null,
-        deletedSubTaskIds: [],
-        deletedTaskIds: [],
-        parentTaskId: null,
-      };
-    }
-
-    if (resolvedType === 'main') {
-      const mainTask = this.getMainTask(taskId);
-      if (!mainTask) {
-        return {
-          deleted: false,
-          taskType: null,
-          deletedSubTaskIds: [],
-          deletedTaskIds: [],
-          parentTaskId: null,
-        };
-      }
-
-      const subTasks = this.listSubTasks(taskId);
-      for (const subTask of subTasks) {
-        this.graph.deleteEntity(subTask.id);
-      }
-      this.graph.deleteEntity(mainTask.id);
-      this.graph.flush();
-
-      return {
-        deleted: true,
-        taskType: 'main',
-        deletedMainTaskId: taskId,
-        deletedSubTaskIds: subTasks.map(sub => sub.taskId),
-        deletedTaskIds: [taskId, ...subTasks.map(sub => sub.taskId)],
-        parentTaskId: null,
-      };
-    }
-
-    const subTask = this.getSubTask(taskId);
-    if (!subTask) {
-      return {
-        deleted: false,
-        taskType: null,
-        deletedSubTaskIds: [],
-        deletedTaskIds: [],
-        parentTaskId: null,
-      };
-    }
-
-    this.graph.deleteEntity(subTask.id);
-    const reconciled = this.reconcileMainTaskAfterSubTaskDeletion(subTask.parentTaskId);
-    this.graph.flush();
-
-    return {
-      deleted: true,
-      taskType: 'sub',
-      deletedSubTaskIds: [taskId],
-      deletedTaskIds: [taskId],
-      parentTaskId: reconciled?.taskId || subTask.parentTaskId,
-    };
+    return deleteTaskImpl(this.taskStoreBindings, taskId, taskType);
   }
 
   // ==========================================================================
@@ -1743,239 +1506,35 @@ export class DevPlanGraphStore implements IDevPlanStore {
   // ==========================================================================
 
   addSubTask(input: SubTaskInput): SubTask {
-    const existing = this.getSubTask(input.taskId);
-    if (existing) {
-      // 已存在 → 返回现有子任务（幂等）
-      return existing;
-    }
-
-    const mainTask = this.getMainTask(input.parentTaskId);
-    if (!mainTask) {
-      throw new Error(`Parent main task "${input.parentTaskId}" not found for project "${this.projectName}"`);
-    }
-
-    const now = Date.now();
-    // 如果未指定 order，自动分配为当前父任务下最大 order + 1
-    const order = input.order != null ? input.order : this.getNextSubTaskOrder(input.parentTaskId);
-    const entity = this.graph.upsertEntityByProp(
-      ET.SUB_TASK, 'taskId', input.taskId, input.title, {
-      projectName: this.projectName,
-      taskId: input.taskId,
-      parentTaskId: input.parentTaskId,
-      title: input.title,
-      estimatedHours: input.estimatedHours || 0,
-      relatedFiles: input.relatedFiles || [],
-      description: input.description || '',
-      status: 'pending',
-      order,
-      createdAt: now,
-      updatedAt: now,
-      completedAt: null,
-      }
-    );
-
-    // main task -> sub task 关系
-    this.graph.putRelation(mainTask.id, entity.id, RT.HAS_SUB_TASK);
-
-    // 更新主任务计数
-    this.refreshMainTaskCounts(input.parentTaskId);
-    this.graph.flush();
-
-    return this.entityToSubTask(entity);
+    return addSubTaskImpl(this.taskStoreBindings, input);
   }
 
   upsertSubTask(input: SubTaskInput, options?: {
     preserveStatus?: boolean;
     status?: TaskStatus;
   }): SubTask {
-    const preserveStatus = options?.preserveStatus !== false;
-    const targetStatus = options?.status || 'pending';
-    const existing = this.getSubTask(input.taskId);
-
-    if (!existing) {
-      const mainTask = this.getMainTask(input.parentTaskId);
-      if (!mainTask) {
-        throw new Error(`Parent main task "${input.parentTaskId}" not found for project "${this.projectName}"`);
-      }
-
-      const now = Date.now();
-      const order = input.order != null ? input.order : this.getNextSubTaskOrder(input.parentTaskId);
-      const entity = this.graph.upsertEntityByProp(
-        ET.SUB_TASK, 'taskId', input.taskId, input.title, {
-        projectName: this.projectName,
-        taskId: input.taskId,
-        parentTaskId: input.parentTaskId,
-        title: input.title,
-        estimatedHours: input.estimatedHours || 0,
-        relatedFiles: input.relatedFiles || [],
-        description: input.description || '',
-        status: targetStatus,
-        order,
-        createdAt: now,
-        updatedAt: now,
-        completedAt: targetStatus === 'completed' ? now : null,
-        }
-      );
-
-      this.graph.putRelation(mainTask.id, entity.id, RT.HAS_SUB_TASK);
-      this.refreshMainTaskCounts(input.parentTaskId);
-      this.graph.flush();
-
-      return this.entityToSubTask(entity);
-    }
-
-    // 决定最终状态
-    let finalStatus = targetStatus;
-    if (preserveStatus) {
-      const statusPriority: Record<TaskStatus, number> = {
-        cancelled: 0, pending: 1, in_progress: 2, completed: 3,
-      };
-      if (statusPriority[existing.status] >= statusPriority[targetStatus]) {
-        finalStatus = existing.status;
-      }
-    }
-
-    // 检查是否有实质变化
-    const newOrder = input.order != null ? input.order : existing.order;
-    if (
-      existing.title === input.title &&
-      existing.description === (input.description || '') &&
-      existing.status === finalStatus &&
-      existing.estimatedHours === (input.estimatedHours || 0) &&
-      existing.order === newOrder
-    ) {
-      return existing;
-    }
-
-    const now = Date.now();
-    const completedAt = finalStatus === 'completed' ? (existing.completedAt || now) : null;
-
-    this.graph.updateEntity(existing.id, {
-      name: input.title,
-      properties: {
-        title: input.title,
-        estimatedHours: input.estimatedHours || existing.estimatedHours || 0,
-        relatedFiles: input.relatedFiles || existing.relatedFiles || [],
-        description: input.description || existing.description || '',
-        status: finalStatus,
-        order: newOrder,
-        updatedAt: now,
-        completedAt,
-      },
-    });
-
-    this.refreshMainTaskCounts(input.parentTaskId);
-    this.graph.flush();
-
-    const updated = this.graph.getEntity(existing.id);
-    return updated ? this.entityToSubTask(updated) : existing;
+    return upsertSubTaskImpl(this.taskStoreBindings, input, options);
   }
 
   getSubTask(taskId: string): SubTask | null {
-    const entity = this.findEntityByProp(ET.SUB_TASK, 'taskId', taskId);
-    return entity ? this.entityToSubTask(entity) : null;
+    return getSubTaskImpl(this.taskStoreBindings, taskId);
   }
 
   listSubTasks(parentTaskId: string, filter?: {
     status?: TaskStatus;
   }): SubTask[] {
-    let entities = this.findEntitiesByType(ET.SUB_TASK).filter(
-      (e) => (e.properties as any).parentTaskId === parentTaskId
-    );
-
-    // Phase-23: 引擎层 upsertEntityByProp 已保证不会新增重复，无需上层去重
-
-    if (filter?.status) {
-      entities = entities.filter((e) => (e.properties as any).status === filter.status);
-    }
-
-    const tasks = entities.map((e) => this.entityToSubTask(e));
-    return this.sortByOrder(tasks);
+    return listSubTasksImpl(this.taskStoreBindings, parentTaskId, filter);
   }
 
   updateSubTaskStatus(taskId: string, status: TaskStatus, options?: {
     completedAtCommit?: string;
     revertReason?: string;
   }): SubTask | null {
-    const subTask = this.getSubTask(taskId);
-    if (!subTask) return null;
-
-    const now = Date.now();
-    const completedAt = status === 'completed' ? now : null;
-    const completedAtCommit = status === 'completed'
-      ? (options?.completedAtCommit || subTask.completedAtCommit)
-      : null;
-    const revertReason = status === 'pending' ? (options?.revertReason || null) : null;
-
-    // Phase-45: 使用 upsertEntityByProp 代替 updateEntity（修复分片路由不一致）
-    this.graph.upsertEntityByProp(
-      ET.SUB_TASK, 'taskId', taskId, subTask.title, {
-        projectName: this.projectName,
-        taskId,
-        parentTaskId: subTask.parentTaskId,
-        title: subTask.title,
-        description: subTask.description || '',
-        estimatedHours: subTask.estimatedHours || 0,
-        relatedFiles: subTask.relatedFiles || [],
-        status,
-        order: subTask.order,
-        createdAt: subTask.createdAt,
-        updatedAt: now,
-        completedAt,
-        completedAtCommit: completedAtCommit || null,
-        revertReason: revertReason || null,
-      }
-    );
-
-    this.graph.flush();
-    return this.getSubTask(taskId);
+    return updateSubTaskStatusImpl(this.taskStoreBindings, taskId, status, options);
   }
 
   updateTaskStatus(taskId: string, taskType: 'main' | 'sub', status: TaskStatus): import('./types').UpdateTaskStatusResult {
-    if (status === 'completed') {
-      throw new Error('Use completeSubTask/completeMainTask or devplan_complete_task for completed status');
-    }
-
-    if (taskType === 'main') {
-      const mainTask = this.updateMainTaskStatus(taskId, status);
-      return {
-        updated: !!mainTask,
-        taskType: mainTask ? 'main' : null,
-        taskId,
-        status: mainTask?.status,
-        parentTaskId: null,
-        mainTask: mainTask || undefined,
-      };
-    }
-
-    const subTask = this.updateSubTaskStatus(taskId, status);
-    if (!subTask) {
-      return {
-        updated: false,
-        taskType: null,
-        taskId,
-        parentTaskId: null,
-      };
-    }
-
-    const parentMainTaskBefore = this.getMainTask(subTask.parentTaskId);
-    let parentMainTask = this.refreshMainTaskCounts(subTask.parentTaskId);
-
-    if (status === 'in_progress') {
-      parentMainTask = this.updateMainTaskStatus(subTask.parentTaskId, 'in_progress') || parentMainTask;
-    } else if (parentMainTaskBefore?.status === 'completed' && parentMainTask && parentMainTask.completedSubtasks < parentMainTask.totalSubtasks) {
-      parentMainTask = this.updateMainTaskStatus(subTask.parentTaskId, 'in_progress') || parentMainTask;
-    }
-
-    return {
-      updated: true,
-      taskType: 'sub',
-      taskId,
-      status: subTask.status,
-      parentTaskId: subTask.parentTaskId,
-      subTask,
-      parentMainTask: parentMainTask || null,
-    };
+    return updateTaskStatusImpl(this.taskStoreBindings, taskId, taskType, status);
   }
 
   // ==========================================================================
@@ -1983,52 +1542,11 @@ export class DevPlanGraphStore implements IDevPlanStore {
   // ==========================================================================
 
   completeSubTask(taskId: string): CompleteSubTaskResult {
-    const commitHash = getCurrentGitCommitUtil(this.gitCwd);
-
-    const updatedSubTask = this.updateSubTaskStatus(taskId, 'completed', {
-      completedAtCommit: commitHash,
-    });
-    if (!updatedSubTask) {
-      throw new Error(`Sub task "${taskId}" not found for project "${this.projectName}"`);
-    }
-
-    const updatedMainTask = this.refreshMainTaskCounts(updatedSubTask.parentTaskId);
-    if (!updatedMainTask) {
-      throw new Error(`Parent main task "${updatedSubTask.parentTaskId}" not found`);
-    }
-
-    const mainTaskCompleted =
-      updatedMainTask.totalSubtasks > 0 &&
-      updatedMainTask.completedSubtasks >= updatedMainTask.totalSubtasks;
-
-    if (mainTaskCompleted && updatedMainTask.status !== 'completed') {
-      const completedMain = this.updateMainTaskStatus(updatedSubTask.parentTaskId, 'completed');
-      if (completedMain) {
-        this.autoUpdateMilestones(completedMain);
-        return {
-          subTask: updatedSubTask,
-          mainTask: completedMain,
-          mainTaskCompleted: true,
-          completedAtCommit: commitHash,
-        };
-      }
-    }
-
-    return {
-      subTask: updatedSubTask,
-      mainTask: updatedMainTask,
-      mainTaskCompleted,
-      completedAtCommit: commitHash,
-    };
+    return completeSubTaskImpl(this.taskStoreBindings, taskId);
   }
 
   completeMainTask(taskId: string): MainTask {
-    const result = this.updateMainTaskStatus(taskId, 'completed');
-    if (!result) {
-      throw new Error(`Main task "${taskId}" not found for project "${this.projectName}"`);
-    }
-    this.autoUpdateMilestones(result);
-    return result;
+    return completeMainTaskImpl(this.taskStoreBindings, taskId);
   }
 
   // ==========================================================================
@@ -2036,111 +1554,15 @@ export class DevPlanGraphStore implements IDevPlanStore {
   // ==========================================================================
 
   getProgress(): ProjectProgress {
-    const sections = this.listSections();
-    const mainTasks = this.listMainTasks();
-
-    let totalSub = 0;
-    let completedSub = 0;
-    const taskProgressList: MainTaskProgress[] = [];
-
-    for (const mt of mainTasks) {
-      const subs = this.listSubTasks(mt.taskId);
-      const subCompleted = subs.filter((s) => s.status === 'completed').length;
-
-      totalSub += subs.length;
-      completedSub += subCompleted;
-
-      taskProgressList.push({
-        taskId: mt.taskId,
-        title: mt.title,
-        priority: mt.priority,
-        status: mt.status,
-        order: mt.order,
-        total: subs.length,
-        completed: subCompleted,
-        percent: subs.length > 0 ? Math.round((subCompleted / subs.length) * 100) : 0,
-      });
-    }
-
-    return {
-      projectName: this.projectName,
-      sectionCount: sections.length,
-      mainTaskCount: mainTasks.length,
-      completedMainTasks: mainTasks.filter((mt) => mt.status === 'completed').length,
-      subTaskCount: totalSub,
-      completedSubTasks: completedSub,
-      overallPercent: totalSub > 0 ? Math.round((completedSub / totalSub) * 100) : 0,
-      tasks: taskProgressList,
-    };
+    return getProgressImpl(this.taskStoreBindings);
   }
 
   exportToMarkdown(): string {
-    const sections = this.listSections();
-    const progress = this.getProgress();
-
-    let md = `# ${this.projectName} - 开发计划\n\n`;
-    md += `> 生成时间: ${new Date().toISOString()}\n`;
-    md += `> 总体进度: ${progress.overallPercent}% (${progress.completedSubTasks}/${progress.subTaskCount})\n`;
-    md += `> 存储引擎: SocialGraphV2\n\n`;
-
-    const sectionOrder: DevPlanSection[] = [
-      'overview', 'core_concepts', 'api_design', 'file_structure',
-      'config', 'examples', 'technical_notes', 'api_endpoints',
-      'milestones', 'changelog', 'custom',
-    ];
-
-    for (const sectionType of sectionOrder) {
-      const sectionDocs = sections.filter((s) => s.section === sectionType);
-      for (const doc of sectionDocs) {
-        md += doc.content + '\n\n---\n\n';
-      }
-    }
-
-    md += '## 开发任务进度\n\n';
-    for (const taskProg of progress.tasks) {
-      const statusIcon = taskProg.status === 'completed' ? '✅'
-        : taskProg.status === 'in_progress' ? '🔄'
-        : taskProg.status === 'cancelled' ? '❌' : '⬜';
-      md += `### ${statusIcon} ${taskProg.title} (${taskProg.completed}/${taskProg.total})\n\n`;
-
-      const subs = this.listSubTasks(taskProg.taskId);
-      if (subs.length > 0) {
-        md += '| 任务 | 描述 | 状态 | 完成日期 |\n';
-        md += '|-----|------|------|--------|\n';
-        for (const sub of subs) {
-          const subIcon = sub.status === 'completed' ? '✅ 已完成'
-            : sub.status === 'in_progress' ? '🔄 进行中'
-            : sub.status === 'cancelled' ? '❌ 已取消' : '⬜ 待开始';
-          const date = sub.completedAt
-            ? new Date(sub.completedAt).toISOString().split('T')[0]
-            : '-';
-          md += `| ${sub.taskId} | ${sub.title} | ${subIcon} | ${date} |\n`;
-        }
-        md += '\n';
-      }
-    }
-
-    return md;
+    return exportToMarkdownImpl(this.visualizeStoreBindings);
   }
 
   exportTaskSummary(): string {
-    const progress = this.getProgress();
-
-    let md = `# ${this.projectName} - 任务进度总览\n\n`;
-    md += `> 更新时间: ${new Date().toISOString()}\n`;
-    md += `> 总体进度: **${progress.overallPercent}%** (${progress.completedSubTasks}/${progress.subTaskCount} 子任务完成)\n`;
-    md += `> 主任务完成: ${progress.completedMainTasks}/${progress.mainTaskCount}\n`;
-    md += `> 存储引擎: SocialGraphV2\n\n`;
-
-    for (const tp of progress.tasks) {
-      const bar = progressBarUtil(tp.percent);
-      const statusIcon = tp.status === 'completed' ? '✅'
-        : tp.status === 'in_progress' ? '🔄' : '⬜';
-      md += `${statusIcon} **${tp.title}** [${tp.priority}]\n`;
-      md += `   ${bar} ${tp.percent}% (${tp.completed}/${tp.total})\n\n`;
-    }
-
-    return md;
+    return exportTaskSummaryImpl(this.visualizeStoreBindings);
   }
 
   // ==========================================================================
@@ -2148,58 +1570,15 @@ export class DevPlanGraphStore implements IDevPlanStore {
   // ==========================================================================
 
   createModule(input: ModuleInput): Module {
-    const existing = this.getModule(input.moduleId);
-    if (existing) {
-      // 已存在 → 返回现有模块（幂等）
-      return existing;
-    }
-
-    const now = Date.now();
-    const status = input.status || 'active';
-
-    const entity = this.graph.upsertEntityByProp(
-      ET.MODULE, 'moduleId', input.moduleId, input.name, {
-      projectName: this.projectName,
-      moduleId: input.moduleId,
-      name: input.name,
-      description: input.description || '',
-      status,
-      createdAt: now,
-      updatedAt: now,
-      }
-    );
-
-    // project -> module (通过类型区分即可，不需要额外关系)
-    this.graph.flush();
-
-    return {
-      id: entity.id,
-      projectName: this.projectName,
-      moduleId: input.moduleId,
-      name: input.name,
-      description: input.description,
-      status,
-      mainTaskCount: 0,
-      subTaskCount: 0,
-      completedSubTaskCount: 0,
-      docCount: 0,
-      createdAt: now,
-      updatedAt: now,
-    };
+    return createModuleImpl(this.moduleStoreBindings, input);
   }
 
   getModule(moduleId: string): Module | null {
-    const entity = this.findEntityByProp(ET.MODULE, 'moduleId', moduleId);
-    return entity ? this.entityToModule(entity) : null;
+    return getModuleImpl(this.moduleStoreBindings, moduleId);
   }
 
   listModules(filter?: { status?: ModuleStatus }): Module[] {
-    let entities = this.findEntitiesByType(ET.MODULE);
-    // Phase-23: 引擎层 upsertEntityByProp 已保证不会新增重复，无需上层去重
-    if (filter?.status) {
-      entities = entities.filter((e) => (e.properties as any).status === filter.status);
-    }
-    return entities.map((e) => this.entityToModule(e));
+    return listModulesImpl(this.moduleStoreBindings, filter);
   }
 
   updateModule(moduleId: string, updates: {
@@ -2207,65 +1586,15 @@ export class DevPlanGraphStore implements IDevPlanStore {
     description?: string;
     status?: ModuleStatus;
   }): Module | null {
-    const existing = this.getModule(moduleId);
-    if (!existing) return null;
-
-    const now = Date.now();
-    this.graph.updateEntity(existing.id, {
-      name: updates.name || existing.name,
-      properties: {
-        name: updates.name || existing.name,
-        description: updates.description !== undefined ? updates.description : existing.description,
-        status: updates.status || existing.status,
-        updatedAt: now,
-      },
-    });
-
-    this.graph.flush();
-    return this.getModule(moduleId);
+    return updateModuleImpl(this.moduleStoreBindings, moduleId, updates);
   }
 
   deleteModule(moduleId: string): boolean {
-    const existing = this.getModule(moduleId);
-    if (!existing) return false;
-    this.graph.deleteEntity(existing.id);
-    this.graph.flush();
-    return true;
+    return deleteModuleImpl(this.moduleStoreBindings, moduleId);
   }
 
   getModuleDetail(moduleId: string): ModuleDetail | null {
-    const mod = this.getModule(moduleId);
-    if (!mod) return null;
-
-    const mainTasks = this.listMainTasks({ moduleId });
-    const subTasks: SubTask[] = [];
-    for (const mt of mainTasks) {
-      subTasks.push(...this.listSubTasks(mt.taskId));
-    }
-
-    // 获取关联文档
-    const modEntity = this.findEntityByProp(ET.MODULE, 'moduleId', moduleId);
-    let documents: DevPlanDoc[] = [];
-    if (modEntity) {
-      const docRelations = this.getOutRelations(modEntity.id, RT.MODULE_HAS_DOC);
-      for (const rel of docRelations) {
-        const docEntity = this.graph.getEntity(rel.target);
-        if (docEntity) {
-          documents.push(this.entityToDevPlanDoc(docEntity));
-        }
-      }
-    }
-
-    // 同时包含按 moduleId 属性关联的文档
-    const allDocs = this.listSections().filter((d) => d.moduleId === moduleId);
-    const docIds = new Set(documents.map((d) => d.id));
-    for (const d of allDocs) {
-      if (!docIds.has(d.id)) {
-        documents.push(d);
-      }
-    }
-
-    return { module: mod, mainTasks, subTasks, documents };
+    return getModuleDetailImpl(this.moduleStoreBindings, moduleId);
   }
 
   // ==========================================================================
@@ -2276,36 +1605,14 @@ export class DevPlanGraphStore implements IDevPlanStore {
    * 获取主任务关联的文档列表（通过 TASK_HAS_DOC 出向关系）
    */
   getTaskRelatedDocs(taskId: string): DevPlanDoc[] {
-    const taskEntity = this.findEntityByProp(ET.MAIN_TASK, 'taskId', taskId);
-    if (!taskEntity) return [];
-
-    const rels = this.getOutRelations(taskEntity.id, RT.TASK_HAS_DOC);
-    const docs: DevPlanDoc[] = [];
-    for (const rel of rels) {
-      const docEntity = this.graph.getEntity(rel.target);
-      if (docEntity) {
-        docs.push(this.entityToDevPlanDoc(docEntity));
-      }
-    }
-    return docs;
+    return getTaskRelatedDocsImpl(this.docStoreBindings, taskId);
   }
 
   /**
    * 获取文档关联的主任务列表（通过 TASK_HAS_DOC 入向关系）
    */
   getDocRelatedTasks(section: DevPlanSection, subSection?: string): MainTask[] {
-    const doc = this.getSection(section, subSection);
-    if (!doc) return [];
-
-    const rels = this.getInRelations(doc.id, RT.TASK_HAS_DOC);
-    const tasks: MainTask[] = [];
-    for (const rel of rels) {
-      const taskEntity = this.graph.getEntity(rel.source);
-      if (taskEntity) {
-        tasks.push(this.entityToMainTask(taskEntity));
-      }
-    }
-    return tasks;
+    return getDocRelatedTasksImpl(this.docStoreBindings, section, subSection);
   }
 
   // ==========================================================================
@@ -2316,39 +1623,21 @@ export class DevPlanGraphStore implements IDevPlanStore {
    * 获取文档的直接子文档列表（通过 DOC_HAS_CHILD 出向关系）
    */
   getChildDocs(section: DevPlanSection, subSection?: string): DevPlanDoc[] {
-    const docEntity = this.findDocEntityBySection(section, subSection);
-    if (!docEntity) return [];
-
-    const rels = this.getOutRelations(docEntity.id, RT.DOC_HAS_CHILD);
-    const children: DevPlanDoc[] = [];
-    for (const rel of rels) {
-      const childEntity = this.graph.getEntity(rel.target);
-      if (childEntity) {
-        children.push(this.entityToDevPlanDoc(childEntity));
-      }
-    }
-    return children;
+    return getChildDocsImpl(this.docStoreBindings, section, subSection);
   }
 
   /**
    * 获取文档树（递归，含所有后代文档）
    */
   getDocTree(section: DevPlanSection, subSection?: string): DevPlanDocTree | null {
-    const doc = this.getSection(section, subSection);
-    if (!doc) return null;
-
-    return this.buildDocTree(doc);
+    return getDocTreeImpl(this.docStoreBindings, section, subSection);
   }
 
   /**
    * 递归构建文档树
    */
   private buildDocTree(doc: DevPlanDoc): DevPlanDocTree {
-    const children = this.getChildDocs(doc.section, doc.subSection);
-    return {
-      doc,
-      children: children.map((child) => this.buildDocTree(child)),
-    };
+    return buildDocTreeImpl(this.docStoreBindings, doc);
   }
 
   // ==========================================================================
@@ -2362,55 +1651,7 @@ export class DevPlanGraphStore implements IDevPlanStore {
    * 如果指定了 relatedTaskId，自动建立 task_has_prompt 关系。
    */
   savePrompt(input: PromptInput): Prompt {
-    const now = Date.now();
-    const today = new Date(now).toISOString().slice(0, 10); // YYYY-MM-DD
-
-    // 获取当天已有 prompt 数量，分配自增序号
-    const existingToday = this.listPrompts({ date: today });
-    const promptIndex = existingToday.length + 1;
-
-    // 生成简短标签作为 entity name
-    const namePreview = input.content.slice(0, 50).replace(/\n/g, ' ');
-    const entityName = `Prompt #${promptIndex} (${today})`;
-
-    const entity = this.graph.addEntity(entityName, ET.PROMPT, {
-      projectName: this.projectName,
-      promptIndex,
-      content: input.content,
-      aiInterpretation: input.aiInterpretation || '',
-      summary: input.summary || '',
-      relatedTaskId: input.relatedTaskId || null,
-      tags: input.tags || [],
-      date: today,
-      createdAt: now,
-    });
-
-    // project -> prompt 关系
-    this.graph.putRelation(this.getProjectId(), entity.id, RT.HAS_PROMPT);
-
-    // task -> prompt 关系
-    if (input.relatedTaskId) {
-      const taskEntity = this.findEntityByProp(ET.MAIN_TASK, 'taskId', input.relatedTaskId);
-      if (taskEntity) {
-        this.graph.putRelation(taskEntity.id, entity.id, RT.TASK_HAS_PROMPT);
-
-        // 同时更新主任务的 relatedPromptIds 数组
-        const taskProps = taskEntity.properties as any;
-        const existingIds = taskProps.relatedPromptIds || [];
-        if (!existingIds.includes(entity.id)) {
-          this.graph.updateEntity(taskEntity.id, {
-            properties: {
-              ...taskProps,
-              relatedPromptIds: [...existingIds, entity.id],
-              updatedAt: now,
-            },
-          });
-        }
-      }
-    }
-
-    this.graph.flush();
-    return this.entityToPrompt(entity);
+    return savePromptImpl(this.promptStoreBindings, input);
   }
 
   /**
@@ -2421,68 +1662,21 @@ export class DevPlanGraphStore implements IDevPlanStore {
     relatedTaskId?: string;
     limit?: number;
   }): Prompt[] {
-    // 如果按关联任务过滤，通过关系查询
-    if (filter?.relatedTaskId) {
-      return this.getTaskRelatedPrompts(filter.relatedTaskId);
-    }
-
-    const entities = this.findEntitiesByType(ET.PROMPT);
-    let prompts = entities
-      .filter((e) => {
-        const p = e.properties as any;
-        if (p.projectName !== this.projectName) return false;
-        if (filter?.date && p.date !== filter.date) return false;
-        return true;
-      })
-      .map((e) => this.entityToPrompt(e));
-
-    // 按 createdAt 降序排列（最新的在前）
-    prompts.sort((a, b) => b.createdAt - a.createdAt);
-
-    if (filter?.limit && filter.limit > 0) {
-      prompts = prompts.slice(0, filter.limit);
-    }
-
-    return prompts;
+    return listPromptsImpl(this.promptStoreBindings, filter);
   }
 
   /**
    * 获取主任务关联的所有 Prompt
    */
   getTaskRelatedPrompts(taskId: string): Prompt[] {
-    const taskEntity = this.findEntityByProp(ET.MAIN_TASK, 'taskId', taskId);
-    if (!taskEntity) return [];
-
-    const rels = this.getOutRelations(taskEntity.id, RT.TASK_HAS_PROMPT);
-    const prompts: Prompt[] = [];
-    for (const rel of rels) {
-      const promptEntity = this.graph.getEntity(rel.target);
-      if (promptEntity && promptEntity.entity_type === ET.PROMPT) {
-        prompts.push(this.entityToPrompt(promptEntity));
-      }
-    }
-
-    // 按 createdAt 升序排列
-    prompts.sort((a, b) => a.createdAt - b.createdAt);
-    return prompts;
+    return getTaskRelatedPromptsImpl(this.promptStoreBindings, taskId);
   }
 
   /**
    * Entity → Prompt 转换
    */
   private entityToPrompt(e: Entity): Prompt {
-    const p = e.properties as any;
-    return {
-      id: e.id,
-      projectName: this.projectName,
-      promptIndex: p.promptIndex || 0,
-      content: p.content || '',
-      aiInterpretation: p.aiInterpretation || undefined,
-      summary: p.summary || undefined,
-      relatedTaskId: p.relatedTaskId || undefined,
-      tags: p.tags || [],
-      createdAt: p.createdAt || e.created_at,
-    };
+    return entityToPromptImpl(this.promptStoreBindings, e);
   }
 
   // ==========================================================================
@@ -2497,205 +1691,7 @@ export class DevPlanGraphStore implements IDevPlanStore {
    * - 关联 project → memory 和可选的 memory → task 关系
    */
   saveMemory(input: MemoryInput): Memory {
-    const now = Date.now();
-
-    // Phase-58: 三层内容差异化存储
-    // - content: 用于向量索引和语义搜索（优先使用 L2 详细内容）
-    // - contentL3: 原始文档全文（如提供）
-    const searchableContent = input.contentL2 || input.content;
-    const entityName = `Memory: ${input.memoryType} — ${input.content.slice(0, 40)}`;
-    const sourceRef = input.sourceRef || undefined;
-    const sourceRefKey = sourceRef
-      ? (sourceRef.variant ? `${sourceRef.sourceId}#${sourceRef.variant}` : sourceRef.sourceId)
-      : undefined;
-
-    // Phase-78B: 统一使用 upsertEntityByProp 保持 UUID 稳定
-    // 策略：有 sourceRef 时用 sourceRefKey 做 upsert key；无 sourceRef 时退回 findDuplicateMemory
-    let entity: Entity;
-    let isUpdate = false;
-
-    if (sourceRefKey) {
-      // ---- 有 sourceRef → upsertEntityByProp（引擎级去重，UUID 不变） ----
-      entity = this.graph.upsertEntityByProp(
-        ET.MEMORY, 'sourceRefKey', sourceRefKey, entityName, {
-        projectName: this.projectName,
-        memoryType: input.memoryType,
-        content: searchableContent,
-        contentL3: input.contentL3 || null,
-        tags: input.tags || [],
-        relatedTaskId: input.relatedTaskId || null,
-        sourceRef: sourceRef || null,
-        sourceRefKey,
-        provenance: input.provenance || null,
-        importance: input.importance ?? 0.5,
-        hitCount: 0,
-        lastAccessedAt: null,
-        createdAt: now,
-        updatedAt: now,
-      });
-      // 检测是否是更新（createdAt 可能不等于 now，说明是旧实体）
-      const ep = entity.properties as any;
-      if (ep.createdAt && ep.createdAt < now - 1000) {
-        isUpdate = true;
-        // 更新已有实体的可变字段（upsertEntityByProp 只在 create 时写入全部 properties）
-        this.graph.updateEntity(entity.id, {
-          properties: {
-            ...ep,
-            content: searchableContent,
-            contentL3: input.contentL3 || ep.contentL3 || null,
-            memoryType: input.memoryType,
-            tags: input.tags || ep.tags || [],
-            sourceRef: sourceRef || ep.sourceRef || null,
-            sourceRefKey,
-            provenance: input.provenance || ep.provenance || null,
-            importance: input.importance ?? ep.importance ?? 0.5,
-            updatedAt: now,
-          },
-        });
-      }
-    } else {
-      // ---- 无 sourceRef → 传统去重检测 ----
-      const existingDup = this.findDuplicateMemory(input);
-      if (existingDup) {
-        isUpdate = true;
-        entity = existingDup;
-        const oldProps = existingDup.properties as any;
-        this.graph.updateEntity(existingDup.id, {
-          properties: {
-            ...oldProps,
-            content: searchableContent,
-            contentL3: input.contentL3 || oldProps.contentL3 || null,
-            memoryType: input.memoryType,
-            tags: input.tags || oldProps.tags || [],
-            importance: input.importance ?? oldProps.importance ?? 0.5,
-            sourceRef: sourceRef || oldProps.sourceRef || null,
-            sourceRefKey: sourceRefKey || oldProps.sourceRefKey || null,
-            provenance: input.provenance || oldProps.provenance || null,
-            updatedAt: now,
-          },
-        });
-      } else {
-        // 真正的新建
-        entity = this.graph.addEntity(entityName, ET.MEMORY, {
-          projectName: this.projectName,
-          memoryType: input.memoryType,
-          content: searchableContent,
-          contentL3: input.contentL3 || null,
-          tags: input.tags || [],
-          relatedTaskId: input.relatedTaskId || null,
-          sourceRef: sourceRef || null,
-          sourceRefKey: sourceRefKey || null,
-          provenance: input.provenance || null,
-          importance: input.importance ?? 0.5,
-          hitCount: 0,
-          lastAccessedAt: null,
-          createdAt: now,
-          updatedAt: now,
-        });
-      }
-    }
-
-    // project → memory 关系（putRelation 引擎级幂等）
-    this.graph.putRelation(this.getProjectId(), entity.id, RT.HAS_MEMORY);
-
-    // memory → task 关系（可选）
-    if (input.relatedTaskId) {
-      const taskEntity = this.findEntityByProp(ET.MAIN_TASK, 'taskId', input.relatedTaskId);
-      if (taskEntity) {
-        this.graph.putRelation(entity.id, taskEntity.id, RT.MEMORY_FROM_TASK);
-      }
-    }
-
-    // Phase-78B: 向量索引 — 先 removeEntityVector 再 indexEntity
-    //   indexEntity 是幂等的（已有向量时不更新），必须先清除旧向量
-    let embedding: number[] | null = null;
-    if (this.semanticSearchReady && this.synapse) {
-      try {
-        // 更新或重建时，先清除旧向量
-        if (isUpdate && typeof this.graph.removeEntityVector === 'function') {
-          try { this.graph.removeEntityVector(entity.id); } catch { /* 可能没有旧向量 */ }
-        }
-        embedding = this.synapse.embed(input.content);
-        this.graph.indexEntity(entity.id, embedding);
-      } catch (e) {
-        console.warn(
-          `[DevPlan] Failed to index memory ${entity.id}: ${
-            e instanceof Error ? e.message : String(e)
-          }`
-        );
-      }
-    }
-
-    // ---- Phase-37: 自动建立记忆间关联（MEMORY_RELATES） ----
-    if (embedding && this.semanticSearchReady) {
-      this.autoLinkSimilarMemories(entity.id, embedding);
-    }
-
-    // ---- Phase-37: 从文档生成的记忆自动建立 MEMORY_FROM_DOC 关系 ----
-    if (sourceRef?.sourceId) {
-      this.autoLinkMemoryToDoc(entity.id, sourceRef.sourceId);
-    }
-
-    // ---- Phase-37: 模块级记忆自动建立 MODULE_MEMORY 关系 ----
-    if (input.moduleId) {
-      this.autoLinkMemoryToModule(entity.id, input.moduleId);
-    }
-
-    // ---- Phase-47: 记忆分解器集成 ----
-    let decompositionSummary: Memory['decomposition'] | undefined;
-    const decomposeMode: 'rule' | 'llm' | undefined =
-      input.decompose === true || input.decompose === 'rule' ? 'rule'
-        : input.decompose === 'llm' ? 'llm'
-          : undefined;
-    if (decomposeMode) {
-      decompositionSummary = this.decomposeAndStoreMemoryTree(
-        entity.id,
-        input.content,
-        decomposeMode,
-        input.decomposeContext,
-        input.llmDecompositionJson,
-      );
-    }
-
-    // ---- Phase-51: 冲突检测 — 自动建立 SUPERSEDES/CONFLICTS 关系 ----
-    let conflictsDetected: Memory['conflicts'] | undefined;
-    if (embedding) {
-      conflictsDetected = this.detectMemoryConflicts(entity, embedding);
-    }
-
-    // ---- Phase-57: 三维记忆 — Anchor + Flow + Structure ----
-    let anchorResult: Memory['anchorInfo'] | undefined;
-    let flowResult: Memory['flowEntry'] | undefined;
-    let structureSnapshotId: string | undefined;
-    try {
-      const anchorData = this.integrateAnchorFlowStructure(input, entity.id);
-      if (anchorData) {
-        anchorResult = anchorData.anchorInfo;
-        flowResult = anchorData.flowEntry;
-        structureSnapshotId = anchorData.structureSnapshotId;
-      }
-    } catch (e) {
-      console.warn(`[DevPlan] Anchor/Flow/Structure integration failed (non-fatal): ${e instanceof Error ? e.message : String(e)}`);
-    }
-
-    this.graph.flush();
-    const result = this.entityToMemory(entity);
-    if (decompositionSummary) {
-      result.decomposition = decompositionSummary;
-    }
-    if (conflictsDetected && conflictsDetected.length > 0) {
-      result.conflicts = conflictsDetected;
-    }
-    if (anchorResult) {
-      result.anchorInfo = anchorResult;
-    }
-    if (flowResult) {
-      result.flowEntry = flowResult;
-    }
-    if (structureSnapshotId) {
-      result.structureSnapshotId = structureSnapshotId;
-    }
-    return result;
+    return saveMemoryImpl(this.memoryWriteStoreBindings, input);
   }
 
   /**
@@ -2713,66 +1709,7 @@ export class DevPlanGraphStore implements IDevPlanStore {
     maxLinks: number = 3,
     minScore: number = 0.7,
   ): void {
-    try {
-      const hits = this.graph.searchEntitiesByVector(embedding, maxLinks + 5, ET.MEMORY);
-
-      // 收集需要创建的关系
-      const relationsToCreate: Array<{ targetId: string; score: number }> = [];
-      for (const hit of hits) {
-        if (relationsToCreate.length >= maxLinks) break;
-        if (hit.entityId === newMemoryId) continue;
-        if (hit.score < minScore) continue;
-
-        const target = this.graph.getEntity(hit.entityId);
-        if (!target) continue;
-        const p = target.properties as any;
-        if (p.projectName !== this.projectName) continue;
-
-        relationsToCreate.push({ targetId: hit.entityId, score: hit.score });
-      }
-
-      if (relationsToCreate.length === 0) return;
-
-      // Phase-44: 使用 applyMutations 批量创建（单次 Rust 调用）
-      // Phase-46: 移除 as any 断言 — aifastdb ≥2.8.0 已有正式类型
-      if (this.nativeApplyMutationsReady) {
-        const mutations: any[] = [];
-        for (const { targetId, score } of relationsToCreate) {
-          // 正向关系
-          mutations.push({
-            type: 'PutRelation',
-            relation: {
-              source_id: newMemoryId,
-              target_id: targetId,
-              relation_type: RT.MEMORY_RELATES,
-              weight: score,
-            },
-          });
-          // 反向关系（双向）
-          mutations.push({
-            type: 'PutRelation',
-            relation: {
-              source_id: targetId,
-              target_id: newMemoryId,
-              relation_type: RT.MEMORY_RELATES,
-              weight: score,
-            },
-          });
-        }
-        this.graph.applyMutations(mutations).catch((e: any) => {
-          console.warn(`[DevPlan] applyMutations for memory links failed: ${e}`);
-        });
-      } else {
-        // 兼容老 native：逐条 putRelation 回退，避免 applyMutations 缺失导致噪声报错
-        for (const { targetId, score } of relationsToCreate) {
-          this.graph.putRelation(newMemoryId, targetId, RT.MEMORY_RELATES, score, false);
-          this.graph.putRelation(targetId, newMemoryId, RT.MEMORY_RELATES, score, false);
-        }
-      }
-
-    } catch (e) {
-      console.warn(`[DevPlan] autoLinkSimilarMemories failed: ${e instanceof Error ? e.message : String(e)}`);
-    }
+    autoLinkSimilarMemoriesImpl(this.memoryWriteStoreBindings, newMemoryId, embedding, maxLinks, minScore);
   }
 
   /**
@@ -2782,47 +1719,14 @@ export class DevPlanGraphStore implements IDevPlanStore {
    * 找到对应的文档 Entity 并建立 MEMORY_FROM_DOC 关系。
    */
   private autoLinkMemoryToDoc(memoryId: string, sourceKey: string): void {
-    try {
-      // sourceKey 格式："section" 或 "section|subSection"
-      // 任务格式："phase-7"（以 phase- 或 T 开头的不是文档）
-      if (sourceKey.startsWith('phase-') || sourceKey.startsWith('T')) return;
-
-      // 解析 section 和 subSection
-      const parts = sourceKey.split('|');
-      const section = parts[0];
-      const subSection = parts[1];
-
-      // 查找文档 Entity
-      const docs = this.findEntitiesByType(ET.DOC);
-      const docEntity = docs.find((e) => {
-        const p = e.properties as any;
-        if (p.projectName !== this.projectName) return false;
-        if (p.section !== section) return false;
-        if (subSection && p.subSection !== subSection) return false;
-        if (!subSection && p.subSection) return false;
-        return true;
-      });
-
-      if (docEntity) {
-        this.graph.putRelation(docEntity.id, memoryId, RT.MEMORY_FROM_DOC);
-      }
-    } catch (e) {
-      console.warn(`[DevPlan] autoLinkMemoryToDoc failed: ${e instanceof Error ? e.message : String(e)}`);
-    }
+    autoLinkMemoryToDocImpl(this.memoryWriteStoreBindings, memoryId, sourceKey);
   }
 
   /**
    * Phase-37: 模块级记忆自动建立 MODULE_MEMORY 关系
    */
   private autoLinkMemoryToModule(memoryId: string, moduleId: string): void {
-    try {
-      const modEntity = this.findEntityByProp(ET.MODULE, 'moduleId', moduleId);
-      if (modEntity) {
-        this.graph.putRelation(modEntity.id, memoryId, RT.MODULE_MEMORY);
-      }
-    } catch (e) {
-      console.warn(`[DevPlan] autoLinkMemoryToModule failed: ${e instanceof Error ? e.message : String(e)}`);
-    }
+    autoLinkMemoryToModuleImpl(this.memoryWriteStoreBindings, memoryId, moduleId);
   }
 
   // ==========================================================================
@@ -2849,181 +1753,35 @@ export class DevPlanGraphStore implements IDevPlanStore {
     flowEntry?: Memory['flowEntry'];
     structureSnapshotId?: string;
   } | null {
-    // 检查 NAPI 方法是否可用（需要 aifastdb 包含 Phase-122 构建）
-    const g = this.graph as any;
-    if (typeof g.anchorUpsert !== 'function') {
-      return null;
-    }
-
-    // ---- Step 1: 确定触点名称 ----
-    let anchorName = input.anchorName;
-    let anchorType = input.anchorType || ANCHOR_TYPES.CONCEPT;
-
-    if (!anchorName && this.nativeAnchorExtractReady) {
-      // 自动从内容中提取触点
-      try {
-        const extracted: NativeExtractedAnchor[] = g.anchorExtractFromText(input.content);
-        if (extracted && extracted.length > 0) {
-          // 取置信度最高的
-          const best = extracted.reduce(
-            (a: NativeExtractedAnchor, b: NativeExtractedAnchor) => a.confidence > b.confidence ? a : b,
-          );
-          anchorName = best.name;
-          anchorType = best.suggested_type || anchorType;
-        }
-      } catch (e) {
-        console.warn(`[DevPlan] anchorExtractFromText failed: ${e instanceof Error ? e.message : String(e)}`);
-      }
-    }
-
-    if (!anchorName) {
-      // 无法提取触点 — 静默返回，不影响正常记忆保存
-      return null;
-    }
-
-    // ---- Step 2: Upsert Anchor（基于 name + type 去重）----
-    // Phase-58: L1 → anchor description, L2 → flow detail, L3 → memory entity content
-    // Phase-63: anchorOverview → L2 目录索引层（inspired by OpenViking .overview.md）
-    const description = (input.contentL1 || input.content.slice(0, 100)).replace(/\n/g, ' ');
-    const overview = input.anchorOverview || undefined;
-    const anchorOptions = input.anchorMergeMode
-      ? { mergeMode: input.anchorMergeMode }
-      : undefined;
-    let anchorInfo: NativeAnchorInfo;
-    let isNew = false;
-
-    try {
-      // 先检查是否已有同名触点
-      const existing: NativeAnchorInfo | null = g.anchorFind(anchorName, anchorType);
-      anchorInfo = g.anchorUpsert(anchorName, anchorType, description, overview, anchorOptions);
-      isNew = !existing || existing.id !== anchorInfo.id;
-    } catch (e) {
-      console.warn(`[DevPlan] anchorUpsert failed for "${anchorName}": ${e instanceof Error ? e.message : String(e)}`);
-      return null;
-    }
-
-    // Phase-63: 如果 anchorUpsert 的 NAPI 签名尚未包含 overview 参数，
-    // 使用独立的 anchorUpdateOverview 方法补充设置
-    if (overview && typeof g.anchorUpdateOverview === 'function') {
-      try {
-        g.anchorUpdateOverview(anchorInfo.id, overview);
-      } catch (e) {
-        console.warn(`[DevPlan] anchorUpdateOverview failed: ${e instanceof Error ? e.message : String(e)}`);
-      }
-    }
-
-    // ---- Step 3: 追加 FlowEntry ----
-    const changeType = input.changeType || (isNew ? CHANGE_TYPES.CREATED : CHANGE_TYPES.MODIFIED);
-    // Phase-58: L1 → flow summary (触点摘要), L2 → flow detail (结构化详情)
-    const summary = (input.contentL1 || input.content.slice(0, 80)).replace(/\n/g, ' ');
-    const detail = input.contentL2 || input.content;
-    const sourceTask = input.relatedTaskId || undefined;
-
-    let flowEntry: NativeFlowEntry | null = null;
-    try {
-      flowEntry = g.flowAppend(
-        anchorInfo.id,
-        changeType,
-        summary,
-        detail,
-        sourceTask ?? null,
-      );
-    } catch (e) {
-      console.warn(`[DevPlan] flowAppend failed: ${e instanceof Error ? e.message : String(e)}`);
-    }
-
-    // ---- Step 4: 建立 memory → anchor 关系 ----
-    try {
-      this.graph.putRelation(memoryEntityId, anchorInfo.id, 'anchored_by');
-    } catch (e) {
-      console.warn(`[DevPlan] putRelation anchored_by failed: ${e instanceof Error ? e.message : String(e)}`);
-    }
-
-    // ---- Step 5: 创建 StructureSnapshot（如提供了组件信息）----
-    let structureSnapshotId: string | undefined;
-    if (input.structureComponents && input.structureComponents.length > 0 && flowEntry) {
-      try {
-        const components: NativeComponentRef[] = input.structureComponents.map(c => ({
-          anchorId: c.anchorId,
-          role: c.role,
-          versionHint: c.versionHint,
-        }));
-        const snapshot: NativeStructureSnapshot | null = g.structureSnapshot(
-          flowEntry.id,
-          anchorInfo.id,
-          flowEntry.version,
-          components,
-        );
-        if (snapshot) {
-          structureSnapshotId = snapshot.id;
-        }
-      } catch (e) {
-        console.warn(`[DevPlan] structureSnapshot failed: ${e instanceof Error ? e.message : String(e)}`);
-      }
-    }
-
-    return {
-      anchorInfo: {
-        id: anchorInfo.id,
-        name: anchorInfo.name,
-        anchorType: anchorInfo.anchor_type,
-        description: anchorInfo.description,
-        version: anchorInfo.version,
-        isNew,
-      },
-      flowEntry: flowEntry ? {
-        id: flowEntry.id,
-        version: flowEntry.version,
-        changeType: flowEntry.change_type,
-        summary: flowEntry.summary,
-      } : undefined,
-      structureSnapshotId,
-    };
+    return integrateAnchorFlowStructureImpl(this.anchorFlowStructureBindings, input, memoryEntityId);
   }
 
   /**
    * Phase-57: 查询指定触点的记忆流历史
    */
   queryAnchorFlow(anchorName: string, anchorType?: string, filter?: NativeFlowFilter): NativeFlowEntry[] {
-    const g = this.graph as any;
-    if (typeof g.anchorFind !== 'function') return [];
-
-    const type = anchorType || ANCHOR_TYPES.CONCEPT;
-    const anchor: NativeAnchorInfo | null = g.anchorFind(anchorName, type);
-    if (!anchor) {
-      // 尝试按名称模糊查找
-      const byName: NativeAnchorInfo | null = g.anchorFindByName(anchorName);
-      if (!byName) return [];
-      return g.flowQuery(byName.id, filter ?? null);
-    }
-    return g.flowQuery(anchor.id, filter ?? null);
+    return queryAnchorFlowImpl(this.anchorFlowStructureBindings, anchorName, anchorType, filter);
   }
 
   /**
    * Phase-57: 列出项目中的所有触点
    */
   listAnchors(anchorTypeFilter?: string): NativeAnchorInfo[] {
-    const g = this.graph as any;
-    if (typeof g.anchorList !== 'function') return [];
-    return g.anchorList(anchorTypeFilter ?? null);
+    return listAnchorsImpl(this.anchorFlowStructureBindings, anchorTypeFilter);
   }
 
   /**
    * Phase-57: 获取触点的当前结构
    */
   getAnchorStructure(anchorId: string): NativeStructureSnapshot | null {
-    const g = this.graph as any;
-    if (typeof g.structureCurrent !== 'function') return null;
-    return g.structureCurrent(anchorId);
+    return getAnchorStructureImpl(this.anchorFlowStructureBindings, anchorId);
   }
 
   /**
    * Phase-57: 计算两个版本之间的结构差异
    */
   getStructureDiff(anchorId: string, fromVersion: number, toVersion: number): NativeStructureDiff | null {
-    const g = this.graph as any;
-    if (typeof g.structureDiff !== 'function') return null;
-    return g.structureDiff(anchorId, fromVersion, toVersion);
+    return getStructureDiffImpl(this.anchorFlowStructureBindings, anchorId, fromVersion, toVersion);
   }
 
   /**
@@ -3046,80 +1804,7 @@ export class DevPlanGraphStore implements IDevPlanStore {
    * @param depth - 信息层级: L1(摘要) / L2(详情) / L3(完整)，默认 L1
    */
   private enrichMemoriesWithAnchorInfo(results: ScoredMemory[], depth: RecallDepth = 'L1'): void {
-    const g = this.graph as any;
-    if (typeof g.anchorGetById !== 'function') return;
-
-    for (const mem of results) {
-      if (mem.sourceKind !== 'memory') continue;
-
-      try {
-        // L1: 找到记忆关联的 Anchor（通过 anchored_by 关系）
-        const outgoing = this.graph.outgoingByType(mem.id, 'anchored_by') as Relation[];
-        if (!outgoing || outgoing.length === 0) continue;
-
-        const anchorId = outgoing[0].target;
-        const anchor: NativeAnchorInfo | null = g.anchorGetById(anchorId);
-        if (!anchor) continue;
-
-        // 附加 L1 触点信息（始终包含）
-        mem.anchorInfo = {
-          id: anchor.id,
-          name: anchor.name,
-          anchorType: anchor.anchor_type,
-          description: anchor.description,
-          uri: anchor.uri,
-          path: anchor.path,
-          overview: anchor.overview || null,  // Phase-124: L2 目录索引概览
-          version: anchor.version,
-          flowCount: anchor.flow_count,
-        };
-
-        // L2: 查询记忆流（仅 depth >= L2 时加载）
-        if (depth === 'L2' || depth === 'L3') {
-          try {
-            const entries: NativeFlowEntry[] = g.flowQuery(anchorId, {
-              limit: 5,
-              newestFirst: true,
-            });
-            if (entries && entries.length > 0) {
-              mem.flowEntries = entries.map(e => ({
-                id: e.id,
-                version: e.version,
-                changeType: e.change_type,
-                summary: e.summary,
-                detail: e.detail,
-                sourceTask: e.source_task,
-                createdAt: e.created_at,
-              }));
-            }
-          } catch {
-            // L2 失败不影响 L1
-          }
-        }
-
-        // L3: 查询当前结构快照（仅 depth = L3 时加载）
-        if (depth === 'L3') {
-          try {
-            const snapshot: NativeStructureSnapshot | null = g.structureCurrent(anchorId);
-            if (snapshot && snapshot.components.length > 0) {
-              mem.structureSnapshot = {
-                id: snapshot.id,
-                version: snapshot.version,
-                components: snapshot.components.map(c => ({
-                  anchorId: c.anchorId,
-                  role: c.role,
-                  versionHint: c.versionHint,
-                })),
-              };
-            }
-          } catch {
-            // L3 失败不影响 L1/L2
-          }
-        }
-      } catch {
-        // 单条记忆的 anchor enrichment 失败不影响其他记忆
-      }
-    }
+    enrichMemoriesWithAnchorInfoImpl(this.anchorFlowStructureBindings, results, depth);
   }
 
   /**
@@ -3355,7 +2040,7 @@ export class DevPlanGraphStore implements IDevPlanStore {
     embedding: number[],
   ): Memory['conflicts'] | undefined {
     try {
-      if (!this.semanticSearchReady) return undefined;
+      if (!this.semanticSearchConfigured) return undefined;
 
       const newProps = newEntity.properties as any;
       const newMemoryType: string = newProps?.memoryType || '';
@@ -3488,7 +2173,7 @@ export class DevPlanGraphStore implements IDevPlanStore {
       // 优化: 使用 embedBatch 批量生成向量，将 N+1 次同步 NAPI 调用合并为 1 次
       // 典型 3 句记忆: 6 次 embed(~3s) → 1 次 embedBatch(~0.8s)
       const embeddings: MemoryTreeEmbeddingInput[] = [];
-      if (this.semanticSearchReady && this.synapse) {
+      if (this.ensureSynapseReady() && this.synapse) {
         try {
           // 收集所有需要 embed 的文本和对应的实体 ID
           const textsToEmbed: string[] = [];
@@ -3727,27 +2412,7 @@ export class DevPlanGraphStore implements IDevPlanStore {
    * 2. 内容前 80 字符指纹相同 + 相同 memoryType
    */
   private findDuplicateMemory(input: MemoryInput): Entity | null {
-    const allMemories = this.findEntitiesByType(ET.MEMORY);
-    const inputFingerprint = input.content.slice(0, 80).toLowerCase().trim();
-
-    for (const e of allMemories) {
-      const p = e.properties as any;
-      if (p.projectName !== this.projectName) continue;
-      if (p.memoryType !== input.memoryType) continue;
-
-      // 规则 1: 相同 relatedTaskId
-      if (input.relatedTaskId && p.relatedTaskId === input.relatedTaskId) {
-        return e;
-      }
-
-      // 规则 2: 内容指纹相同
-      const existingFingerprint = (p.content || '').slice(0, 80).toLowerCase().trim();
-      if (inputFingerprint.length > 10 && existingFingerprint === inputFingerprint) {
-        return e;
-      }
-    }
-
-    return null;
+    return findDuplicateMemoryImpl(this.memoryWriteStoreBindings, input);
   }
 
   /**
@@ -3756,198 +2421,18 @@ export class DevPlanGraphStore implements IDevPlanStore {
    * 统一接收 URI/depth/scope/docStrategy/recursive 等参数，并输出可观测指标。
    */
   recallUnified(query: string, options?: UnifiedRecallOptions): ScoredMemory[] {
-    const t0 = Date.now();
-    const limit = options?.limit || 10;
-    const minScore = options?.minScore || 0;
-    const depth: RecallDepth = options?.depth || 'L1';
-    const scope = options?.scope;
-    const now = Date.now();
-
-    // recursive 由入参与 feature flag 共同决定
-    const graphExpand = (options?.recursive ?? true) && this.recallFeatureFlags.recursiveRecall;
-    // useActivation 由 recursive 驱动（激活引擎内含图遍历扩展）
-    const useActivation = graphExpand;
-
-    // URI 目前作为查询提示（后续可升级为 anchor_find_by_uri 精确寻址）
-    let augmentedQuery = query;
-    if (options?.uri && this.recallFeatureFlags.uriIndex) {
-      augmentedQuery = `${query} uri:${options.uri}`;
-    }
-
-    // 解析 docStrategy（兼容 includeDocs）
-    let docStrategy: DocStrategy;
-    if (options?.docStrategy) {
-      docStrategy = options.docStrategy;
-    } else if (options?.includeDocs === false) {
-      docStrategy = 'none';
-    } else {
-      docStrategy = 'vector';
-    }
-
-    let memoryResults: ScoredMemory[] = [];
-    let activationUsed = false;
-    let fallbackTriggered = false;
-    let lastError: string | undefined;
-
-    try {
-    if (useActivation && this.semanticSearchReady && this.synapse) {
-      try {
-          memoryResults = this.recallViaActivationEngine(
-            augmentedQuery,
-            limit,
-            minScore,
-            options?.memoryType,
-            now,
-          );
-        activationUsed = memoryResults.length > 0;
-      } catch (e) {
-          fallbackTriggered = true;
-          lastError = e instanceof Error ? e.message : String(e);
-          console.warn(`[DevPlan] Activation engine recall failed, falling back: ${lastError}`);
-      }
-    }
-
-      // 回退到 legacy 召回路径
-    if (!activationUsed) {
-        memoryResults = this.recallViaLegacySearch(
-          augmentedQuery,
-          limit,
-          minScore,
-          options?.memoryType,
-          now,
-        );
-
-      if (graphExpand && memoryResults.length > 0) {
-        const graphExpanded = this.expandMemoriesByGraph(memoryResults, options?.memoryType, limit);
-        if (graphExpanded.length > 0) {
-          memoryResults = rrfMergeMemoriesUtil(memoryResults, graphExpanded, limit, this.recallSearchTuning);
-        }
-      }
-
-      if (memoryResults.length >= 2) {
-        this.hebbianStrengthen(memoryResults.filter(m => m.sourceKind === 'memory'));
-      }
-    }
-
-    if (scope) {
-      memoryResults = this.filterMemoriesByScope(memoryResults, scope);
-    }
-    if (options?.deterministicFirst) {
-      memoryResults = this.applyDeterministicRecallFilter(memoryResults, options);
-    }
-
-    // Phase-215: 对 memory 结果应用 tag-query 交集加分
-    memoryResults = applyTagBoostUtil(
-      memoryResults, augmentedQuery, this.recallSearchTuning.tagBoostFactor,
-    );
-
-    // Phase-215: 统一结果最终化方法（enrich + rerank + normalize）
-    const finalizeResults = (results: ScoredMemory[]): ScoredMemory[] => {
-      this.enrichMemoriesWithAnchorInfo(results, depth);
-      const reranked = this.rerankSearchResults(augmentedQuery, results, limit);
-      return normalizeScoresUtil(reranked);
-    };
-
-    if (docStrategy === 'none' || options?.memoryType) {
-      return finalizeResults(memoryResults);
-    }
-
-    if (docStrategy === 'guided') {
-      let guidedDocs = this.findGuidedDocuments(memoryResults, Math.max(3, Math.floor(limit / 2)));
-      if (guidedDocs.length === 0) {
-          guidedDocs = this.vectorSearchDocuments(augmentedQuery, limit, minScore);
-      }
-      const treeDocs = this.treeIndexSearchDocuments(
-        augmentedQuery,
-        Math.max(3, Math.floor(limit / 2)),
-        minScore,
-      );
-      if (treeDocs.length > 0) {
-        guidedDocs = guidedDocs.length > 0
-          ? rrfMergeResultsUtil(guidedDocs, treeDocs, limit)
-          : treeDocs.slice(0, limit);
-      }
-
-      let finalResults: ScoredMemory[];
-      if (guidedDocs.length === 0) {
-        finalResults = memoryResults;
-      } else if (memoryResults.length === 0) {
-        finalResults = guidedDocs.slice(0, limit);
-      } else {
-        finalResults = [...memoryResults, ...guidedDocs].slice(0, limit);
-      }
-
-      return finalizeResults(finalResults);
-    }
-
-      const docResults = this.vectorSearchDocuments(augmentedQuery, limit, minScore);
-    const treeDocResults = this.treeIndexSearchDocuments(
-      augmentedQuery,
-      Math.max(3, Math.floor(limit / 2)),
-      minScore,
-    );
-    const mergedDocResults = treeDocResults.length > 0
-      ? (docResults.length > 0
-        ? rrfMergeResultsUtil(docResults, treeDocResults, limit)
-        : treeDocResults.slice(0, limit))
-      : docResults;
-    let finalResults: ScoredMemory[];
-    if (mergedDocResults.length === 0) {
-      finalResults = memoryResults;
-    } else if (memoryResults.length === 0) {
-      finalResults = mergedDocResults.slice(0, limit);
-    } else {
-      finalResults = rrfMergeResultsUtil(memoryResults, mergedDocResults, limit);
-    }
-
-    return finalizeResults(finalResults);
-    } finally {
-      const elapsed = Date.now() - t0;
-      this.recallObservabilityRaw.totalCalls += 1;
-      this.recallObservabilityRaw.totalLatencyMs += elapsed;
-      this.recallObservabilityRaw.lastLatencyMs = elapsed;
-      if (fallbackTriggered) {
-        this.recallObservabilityRaw.totalFallbacks += 1;
-      }
-      if (lastError) {
-        this.recallObservabilityRaw.lastError = lastError;
-      }
-    }
+    return recallUnifiedImpl(this.recallStoreBindings, query, options);
   }
 
   recallUnifiedViaAdapter(query: string, options?: UnifiedRecallOptions): ScoredMemory[] {
-    if (!this.memoryGatewayAdapter) {
-      return this.recallUnified(query, options);
-    }
-    return this.memoryGatewayAdapter.recallUnified(
-      query,
-      options,
-      (q, opts) => this.recallUnified(q, opts),
-    );
+    return recallUnifiedViaAdapterImpl(this.recallStoreBindings, query, options);
   }
 
   private applyDeterministicRecallFilter(
     results: ScoredMemory[],
     options: UnifiedRecallOptions,
   ): ScoredMemory[] {
-    const projectFilter = (options.filterProject || '').trim().toLowerCase();
-    const typeFilter = (options.filterMemoryType || '').toString().trim().toLowerCase();
-    const after = options.filterCreatedAfterMs;
-    const before = options.filterCreatedBeforeMs;
-    return results.filter((m) => {
-      if (projectFilter) {
-        const p = String((m as any).projectName || this.projectName).toLowerCase();
-        if (!p.includes(projectFilter)) return false;
-      }
-      if (typeFilter) {
-        const t = String((m as any).memoryType || '').toLowerCase();
-        if (t !== typeFilter) return false;
-      }
-      const createdAt = Number((m as any).createdAt || 0);
-      if (typeof after === 'number' && createdAt < after) return false;
-      if (typeof before === 'number' && createdAt > before) return false;
-      return true;
-    });
+    return applyDeterministicRecallFilterImpl(this.recallStoreBindings, results, options);
   }
 
   private getGatewayOutboxEntriesLegacy(): any[] {
@@ -4067,142 +2552,38 @@ export class DevPlanGraphStore implements IDevPlanStore {
     scope?: RecallScope;
     docStrategy?: DocStrategy;
   }): ScoredMemory[] {
-    return this.recallUnified(query, {
-      memoryType: options?.memoryType,
-      limit: options?.limit,
-      minScore: options?.minScore,
-      includeDocs: options?.includeDocs,
-      // 旧参数 graphExpand/useActivation 折叠到 recursive
-      recursive: options?.graphExpand ?? options?.useActivation ?? true,
-      depth: options?.depth,
-      scope: options?.scope,
-      docStrategy: options?.docStrategy,
-    });
+    return recallMemoryImpl(this.recallStoreBindings, query, options);
   }
 
   /** Phase-79: 获取 Unified Recall feature flags */
   getFeatureFlags(): RecallFeatureFlags {
-    return { ...this.recallFeatureFlags };
+    return getFeatureFlagsImpl(this.recallStoreBindings);
   }
 
   /** Phase-79: 更新 Unified Recall feature flags */
   setFeatureFlags(patch: RecallFeatureFlagsPatch): RecallFeatureFlags {
-    this.recallFeatureFlags = {
-      ...this.recallFeatureFlags,
-      ...patch,
-    };
-    return this.getFeatureFlags();
+    return setFeatureFlagsImpl(this.recallStoreBindings, patch);
   }
 
   /** Phase-79: 获取 Unified Recall 可观测性指标 */
   getRecallObservability(): RecallObservability {
-    const calls = Math.max(1, this.recallObservabilityRaw.totalCalls);
-    const fallbackRate = this.recallObservabilityRaw.totalFallbacks / calls;
-    const avgLatencyMs = this.recallObservabilityRaw.totalLatencyMs / calls;
-    let alert = false;
-    let alertReason: string | undefined;
-    if (fallbackRate > 0.2) {
-      alert = true;
-      alertReason = `Fallback rate too high: ${(fallbackRate * 100).toFixed(2)}% (>20%)`;
-    } else if (avgLatencyMs > 500) {
-      alert = true;
-      alertReason = `Average recall latency too high: ${avgLatencyMs.toFixed(1)}ms (>500ms)`;
-    }
-    const gatewayAdapter = this.memoryGatewayAdapter ? this.memoryGatewayAdapter.getTelemetry() : undefined;
-    const threshold = this.memoryGatewayAdapter?.getFallbackAlertThreshold() ?? 0.2;
-    const opRates = gatewayAdapter ? [
-      { op: 'recallUnified' as const, rate: gatewayAdapter.recallUnified.fallbackRate },
-      { op: 'getOutboxEntries' as const, rate: gatewayAdapter.getOutboxEntries.fallbackRate },
-      { op: 'retryOutboxEntry' as const, rate: gatewayAdapter.retryOutboxEntry.fallbackRate },
-    ] : [];
-    const triggeredOps = opRates.filter((x) => x.rate > threshold).map((x) => x.op);
-    const maxFallbackRate = opRates.length > 0
-      ? Math.max(...opRates.map((x) => x.rate))
-      : 0;
-    const gatewayAlert = gatewayAdapter ? {
-      alerted: triggeredOps.length > 0,
-      threshold,
-      triggeredOps,
-      maxFallbackRate,
-      reason: triggeredOps.length > 0
-        ? `Gateway fallback rate exceeded threshold ${(threshold * 100).toFixed(1)}% on: ${triggeredOps.join(', ')}`
-        : undefined,
-    } : undefined;
-
-    return {
-      totalCalls: this.recallObservabilityRaw.totalCalls,
-      totalFallbacks: this.recallObservabilityRaw.totalFallbacks,
-      fallbackRate,
-      avgLatencyMs,
-      lastLatencyMs: this.recallObservabilityRaw.lastLatencyMs,
-      alert,
-      alertReason,
-      lastError: this.recallObservabilityRaw.lastError,
-      gatewayAdapter,
-      gatewayAlert,
-    };
+    return getRecallObservabilityImpl(this.recallStoreBindings);
   }
 
   /** Phase-79: 重置 Unified Recall 可观测性指标 */
   resetRecallObservability(): RecallObservability {
-    this.recallObservabilityRaw = {
-      totalCalls: 0,
-      totalFallbacks: 0,
-      totalLatencyMs: 0,
-      lastLatencyMs: 0,
-      lastError: undefined,
-    };
-    return this.getRecallObservability();
+    return resetRecallObservabilityImpl(this.recallStoreBindings);
   }
 
   private treeIndexSearchDocuments(query: string, limit: number, minScore: number): ScoredMemory[] {
-    return runTreeIndexDocRecallUtil({
-      enabled: this.treeIndexRetrievalEnabled,
-      query,
-      limit,
-      minScore,
-      treeIndexMaxNodes: this.treeIndexMaxNodes,
-      projectName: this.projectName,
-      listDocs: () => this.listSections(),
-      rerank: (q, items, n) => this.rerankSearchResults(q, items, n),
-    });
+    return treeIndexSearchDocumentsImpl(this.recallStoreBindings, query, limit, minScore);
   }
 
   /**
    * Phase-125: 提取的向量搜索文档方法（从 recallMemory 中分离，供 vector/fallback 复用）
    */
-  private vectorSearchDocuments(query: string, limit: number, minScore: number): ScoredMemory[] {
-    const docResults: ScoredMemory[] = [];
-    try {
-      docResults.push(...runVectorDocRecallUtil({
-        query,
-        limit,
-        minScore,
-        semanticSearchReady: this.semanticSearchReady,
-        projectName: this.projectName,
-        searchDocs: (opts) => this.searchSectionsAdvanced(query, opts),
-      }));
-    } catch (e) {
-      console.warn(`[DevPlan] Document recall failed: ${e instanceof Error ? e.message : String(e)}`);
-    }
-
-    // Phase-215: 当 vector 搜索返回 0 条时，使用 tree-index 兜底
-    if (docResults.length === 0) {
-      try {
-        const treeResults = this.treeIndexSearchDocuments(
-          query,
-          Math.max(3, Math.floor(limit / 2)),
-          minScore,
-        );
-        if (treeResults.length > 0) {
-          docResults.push(...treeResults);
-        }
-      } catch (e) {
-        console.warn(`[DevPlan] Tree-index doc fallback failed: ${e instanceof Error ? e.message : String(e)}`);
-      }
-    }
-
-    return docResults;
+  private vectorSearchDocuments(query: string, limit: number, minScore: number, queryEmbedding?: number[]): ScoredMemory[] {
+    return vectorSearchDocumentsImpl(this.recallStoreBindings, query, limit, minScore, queryEmbedding);
   }
 
   /**
@@ -4225,85 +2606,7 @@ export class DevPlanGraphStore implements IDevPlanStore {
     memoryType: MemoryType | undefined,
     now: number,
   ): ScoredMemory[] {
-    if (!this.synapse) return [];
-
-    const embedding = this.synapse.embed(query);
-
-    // 调用 Rust 激活引擎（缺失绑定时安全降级，避免 not a function 噪声）
-    if (!this.nativeMemoryTreeSearchReady) {
-      return [];
-    }
-    let activation: ActivationResult;
-    try {
-      activation = this.graph.memoryTreeSearch(
-      embedding,
-      this.projectName,  // userId = projectName
-    );
-    } catch (e) {
-      console.warn(
-        `[DevPlan] memoryTreeSearch unavailable, fallback to legacy search: ${
-          e instanceof Error ? e.message : String(e)
-        }`,
-      );
-      return [];
-    }
-
-    if (!activation || !activation.memories || activation.memories.length === 0) {
-      return [];
-    }
-
-    const results: ScoredMemory[] = [];
-
-    for (const mem of activation.memories) {
-      if (minScore > 0 && mem.score.combined < minScore) continue;
-
-      // 尝试用 entity 获取完整记忆信息
-      const entity = this.graph.getEntity(mem.entity_id);
-      if (!entity) continue;
-
-      const p = entity.properties as any;
-      if (p.projectName !== this.projectName) continue;
-      if (memoryType && p.memoryType !== memoryType) continue;
-
-      // 更新访问统计
-      this.graph.updateEntity(entity.id, {
-        properties: {
-          ...p,
-          hitCount: (p.hitCount || 0) + 1,
-          lastAccessedAt: now,
-        },
-      });
-
-      // 检查 entity_type — 只返回 MEMORY 类型的实体
-      // 激活引擎可能返回 episode/fact/concept 等子图实体
-      if (entity.entity_type === ET.MEMORY) {
-        results.push({
-          ...this.entityToMemory(entity),
-          hitCount: (p.hitCount || 0) + 1,
-          lastAccessedAt: now,
-          score: mem.score.combined,
-          sourceKind: 'memory',
-        });
-      }
-
-      if (results.length >= limit) break;
-    }
-
-    if (results.length > 0) {
-      this.graph.flush();
-
-      // Phase-49/T49.3: 自动 Hebbian 强化 — 用 Rust 原生实现替代逐对调整
-      try {
-        const activatedIds = results.map(m => m.id);
-        if (activatedIds.length >= 2) {
-          this.graph.memoryTreeStrengthen(activatedIds);
-        }
-      } catch (e) {
-        console.warn(`[DevPlan] memoryTreeStrengthen failed: ${e instanceof Error ? e.message : String(e)}`);
-      }
-    }
-
-    return results;
+    return recallViaActivationEngineImpl(this.recallStoreBindings, query, limit, minScore, memoryType, now);
   }
 
   /**
@@ -4322,116 +2625,17 @@ export class DevPlanGraphStore implements IDevPlanStore {
     minScore: number,
     memoryType: MemoryType | undefined,
     now: number,
+    queryEmbedding?: number[],
   ): ScoredMemory[] {
-    let memoryResults: ScoredMemory[] = [];
-    const fetchLimit = limit * 3;
-
-    // ---- 路径 1: Vector + BM25 混合搜索 (hybridSearchTantivy) ----
-    if (this.semanticSearchReady && this.textSearchReady && this.synapse) {
-      try {
-        const embedding = this.synapse.embed(query);
-        // hybridSearchTantivy(embedding, textQuery, entityTypeFilter, topK, rrfK)
-        // rrfK 从外部配置读取（默认 60）
-        const hits = this.graph.hybridSearchTantivy(
-          embedding,
-          query,
-          ET.MEMORY,
-          fetchLimit,
-          this.recallSearchTuning.rrfK,
-        );
-
-        memoryResults = this.processMemorySearchHits(
-          hits.map(h => ({ entityId: h.entityId, score: h.score })),
-          memoryType, minScore, limit, now,
-        );
-        if (memoryResults.length > 0) return memoryResults;
-        // 如果混合搜索无结果，继续尝试下面的路径
-      } catch (e) {
-        console.warn(`[DevPlan] Hybrid memory recall failed: ${e instanceof Error ? e.message : String(e)}`);
-      }
+    return recallViaLegacySearchImpl(this.recallStoreBindings, query, limit, minScore, memoryType, now, queryEmbedding);
     }
 
-    // ---- 路径 2: 纯向量搜索 ----
-    if (memoryResults.length === 0 && this.semanticSearchReady && this.synapse) {
-      try {
-        const embedding = this.synapse.embed(query);
-        const hits = this.graph.searchEntitiesByVector(embedding, fetchLimit, ET.MEMORY);
-
-        memoryResults = this.processMemorySearchHits(
-          hits, memoryType, minScore, limit, now,
-        );
-        if (memoryResults.length > 0) return memoryResults;
-      } catch (e) {
-        console.warn(`[DevPlan] Semantic memory recall failed: ${e instanceof Error ? e.message : String(e)}`);
-      }
-    }
-
-    // ---- 路径 3: 纯 BM25 全文搜索 ----
-    if (memoryResults.length === 0 && this.textSearchReady) {
-      try {
-        const hits = this.graph.searchEntitiesByText(query, ET.MEMORY, fetchLimit);
-        const boostedHits = hits
-          .map(h => {
-            const p = h.entity.properties as any;
-            const score = applyBm25TermBoostUtil(
-              Number(h.score || 0),
-              query,
-              `${h.snippet || ''}\n${p?.content || ''}\n${(p?.tags || []).join(' ')}`,
-              this.recallSearchTuning,
-            );
-            return { entityId: h.entityId, score };
-          })
-          .sort((a, b) => b.score - a.score);
-
-        memoryResults = this.processMemorySearchHits(
-          boostedHits,
-          memoryType, minScore, limit, now,
-        );
-        if (memoryResults.length > 0) return memoryResults;
-      } catch (e) {
-        console.warn(`[DevPlan] BM25 memory recall failed: ${e instanceof Error ? e.message : String(e)}`);
-      }
-    }
-
-    // ---- 路径 4: 朴素字面匹配（最终兜底） ----
-    if (memoryResults.length === 0) {
-      const entities = this.findEntitiesByType(ET.MEMORY);
-      const queryLower = query.toLowerCase();
-
-      for (const e of entities) {
-        const p = e.properties as any;
-        if (p.projectName !== this.projectName) continue;
-        if (memoryType && p.memoryType !== memoryType) continue;
-
-        const content = (p.content || '').toLowerCase();
-        const tags = (p.tags || []).join(' ').toLowerCase();
-        if (content.includes(queryLower) || tags.includes(queryLower)) {
-          this.graph.updateEntity(e.id, {
-            properties: {
-              ...p,
-              hitCount: (p.hitCount || 0) + 1,
-              lastAccessedAt: now,
-            },
-          });
-
-          memoryResults.push({
-            ...this.entityToMemory(e),
-            hitCount: (p.hitCount || 0) + 1,
-            lastAccessedAt: now,
-            score: 0.5,
-            sourceKind: 'memory',
-          });
-        }
-      }
-
-      memoryResults.sort((a, b) => b.importance - a.importance);
-      memoryResults = memoryResults.slice(0, limit);
-      if (memoryResults.length > 0) {
-        this.graph.flush();
-      }
-    }
-
-    return memoryResults;
+  /**
+   * Recall/read paths should not rewrite the same memory entity on every access.
+   * Throttle persistence of access stats to avoid turning a read into N writes.
+   */
+  private shouldPersistRecallAccessUpdate(props: any, now: number): boolean {
+    return shouldPersistRecallAccessUpdateImpl(this.recallStoreBindings, props, now);
   }
 
   /**
@@ -4447,39 +2651,7 @@ export class DevPlanGraphStore implements IDevPlanStore {
     limit: number,
     now: number,
   ): ScoredMemory[] {
-    const results: ScoredMemory[] = [];
-
-    for (const hit of hits) {
-      if (minScore > 0 && hit.score < minScore) continue;
-      const entity = this.graph.getEntity(hit.entityId);
-      if (!entity) continue;
-      const p = entity.properties as any;
-      if (p.projectName !== this.projectName) continue;
-      if (memoryType && p.memoryType !== memoryType) continue;
-
-      this.graph.updateEntity(entity.id, {
-        properties: {
-          ...p,
-          hitCount: (p.hitCount || 0) + 1,
-          lastAccessedAt: now,
-        },
-      });
-
-      results.push({
-        ...this.entityToMemory(entity),
-        hitCount: (p.hitCount || 0) + 1,
-        lastAccessedAt: now,
-        score: hit.score,
-        sourceKind: 'memory',
-      });
-      if (results.length >= limit) break;
-    }
-
-    if (results.length > 0) {
-      this.graph.flush();
-    }
-
-    return results;
+    return processMemorySearchHitsImpl(this.recallStoreBindings, hits, memoryType, minScore, limit, now);
   }
 
   /**
@@ -4494,9 +2666,7 @@ export class DevPlanGraphStore implements IDevPlanStore {
     memoryType?: MemoryType,
     limit: number = 10,
   ): ScoredMemory[] {
-    // Phase-44: 使用 extractSubgraph — 单次 Rust 调用完成 N-hop 遍历
-    // Phase-46: 移除 as any 断言 — aifastdb ≥2.8.0 已有正式类型，直接调用
-    return this.expandMemoriesBySubgraph(seedMemories, memoryType, limit);
+    return expandMemoriesByGraphImpl(this.recallStoreBindings, seedMemories, memoryType, limit);
   }
 
   /**
@@ -4511,53 +2681,7 @@ export class DevPlanGraphStore implements IDevPlanStore {
     memoryType?: MemoryType,
     limit: number = 10,
   ): ScoredMemory[] {
-    // Phase-46: 移除 as any 断言 — aifastdb ≥2.8.0 已有正式类型
-    const seenIds = new Set(seedMemories.map((m) => m.id));
-    const expanded: ScoredMemory[] = [];
-    const hopDecay = 0.7;
-
-    for (const seed of seedMemories.slice(0, 5)) {
-      try {
-        const subgraph = this.graph.extractSubgraph(seed.id, {
-          max_hops: 2,
-          direction: 'both',
-          relation_type_filter: [RT.MEMORY_RELATES],
-          entity_type_filter: [ET.MEMORY],
-          max_nodes: limit * 2,
-        });
-
-        if (!subgraph || !subgraph.entities || !subgraph.depth_map) continue;
-
-        // 遍历子图中的实体，按 depth 计算衰减分数
-        const entityEntries = Object.entries(subgraph.entities) as [string, any][];
-        for (const [entityId, entity] of entityEntries) {
-          if (seenIds.has(entityId)) continue;
-          if (!entity) continue;
-
-          const p = entity.properties || {};
-          if (p.projectName !== this.projectName) continue;
-          if (memoryType && p.memoryType !== memoryType) continue;
-
-          seenIds.add(entityId);
-          const depth = subgraph.depth_map[entityId] || 1;
-          const expandedScore = seed.score * Math.pow(hopDecay, depth);
-
-          expanded.push({
-            ...this.entityToMemory(entity),
-            score: expandedScore,
-            sourceKind: 'memory',
-          });
-
-          if (expanded.length >= limit) break;
-        }
-      } catch (e) {
-        console.warn(`[DevPlan] extractSubgraph failed for ${seed.id}: ${e instanceof Error ? e.message : String(e)}`);
-      }
-
-      if (expanded.length >= limit) break;
-    }
-
-    return expanded;
+    return expandMemoriesBySubgraphImpl(this.recallStoreBindings, seedMemories, memoryType, limit);
   }
 
   /**
@@ -4568,67 +2692,7 @@ export class DevPlanGraphStore implements IDevPlanStore {
     memoryType?: MemoryType,
     limit: number = 10,
   ): ScoredMemory[] {
-    const seenIds = new Set(seedMemories.map((m) => m.id));
-    const expanded: ScoredMemory[] = [];
-    const hopDecay = 0.7;
-
-    for (const seed of seedMemories.slice(0, 5)) {
-      const outRels = this.getOutRelations(seed.id, RT.MEMORY_RELATES);
-      const inRels = this.getInRelations(seed.id, RT.MEMORY_RELATES);
-      const allRels = [...outRels, ...inRels];
-
-      for (const rel of allRels) {
-        const neighborId = rel.source === seed.id ? rel.target : rel.source;
-        if (seenIds.has(neighborId)) continue;
-
-        const neighbor = this.graph.getEntity(neighborId);
-        if (!neighbor) continue;
-        const p = neighbor.properties as any;
-        if (p.projectName !== this.projectName) continue;
-        if (memoryType && p.memoryType !== memoryType) continue;
-
-        seenIds.add(neighborId);
-        const relWeight = rel.weight || 0.5;
-        const expandedScore = seed.score * relWeight * hopDecay;
-
-        expanded.push({
-          ...this.entityToMemory(neighbor),
-          score: expandedScore,
-          sourceKind: 'memory',
-        });
-
-        if (expanded.length >= limit) break;
-
-        // 2跳
-        const hop2OutRels = this.getOutRelations(neighborId, RT.MEMORY_RELATES);
-        const hop2InRels = this.getInRelations(neighborId, RT.MEMORY_RELATES);
-        for (const hop2Rel of [...hop2OutRels, ...hop2InRels]) {
-          const hop2Id = hop2Rel.source === neighborId ? hop2Rel.target : hop2Rel.source;
-          if (seenIds.has(hop2Id)) continue;
-
-          const hop2Entity = this.graph.getEntity(hop2Id);
-          if (!hop2Entity) continue;
-          const hp = hop2Entity.properties as any;
-          if (hp.projectName !== this.projectName) continue;
-          if (memoryType && hp.memoryType !== memoryType) continue;
-
-          seenIds.add(hop2Id);
-          const hop2Weight = hop2Rel.weight || 0.5;
-          const hop2Score = expandedScore * hop2Weight * hopDecay;
-
-          expanded.push({
-            ...this.entityToMemory(hop2Entity),
-            score: hop2Score,
-            sourceKind: 'memory',
-          });
-
-          if (expanded.length >= limit) break;
-        }
-      }
-      if (expanded.length >= limit) break;
-    }
-
-    return expanded;
+    return expandMemoriesByManualTraversalImpl(this.recallStoreBindings, seedMemories, memoryType, limit);
   }
 
   /**
@@ -4648,38 +2712,7 @@ export class DevPlanGraphStore implements IDevPlanStore {
    * 不可用时回退到 TS 层逐对 adjustRelationWeight。
    */
   private hebbianStrengthen(coActivatedMemories: ScoredMemory[]): void {
-    if (coActivatedMemories.length < 2) return;
-    const top = coActivatedMemories.slice(0, 5);
-    const ids = top.map(m => m.id);
-
-    // Phase-50: 优先使用 Rust 原生批量强化
-    try {
-      this.graph.memoryTreeStrengthen(ids);
-      return; // 成功则直接返回
-    } catch {
-      // Rust API 不可用（旧版 aifastdb），回退到 TS 实现
-    }
-
-    // 回退: TS 层逐对 adjustRelationWeight
-    const HEBBIAN_DELTA = 0.05;
-    for (let i = 0; i < ids.length; i++) {
-      for (let j = i + 1; j < ids.length; j++) {
-        const a = ids[i];
-        const b = ids[j];
-
-        const outRels = this.getOutRelations(a, RT.MEMORY_RELATES);
-        const rel = outRels.find((r: Relation) => r.target === b);
-        if (rel) {
-          this.graph.adjustRelationWeight(rel.id, a, HEBBIAN_DELTA).catch(() => { /* silent */ });
-        }
-
-        const reverseRels = this.getOutRelations(b, RT.MEMORY_RELATES);
-        const reverseRel = reverseRels.find((r: Relation) => r.target === a);
-        if (reverseRel) {
-          this.graph.adjustRelationWeight(reverseRel.id, b, HEBBIAN_DELTA).catch(() => { /* silent */ });
-        }
-      }
-    }
+    hebbianStrengthenImpl(this.recallStoreBindings, coActivatedMemories);
   }
 
   /**
@@ -5189,6 +3222,7 @@ export class DevPlanGraphStore implements IDevPlanStore {
       content: p.content || '',
       tags: p.tags || [],
       relatedTaskId: p.relatedTaskId || undefined,
+      recallProfile: p.recallProfile || undefined,
       sourceRef: p.sourceRef || undefined,
       provenance: p.provenance || undefined,
       importance: p.importance ?? 0.5,
@@ -5212,6 +3246,10 @@ export class DevPlanGraphStore implements IDevPlanStore {
     }
 
     return mem;
+  }
+
+  private resolveMemoryRecallProfile(input: MemoryInput): MemoryRecallProfile {
+    return resolveMemoryRecallProfileImpl(this.memoryWriteStoreBindings, input);
   }
 
   // ==========================================================================
@@ -5315,468 +3353,7 @@ export class DevPlanGraphStore implements IDevPlanStore {
     subSection?: string;
     limit?: number;
   }): MemoryGenerateResult {
-    const source = options?.source || 'both';
-    const limit = options?.limit || 50;
-
-    // 获取已有记忆，用于去重检查
-    const existingMemories = this.listMemories ? this.listMemories() : [];
-    const memoryByTaskId = new Set<string>();
-    const memoryBySourceId = new Set<string>();
-    const memoryContentSet = new Set<string>();
-    for (const m of existingMemories) {
-      if (m.relatedTaskId) memoryByTaskId.add(m.relatedTaskId);
-      // Phase-97: sourceRef.sourceId 去重
-      if (m.sourceRef?.sourceId) memoryBySourceId.add(m.sourceRef.sourceId);
-      // 用前 50 字符作内容指纹（fallback，对旧记忆仍有效）
-      memoryContentSet.add(m.content.slice(0, 50).toLowerCase());
-    }
-
-    const allEligible: MemoryCandidate[] = [];
-    let totalCompletedPhases = 0;
-    let totalDocuments = 0;
-    let totalModules = 0;
-    let phasesWithMemory = 0;
-    let docsWithMemory = 0;
-    let modulesWithMemory = 0;
-    let skippedWithMemory = 0;
-      const buildSkillInstructions = (
-      sourceType: 'task' | 'document',
-      sourceKey: string,
-      sourceTitle: string,
-      memoryType: MemoryType,
-      section?: string,
-    ) => {
-      const subject = sourceType === 'task'
-        ? `任务ID：${sourceKey}\n任务标题：${sourceTitle}`
-        : `文档标题：${sourceTitle}\n文档类型：${section || 'custom'}`;
-      const commonRule = `粒度规则：
-- decision/bugfix：L2 必须保留"关键代码片段 + 文件路径 + 决策/根因与修复"（若原文存在）
-- summary：2~3句概要，避免堆叠细节
-- pattern/insight/preference：1~3句核心结论 + 一个最小示例
-- 不要使用旧版 L1/L2/L3 定义，使用当前规则输出`;
-      return {
-        l1Prompt: `请生成 L1 触点摘要（15~30字，仅入口）。\n${commonRule}\n\n建议 memoryType：${memoryType}\n${subject}`,
-        l2Prompt: `请生成 L2 详细记忆。\n${commonRule}\n\n建议 memoryType：${memoryType}\n${subject}`,
-        l3Prompt: `请生成 L3 完整内容（可较长，保留结构与可追溯信息）。\n${commonRule}\n\n建议 memoryType：${memoryType}\n${subject}`,
-      };
-    };
-
-    // ========== 任务来源 ==========
-    if (source === 'tasks' || source === 'both') {
-      const allTasks = this.listMainTasks();
-      const completedTasks = options?.taskId
-        ? allTasks.filter((t) => t.taskId === options.taskId)
-        : allTasks.filter((t) => t.status === 'completed');
-
-      totalCompletedPhases = completedTasks.length;
-
-      for (const task of completedTasks) {
-        // Phase-35: 三重去重检查 — sourceRef.sourceId > relatedTaskId > tags
-        const hasMemory = memoryBySourceId.has(task.taskId) || memoryByTaskId.has(task.taskId);
-        if (hasMemory) {
-          phasesWithMemory++;
-          skippedWithMemory++;
-          continue; // 已有记忆 → 跳过不列出
-        }
-
-        // 聚合子任务列表
-        const subTasks = this.listSubTasks(task.taskId);
-        const subTaskLines = subTasks
-          .map((st) => `  - [${st.status === 'completed' ? '✅' : '⬜'}] ${st.taskId}: ${st.title}`)
-          .join('\n');
-        const commitHints = subTasks
-          .map((st) => st.completedAtCommit)
-          .filter((v): v is string => typeof v === 'string' && v.length > 0);
-        const uniqueCommitHints = Array.from(new Set(commitHints));
-        const evidenceLines = [
-          uniqueCommitHints.length > 0 ? `- commit: ${uniqueCommitHints.join(', ')}` : '',
-          `- diff 命令: git show <commit> --stat --patch`,
-          `- 日志命令: git log --oneline --decorate --graph -- ${task.taskId}`,
-        ].filter(Boolean);
-
-        const content = [
-          `## ${task.title}`,
-          `- 状态: ${task.status}`,
-          `- 优先级: ${task.priority}`,
-          task.description ? `- 描述: ${task.description}` : '',
-          task.estimatedHours ? `- 预计工时: ${task.estimatedHours}h` : '',
-          task.completedAt ? `- 完成时间: ${new Date(task.completedAt).toISOString().slice(0, 10)}` : '',
-          `- 子任务 (${task.completedSubtasks}/${task.totalSubtasks}):`,
-          subTaskLines,
-          '',
-          '### 原始材料入口',
-          ...evidenceLines,
-        ].filter(Boolean).join('\n');
-
-        // 推断重要性：P0 高优先级 → 0.8, P1 → 0.6, P2 → 0.5
-        const importanceMap: Record<string, number> = { P0: 0.8, P1: 0.6, P2: 0.5 };
-
-        // Phase-58: 同时传递完整内容 + Claude Skills 指令
-        allEligible.push({
-          sourceType: 'task',
-          sourceRef: { sourceId: task.taskId },
-          sourceTitle: task.title,
-          content,
-          contentL3: content,
-          suggestedMemoryType: 'summary',
-          suggestedImportance: importanceMap[task.priority] || 0.6,
-          suggestedTags: [task.taskId, task.priority],
-          hasExistingMemory: false,
-          skillInstructions: buildSkillInstructions('task', task.taskId, task.title, 'summary'),
-          rawEvidence: {
-            commitIds: uniqueCommitHints,
-            commandHints: [
-              'git show <commit> --stat --patch',
-              `git log --oneline --decorate --graph -- ${task.taskId}`,
-            ],
-            notes: [
-              '若需高保真 L3，请结合 commit diff 与执行日志，而非仅依赖任务摘要。',
-            ],
-          },
-        });
-      }
-    }
-
-    // ========== 功能模块来源 ==========
-    if (source === 'modules' || source === 'both') {
-      const modules = this.listModules();
-      totalModules = modules.length;
-
-      for (const mod of modules) {
-        const moduleKey = `module:${mod.moduleId}`;
-        const hasMemory = memoryBySourceId.has(moduleKey) || memoryBySourceId.has(mod.moduleId);
-        if (hasMemory) {
-          modulesWithMemory++;
-          skippedWithMemory++;
-          continue;
-        }
-
-        const moduleTasks = this.listMainTasks({ moduleId: mod.moduleId });
-        const moduleDocs = this.listSections().filter((d) => d.moduleId === mod.moduleId);
-
-        const taskLines = moduleTasks.slice(0, 8).map((t) => `  - ${t.taskId}: ${t.title}`);
-        const docLines = moduleDocs.slice(0, 8).map((d) => {
-          const docKey = d.subSection ? `${d.section}|${d.subSection}` : d.section;
-          return `  - ${docKey}: ${d.title}`;
-        });
-
-        const content = [
-          `## 模块：${mod.name}`,
-          `- 模块ID: ${mod.moduleId}`,
-          `- 状态: ${mod.status}`,
-          mod.description ? `- 描述: ${mod.description}` : '',
-          `- 关联主任务: ${mod.mainTaskCount}`,
-          `- 关联子任务: ${mod.completedSubTaskCount}/${mod.subTaskCount}`,
-          `- 关联文档: ${mod.docCount}`,
-          '',
-          '### 任务概览',
-          taskLines.length > 0 ? taskLines.join('\n') : '  - （无）',
-          '',
-          '### 文档概览',
-          docLines.length > 0 ? docLines.join('\n') : '  - （无）',
-        ].filter(Boolean).join('\n');
-
-        allEligible.push({
-          sourceType: 'module',
-          sourceRef: { sourceId: moduleKey },
-          sourceTitle: mod.name,
-          content,
-          contentL3: content,
-          suggestedMemoryType: 'summary',
-          suggestedImportance: mod.status === 'completed' ? 0.7 : 0.6,
-          suggestedTags: ['module', mod.moduleId, mod.status],
-          hasExistingMemory: false,
-          skillInstructions: buildSkillInstructions('document', moduleKey, mod.name, 'summary', 'core_concepts'),
-        });
-      }
-    }
-
-    // ========== 文档来源 ==========
-    if (source === 'docs' || source === 'both') {
-      let docs = this.listSections();
-
-      // 可选过滤
-      if (options?.section) {
-        docs = docs.filter((d) => d.section === options.section);
-        if (options?.subSection) {
-          docs = docs.filter((d) => d.subSection === options.subSection);
-        }
-      }
-
-      totalDocuments = docs.length;
-
-      // section → suggestedMemoryType 映射
-      const sectionToMemoryType: Record<string, MemoryType> = {
-        overview: 'summary',
-        core_concepts: 'pattern',
-        api_design: 'pattern',
-        file_structure: 'pattern',
-        config: 'preference',
-        examples: 'pattern',
-        technical_notes: 'insight',
-        api_endpoints: 'pattern',
-        milestones: 'summary',
-        changelog: 'summary',
-        custom: 'insight',
-      };
-
-      // section → suggestedImportance 映射
-      const sectionToImportance: Record<string, number> = {
-        overview: 0.7,
-        core_concepts: 0.8,
-        api_design: 0.7,
-        file_structure: 0.5,
-        config: 0.5,
-        examples: 0.4,
-        technical_notes: 0.7,
-        api_endpoints: 0.5,
-        milestones: 0.6,
-        changelog: 0.4,
-        custom: 0.5,
-      };
-
-      for (const doc of docs) {
-        const docKey = doc.subSection
-          ? `${doc.section}|${doc.subSection}`
-          : doc.section;
-
-        // Phase-35: 三重去重检查 — sourceRef.sourceId（最可靠） > 内容指纹（fallback）
-        const hasMemoryBySourceId = memoryBySourceId.has(docKey);
-        const contentFingerprint = doc.content.slice(0, 50).toLowerCase();
-        const hasMemoryByFingerprint = memoryContentSet.has(contentFingerprint);
-        const hasMemory = hasMemoryBySourceId || hasMemoryByFingerprint;
-        if (hasMemory) {
-          docsWithMemory++;
-          skippedWithMemory++;
-          continue; // 已有记忆 → 跳过不列出
-        }
-
-        // 截取内容摘要（最多 800 字符，保留完整行）
-        let contentPreview = doc.content;
-        if (contentPreview.length > 800) {
-          contentPreview = contentPreview.slice(0, 800);
-          const lastNewline = contentPreview.lastIndexOf('\n');
-          if (lastNewline > 400) contentPreview = contentPreview.slice(0, lastNewline);
-          contentPreview += '\n... (内容截断，完整文档可通过 devplan_get_section 获取)';
-        }
-
-        const content = [
-          `## ${doc.title}`,
-          `- 文档类型: ${doc.section}${doc.subSection ? ' → ' + doc.subSection : ''}`,
-          `- 版本: ${doc.version}`,
-          doc.relatedTaskIds?.length
-            ? `- 关联任务: ${doc.relatedTaskIds.join(', ')}`
-            : '',
-          `\n### 内容摘要\n`,
-          contentPreview,
-        ].filter(Boolean).join('\n');
-
-        const suggestedType = sectionToMemoryType[doc.section] || 'insight';
-        const suggestedImportance = sectionToImportance[doc.section] || 0.5;
-
-        // 从标题推断更精确的类型
-        const titleLower = doc.title.toLowerCase();
-        let refinedType = suggestedType;
-        if (titleLower.includes('决策') || titleLower.includes('decision') || titleLower.includes('选择'))
-          refinedType = 'decision';
-        else if (titleLower.includes('修复') || titleLower.includes('fix') || titleLower.includes('bug'))
-          refinedType = 'bugfix';
-        else if (titleLower.includes('优化') || titleLower.includes('性能') || titleLower.includes('performance'))
-          refinedType = 'insight';
-
-        const tags: string[] = [doc.section];
-        if (doc.subSection) tags.push(doc.subSection);
-        if (doc.relatedTaskIds) tags.push(...doc.relatedTaskIds);
-
-        // Phase-58: 同时传递原始完整内容 + Claude Skills 指令
-        const fullDocContent = doc.content;
-        allEligible.push({
-          sourceType: 'document',
-          sourceRef: { sourceId: docKey },
-          sourceTitle: doc.title,
-          content,
-          contentL3: fullDocContent,
-          suggestedMemoryType: refinedType,
-          suggestedImportance: suggestedImportance,
-          suggestedTags: tags,
-          hasExistingMemory: false,
-          skillInstructions: buildSkillInstructions('document', docKey, doc.title, refinedType, doc.section),
-        });
-      }
-    }
-
-    // ========== Phase-44: 构建 suggestedRelations ==========
-    // 为候选项之间推断关联关系，帮助 AI 用 applyMutations 构建记忆子图
-    const candidateIdSet = new Set(allEligible.map(c => c.sourceRef.sourceId));
-
-    for (const candidate of allEligible) {
-      const relations: Array<{ relationType: string; targetSourceRef: string; weight?: number; reason?: string }> = [];
-      const candidateSourceId = candidate.sourceRef.sourceId;
-
-      if (candidate.sourceType === 'task') {
-        // 任务 → 关联文档: DERIVED_FROM
-        const taskEntity = this.listMainTasks().find(t => t.taskId === candidateSourceId);
-        if (taskEntity?.relatedSections) {
-          for (const docRef of taskEntity.relatedSections) {
-            if (candidateIdSet.has(docRef)) {
-              relations.push({ targetSourceRef: docRef, relationType: 'mem:DERIVED_FROM', weight: 0.7, reason: 'task references this document' });
-            }
-          }
-        }
-        // 任务 → 同模块任务: RELATES
-        if (taskEntity?.moduleId) {
-          for (const other of allEligible) {
-            if (other.sourceRef.sourceId !== candidateSourceId && other.sourceType === 'task') {
-              const otherTask = this.listMainTasks().find(t => t.taskId === other.sourceRef.sourceId);
-              if (otherTask?.moduleId === taskEntity.moduleId) {
-                relations.push({ targetSourceRef: other.sourceRef.sourceId, relationType: 'mem:RELATES', weight: 0.5, reason: `same module: ${taskEntity.moduleId}` });
-              }
-            }
-          }
-        }
-        // 任务 → 相邻阶段: TEMPORAL_NEXT (phase-N → phase-N+1)
-        const phaseMatch = candidateSourceId.match(/^phase-(\d+)/);
-        if (phaseMatch) {
-          const nextPhaseId = `phase-${parseInt(phaseMatch[1]) + 1}`;
-          if (candidateIdSet.has(nextPhaseId)) {
-            relations.push({ targetSourceRef: nextPhaseId, relationType: 'mem:TEMPORAL_NEXT', weight: 0.6, reason: 'consecutive phases' });
-          }
-        }
-      } else if (candidate.sourceType === 'document') {
-        // 文档 → 关联任务: DERIVED_FROM
-        const docEntity = this.listSections().find(d => {
-          const key = d.subSection ? `${d.section}|${d.subSection}` : d.section;
-          return key === candidateSourceId;
-        });
-        if (docEntity?.relatedTaskIds) {
-          for (const taskId of docEntity.relatedTaskIds) {
-            if (candidateIdSet.has(taskId)) {
-              relations.push({ targetSourceRef: taskId, relationType: 'mem:DERIVED_FROM', weight: 0.7, reason: 'document references this task' });
-            }
-          }
-        }
-        // 文档 → 父文档: CONTAINS (反向)
-        if (docEntity?.parentDoc) {
-          if (candidateIdSet.has(docEntity.parentDoc)) {
-            relations.push({ targetSourceRef: docEntity.parentDoc, relationType: 'mem:CONTAINS', weight: 0.8, reason: 'child document of parent' });
-          }
-        }
-        // 文档 → 同section文档: RELATES
-        if (docEntity) {
-          for (const other of allEligible) {
-            if (other.sourceRef.sourceId !== candidateSourceId && other.sourceType === 'document') {
-              const otherDoc = this.listSections().find(d => {
-                const key = d.subSection ? `${d.section}|${d.subSection}` : d.section;
-                return key === other.sourceRef.sourceId;
-              });
-              if (otherDoc && otherDoc.section === docEntity.section && otherDoc.subSection !== docEntity.subSection) {
-                relations.push({ targetSourceRef: other.sourceRef.sourceId, relationType: 'mem:RELATES', weight: 0.4, reason: `same section: ${docEntity.section}` });
-              }
-            }
-          }
-        }
-      }
-
-      if (relations.length > 0) {
-        candidate.suggestedRelations = relations;
-      }
-    }
-
-    // ========== Phase-57: 为候选项匹配触点 + 推断变更类型 ==========
-    const g57 = this.graph as any;
-    const hasAnchorApi = this.nativeAnchorExtractReady
-      && typeof g57.anchorFindByName === 'function';
-
-    if (hasAnchorApi) {
-      for (const candidate of allEligible) {
-        try {
-          // Step 1: 从内容中提取潜在触点名称
-          const extracted: NativeExtractedAnchor[] = g57.anchorExtractFromText(candidate.content);
-          if (!extracted || extracted.length === 0) continue;
-
-          // 取置信度最高的
-          const best = extracted.reduce(
-            (a: NativeExtractedAnchor, b: NativeExtractedAnchor) => a.confidence > b.confidence ? a : b,
-          );
-
-          // Step 2: 尝试匹配已有触点
-          let existingAnchor: NativeAnchorInfo | null = null;
-          try {
-            existingAnchor = g57.anchorFindByName(best.name);
-          } catch { /* 未找到 → null */ }
-
-          candidate.suggestedAnchor = best.name;
-          candidate.suggestedAnchorType = best.suggested_type || ANCHOR_TYPES.CONCEPT;
-          candidate.hasExistingAnchor = !!existingAnchor;
-
-          // Step 3: 推断变更类型
-          if (!existingAnchor) {
-            // 全新触点 → created
-            candidate.suggestedChangeType = CHANGE_TYPES.CREATED;
-          } else {
-            // 已有触点 → 判断是 upgraded 还是 modified
-            const contentLower = candidate.content.toLowerCase();
-            const upgradeKeywords = ['升级', 'upgrade', '增强', 'enhance', '重构', 'refactor', '新增', '扩展', 'extend', 'v2', 'v3'];
-            const isUpgrade = upgradeKeywords.some(kw => contentLower.includes(kw));
-            candidate.suggestedChangeType = isUpgrade ? CHANGE_TYPES.UPGRADED : CHANGE_TYPES.MODIFIED;
-          }
-        } catch (e) {
-          // 触点提取失败不影响候选项的其他信息
-          console.warn(`[DevPlan] anchor extraction failed for candidate ${candidate.sourceRef.sourceId}: ${e instanceof Error ? e.message : String(e)}`);
-        }
-      }
-    } else {
-      // NAPI 不可用时，使用简单的标题/内容启发式推断
-      for (const candidate of allEligible) {
-        try {
-          const title = candidate.sourceTitle;
-          // 从任务标题中提取触点名称（如 "Phase 14: 向量存储支持" → "向量存储支持"）
-          const phaseMatch = title.match(/^Phase\s*[-:]?\s*\d+[A-Za-z]?\s*[:：]\s*(.+)/i);
-          const sectionMatch = title.match(/^(.+?)(?:\s*[-—]\s*.+)?$/);
-
-          let anchorName: string | undefined;
-          if (candidate.sourceType === 'task' && phaseMatch) {
-            anchorName = phaseMatch[1].trim();
-          } else if (candidate.sourceType === 'document' && sectionMatch) {
-            anchorName = sectionMatch[1].trim();
-          }
-
-          if (anchorName && anchorName.length >= 2 && anchorName.length <= 50) {
-            candidate.suggestedAnchor = anchorName;
-            // 根据来源类型推断触点类型
-            if (candidate.sourceType === 'task') {
-              candidate.suggestedAnchorType = ANCHOR_TYPES.FEATURE;
-              candidate.suggestedChangeType = CHANGE_TYPES.CREATED;
-            } else {
-              candidate.suggestedAnchorType = ANCHOR_TYPES.CONCEPT;
-              candidate.suggestedChangeType = CHANGE_TYPES.CREATED;
-            }
-            candidate.hasExistingAnchor = false;
-          }
-        } catch {
-          // 静默忽略
-        }
-      }
-    }
-
-    // 按 limit 截取，计算 remaining
-    const candidates = allEligible.slice(0, limit);
-    const remaining = Math.max(0, allEligible.length - limit);
-
-    return {
-      candidates,
-      stats: {
-        totalCompletedPhases,
-        totalDocuments,
-        totalModules,
-        phasesWithMemory,
-        docsWithMemory,
-        modulesWithMemory,
-        skippedWithMemory,
-        candidatesReturned: candidates.length,
-        remaining,
-      },
-    };
+    return generateMemoryCandidatesImpl(this.memoryWriteStoreBindings, options);
   }
 
   // ==========================================================================
@@ -5880,52 +3457,7 @@ export class DevPlanGraphStore implements IDevPlanStore {
   }
 
   syncWithGit(dryRun: boolean = false): SyncGitResult {
-    const currentHead = getCurrentGitCommitUtil(this.gitCwd);
-
-    if (!currentHead) {
-      return {
-        checked: 0,
-        reverted: [],
-        currentHead: 'unknown',
-        error: 'Git not available or not in a Git repository',
-      };
-    }
-
-    const mainTasks = this.listMainTasks();
-    const reverted: RevertedTask[] = [];
-    let checked = 0;
-
-    for (const mt of mainTasks) {
-      const subs = this.listSubTasks(mt.taskId);
-      for (const sub of subs) {
-        if (sub.status !== 'completed' || !sub.completedAtCommit) continue;
-        checked++;
-
-        if (!isAncestorUtil(sub.completedAtCommit, currentHead, this.gitCwd)) {
-          const reason = `Commit ${sub.completedAtCommit} not found in current branch (HEAD: ${currentHead})`;
-
-          if (!dryRun) {
-            this.updateSubTaskStatus(sub.taskId, 'pending', { revertReason: reason });
-            this.refreshMainTaskCounts(sub.parentTaskId);
-
-            const parentMain = this.getMainTask(sub.parentTaskId);
-            if (parentMain && parentMain.status === 'completed') {
-              this.updateMainTaskStatus(sub.parentTaskId, 'in_progress');
-            }
-          }
-
-          reverted.push({
-            taskId: sub.taskId,
-            title: sub.title,
-            parentTaskId: sub.parentTaskId,
-            completedAtCommit: sub.completedAtCommit,
-            reason,
-          });
-        }
-      }
-    }
-
-    return { checked, reverted, currentHead };
+    return syncWithGitImpl(this.gitStoreBindings, dryRun);
   }
 
   // ==========================================================================
@@ -5945,400 +3477,7 @@ export class DevPlanGraphStore implements IDevPlanStore {
     includePrompts?: boolean;
     includeMemories?: boolean;
   }): DevPlanExportedGraph {
-    const includeDocuments = options?.includeDocuments !== false;
-    const includeModules = options?.includeModules !== false;
-    const includeNodeDegree = options?.includeNodeDegree !== false;
-    const enableBackendDegreeFallback = options?.enableBackendDegreeFallback !== false;
-    const includePrompts = options?.includePrompts !== false;
-    const includeMemories = options?.includeMemories !== false;
-
-    const nodes: DevPlanGraphNode[] = [];
-    const edges: DevPlanGraphEdge[] = [];
-
-    // 项目根节点
-    nodes.push({
-      id: this.getProjectId(),
-      label: this.projectName,
-      type: 'project',
-      properties: { entityType: ET.PROJECT },
-    });
-
-    // 主任务节点
-    const mainTasks = this.listMainTasks();
-    for (const mt of mainTasks) {
-      nodes.push({
-        id: mt.id,
-        label: mt.title,
-        type: 'main-task',
-        properties: {
-          taskId: mt.taskId,
-          priority: mt.priority,
-          status: mt.status,
-          totalSubtasks: mt.totalSubtasks,
-          completedSubtasks: mt.completedSubtasks,
-          completedAt: mt.completedAt || null,
-        },
-      });
-      edges.push({
-        from: this.getProjectId(),
-        to: mt.id,
-        label: RT.HAS_MAIN_TASK,
-      });
-
-      // 子任务节点
-      const subTasks = this.listSubTasks(mt.taskId);
-      for (const st of subTasks) {
-        nodes.push({
-          id: st.id,
-          label: st.title,
-          type: 'sub-task',
-          properties: {
-            taskId: st.taskId,
-            parentTaskId: st.parentTaskId,
-            status: st.status,
-            completedAt: st.completedAt || null,
-          },
-        });
-        edges.push({
-          from: mt.id,
-          to: st.id,
-          label: RT.HAS_SUB_TASK,
-        });
-      }
-
-      // task -> doc 关系
-      const taskDocRels = this.getOutRelations(mt.id, RT.TASK_HAS_DOC);
-      for (const rel of taskDocRels) {
-        edges.push({
-          from: mt.id,
-          to: rel.target,
-          label: RT.TASK_HAS_DOC,
-        });
-      }
-
-      // task -> prompt 关系
-      if (includePrompts) {
-        const taskPromptRels = this.getOutRelations(mt.id, RT.TASK_HAS_PROMPT);
-        for (const rel of taskPromptRels) {
-          edges.push({
-            from: mt.id,
-            to: rel.target,
-            label: RT.TASK_HAS_PROMPT,
-          });
-        }
-      }
-    }
-
-    // Prompt 节点（默认包含，项目图谱页面可传 includePrompts=false 排除）
-    if (includePrompts) {
-      const prompts = this.listPrompts();
-      for (const prompt of prompts) {
-        nodes.push({
-          id: prompt.id,
-          label: `Prompt #${prompt.promptIndex}`,
-          type: 'prompt',
-          properties: {
-            promptIndex: prompt.promptIndex,
-            summary: prompt.summary || '',
-            relatedTaskId: prompt.relatedTaskId || null,
-            createdAt: prompt.createdAt,
-          },
-        });
-        edges.push({
-          from: this.getProjectId(),
-          to: prompt.id,
-          label: RT.HAS_PROMPT,
-        });
-      }
-    }
-
-    // Memory 节点（Phase-68: 可通过 includeMemories 控制是否导出）
-    if (includeMemories) {
-      const memories = this.listMemories ? this.listMemories() : [];
-      const memoryIdSet = new Set<string>();
-      for (const mem of memories) {
-        memoryIdSet.add(mem.id);
-        const label = `${mem.memoryType}: ${mem.content.slice(0, 30)}...`;
-        nodes.push({
-          id: mem.id,
-          label,
-          type: 'memory',
-          properties: {
-            memoryType: mem.memoryType,
-            importance: mem.importance,
-            hitCount: mem.hitCount,
-            tags: mem.tags || [],
-            createdAt: mem.createdAt,
-          },
-        });
-        edges.push({
-          from: this.getProjectId(),
-          to: mem.id,
-          label: RT.HAS_MEMORY,
-        });
-        // memory → task 边
-        if (mem.relatedTaskId) {
-          const taskEntity = this.findEntityByProp(ET.MAIN_TASK, 'taskId', mem.relatedTaskId);
-          if (taskEntity) {
-            edges.push({
-              from: mem.id,
-              to: taskEntity.id,
-              label: RT.MEMORY_FROM_TASK,
-            });
-          }
-        }
-      }
-
-      // Phase-37/51: 记忆网络关系 — MEMORY_RELATES / MEMORY_FROM_DOC / MODULE_MEMORY / MEMORY_SUPERSEDES / MEMORY_CONFLICTS
-      const memoryRelTypes = [RT.MEMORY_RELATES, RT.MEMORY_FROM_DOC, RT.MODULE_MEMORY, RT.MEMORY_SUPERSEDES, RT.MEMORY_CONFLICTS];
-      const edgeDedup = new Set<string>();
-      for (const memId of memoryIdSet) {
-        for (const relType of memoryRelTypes) {
-          const rels = this.getOutRelations(memId, relType);
-          for (const rel of rels) {
-            const key = `${rel.source}-${rel.target}-${relType}`;
-            if (edgeDedup.has(key)) continue;
-            edgeDedup.add(key);
-            edges.push({
-              from: rel.source,
-              to: rel.target,
-              label: relType,
-              properties: rel.weight != null ? { weight: rel.weight } : undefined,
-            });
-          }
-          // 也检查入边（双向关系如 MEMORY_RELATES 的另一方向）
-          const inRels = this.getInRelations(memId, relType);
-          for (const rel of inRels) {
-            const key = `${rel.source}-${rel.target}-${relType}`;
-            if (edgeDedup.has(key)) continue;
-            edgeDedup.add(key);
-            edges.push({
-              from: rel.source,
-              to: rel.target,
-              label: relType,
-              properties: rel.weight != null ? { weight: rel.weight } : undefined,
-            });
-          }
-        }
-      }
-    }
-
-    // 文档节点
-    if (includeDocuments) {
-      const docs = this.listSections();
-      for (const doc of docs) {
-        nodes.push({
-          id: doc.id,
-          label: doc.title,
-          type: 'document',
-          properties: {
-            section: doc.section,
-            subSection: doc.subSection,
-            version: doc.version,
-            parentDoc: doc.parentDoc || null,
-            childDocs: doc.childDocs || [],
-          },
-        });
-
-        // 子文档不连接项目节点，仅通过 doc_has_child 连接父文档
-        if (!doc.parentDoc) {
-          edges.push({
-            from: this.getProjectId(),
-            to: doc.id,
-            label: RT.HAS_DOCUMENT,
-          });
-        }
-
-        // doc_has_child 关系（文档 → 子文档）
-        if (doc.childDocs?.length) {
-          const docEntity = this.findDocEntityBySection(doc.section, doc.subSection);
-          if (docEntity) {
-            const childRels = this.getOutRelations(docEntity.id, RT.DOC_HAS_CHILD);
-            for (const rel of childRels) {
-              edges.push({
-                from: doc.id,
-                to: rel.target,
-                label: RT.DOC_HAS_CHILD,
-              });
-            }
-          }
-        }
-      }
-    }
-
-    // 模块节点
-    if (includeModules) {
-      const modules = this.listModules();
-      for (const mod of modules) {
-        nodes.push({
-          id: mod.id,
-          label: mod.name,
-          type: 'module',
-          properties: {
-            moduleId: mod.moduleId,
-            status: mod.status,
-            mainTaskCount: mod.mainTaskCount,
-          },
-        });
-
-        // 项目→模块 关系（确保每个模块都与项目节点相连，不会成为孤立节点）
-        edges.push({
-          from: this.getProjectId(),
-          to: mod.id,
-          label: RT.HAS_MODULE,
-        });
-
-        // 模块→主任务 关系
-        const moduleTasks = this.listMainTasks({ moduleId: mod.moduleId });
-        for (const mt of moduleTasks) {
-          edges.push({
-            from: mod.id,
-            to: mt.id,
-            label: RT.MODULE_HAS_TASK,
-          });
-        }
-      }
-    }
-
-    // Phase-41: 记忆节点 + 全部记忆关系
-    const allMemoryEntities = this.findEntitiesByType(ET.MEMORY)
-      .filter((e) => (e.properties as any).projectName === this.projectName);
-
-    for (const memEntity of allMemoryEntities) {
-      const mem = this.entityToMemory(memEntity);
-      nodes.push({
-        id: mem.id,
-        label: `${mem.memoryType}: ${mem.content.slice(0, 30)}...`,
-        type: 'memory',
-        properties: {
-          memoryType: mem.memoryType,
-          content: mem.content.length > 120 ? mem.content.slice(0, 120) + '...' : mem.content,
-          importance: mem.importance,
-          hitCount: mem.hitCount,
-          tags: mem.tags,
-          relatedTaskId: mem.relatedTaskId || null,
-          sourceRef: mem.sourceRef || null,
-          provenance: mem.provenance || null,
-        },
-      });
-
-      // project → memory (HAS_MEMORY)
-      edges.push({
-        from: this.getProjectId(),
-        to: mem.id,
-        label: RT.HAS_MEMORY,
-      });
-
-      // memory → task (MEMORY_FROM_TASK)
-      if (mem.relatedTaskId) {
-        const taskEntity = this.findEntityByProp(ET.MAIN_TASK, 'taskId', mem.relatedTaskId);
-        if (taskEntity) {
-          edges.push({
-            from: mem.id,
-            to: taskEntity.id,
-            label: RT.MEMORY_FROM_TASK,
-          });
-        }
-      }
-
-      // memory ↔ memory (MEMORY_RELATES，仅导出出向避免重复)
-      const memRelates = this.getOutRelations(mem.id, RT.MEMORY_RELATES);
-      for (const rel of memRelates) {
-        // 仅导出 source < target 的一侧，避免双向重复
-        if (mem.id < rel.target) {
-          edges.push({
-            from: mem.id,
-            to: rel.target,
-            label: RT.MEMORY_RELATES,
-            properties: rel.weight != null ? { weight: rel.weight } : undefined,
-          });
-        }
-      }
-
-      // doc → memory (MEMORY_FROM_DOC，反向查找)
-      const fromDocRels = this.getInRelations(mem.id, RT.MEMORY_FROM_DOC);
-      for (const rel of fromDocRels) {
-        edges.push({
-          from: rel.source,
-          to: mem.id,
-          label: RT.MEMORY_FROM_DOC,
-        });
-      }
-
-      // module → memory (MODULE_MEMORY，反向查找)
-      const moduleMemRels = this.getInRelations(mem.id, RT.MODULE_MEMORY);
-      for (const rel of moduleMemRels) {
-        edges.push({
-          from: rel.source,
-          to: mem.id,
-          label: RT.MODULE_MEMORY,
-        });
-      }
-
-      // memory → memory (MEMORY_SUPERSEDES)
-      const supersedesRels = this.getOutRelations(mem.id, RT.MEMORY_SUPERSEDES);
-      for (const rel of supersedesRels) {
-        edges.push({
-          from: mem.id,
-          to: rel.target,
-          label: RT.MEMORY_SUPERSEDES,
-        });
-      }
-
-      // memory → memory (MEMORY_CONFLICTS)
-      const conflictsRels = this.getOutRelations(mem.id, RT.MEMORY_CONFLICTS);
-      for (const rel of conflictsRels) {
-        edges.push({
-          from: mem.id,
-          to: rel.target,
-          label: RT.MEMORY_CONFLICTS,
-        });
-      }
-    }
-
-    if (includeNodeDegree) {
-      // 优先走 SocialGraphV2 原生 exportGraph(includeNodeDegree) 的 degree 结果
-      const nativeDegreeMap: Record<string, number> = {};
-      try {
-        const nativeGraph = this.graph.exportGraph({
-          includeNodeDegree: true,
-          includeEdgeMeta: false,
-          // 适当放大导出上限，避免默认上限导致节点被截断
-          maxNodes: Math.max(nodes.length * 2, 2000),
-          maxEdges: Math.max(edges.length * 2, 4000),
-        } as any) as any;
-
-        const nativeNodes = Array.isArray(nativeGraph?.nodes) ? nativeGraph.nodes : [];
-        for (const n of nativeNodes) {
-          if (typeof n?.id !== 'string') continue;
-          if (typeof n?.degree === 'number' && Number.isFinite(n.degree)) {
-            nativeDegreeMap[n.id] = n.degree;
-          }
-        }
-      } catch {
-        // 当原生导出异常时，交给后续兜底逻辑处理
-      }
-
-      const edgeDegreeMap: Record<string, number> = {};
-      if (enableBackendDegreeFallback) {
-        for (const node of nodes) edgeDegreeMap[node.id] = 0;
-        for (const edge of edges) {
-          if (edgeDegreeMap[edge.from] !== undefined) edgeDegreeMap[edge.from] += 1;
-          if (edgeDegreeMap[edge.to] !== undefined) edgeDegreeMap[edge.to] += 1;
-        }
-      }
-
-      for (const node of nodes) {
-        const nativeDegree = nativeDegreeMap[node.id];
-        if (typeof nativeDegree === 'number' && Number.isFinite(nativeDegree)) {
-          node.degree = nativeDegree;
-          continue;
-        }
-        node.degree = enableBackendDegreeFallback ? (edgeDegreeMap[node.id] || 0) : 0;
-      }
-    }
-
-    return { nodes, edges };
+    return exportGraphImpl(this.visualizeStoreBindings, options);
   }
 
   /**
@@ -6362,119 +3501,7 @@ export class DevPlanGraphStore implements IDevPlanStore {
       entityTypes?: string[];
     }
   ): DevPlanPaginatedGraph {
-    const includeDocuments = options?.includeDocuments !== false;
-    const includeModules = options?.includeModules !== false;
-    const includeNodeDegree = options?.includeNodeDegree !== false;
-
-    // Build entity type filter for Rust layer
-    const entityTypes: string[] = [];
-    entityTypes.push(ET.PROJECT, ET.MAIN_TASK, ET.SUB_TASK);
-    if (includeDocuments) entityTypes.push(ET.DOC);
-    if (includeModules) entityTypes.push(ET.MODULE);
-    if (options?.entityTypes?.length) {
-      // Use user-specified filter if provided
-      entityTypes.length = 0;
-      entityTypes.push(...options.entityTypes);
-    }
-
-    try {
-      // Call Rust SocialGraphV2.exportGraphPaginated via NAPI
-      // Phase-46: 移除 as any 断言 — aifastdb ≥2.8.0 已有正式类型
-      const result = this.graph.exportGraphPaginated({
-        offset,
-        limit,
-        entityTypes,
-        includeNodeDegree,
-        includeEdgeMeta: false,
-      });
-
-      if (result && typeof result === 'object') {
-        const rustNodes: any[] = result.nodes || [];
-        const rustEdges: any[] = result.edges || [];
-
-        // Transform Rust GraphNode -> DevPlanGraphNode
-        // Rust GraphNode only carries `group: NodeGroup` (numeric 0/1/2) — all DevPlan
-        // entities map to Tag(2), losing type information. We must resolve entity_type
-        // via getEntity() for correct visualization (module=diamond, doc=box, etc.).
-        const currentProjectId = this.getProjectId();
-        const nodes: DevPlanGraphNode[] = [];
-        for (const n of rustNodes) {
-          const data = n.data || {};
-          // Try multiple sources for entity_type string
-          let etStr: string | undefined = n.entity_type || n.entityType
-            || data.entity_type || data.entityType;
-          // If still not found, look up the actual entity (fast hash lookup)
-          if (!etStr || typeof etStr !== 'string') {
-            try {
-              const entity = this.graph.getEntity(n.id);
-              if (entity) {
-                etStr = entity.entity_type;
-              }
-            } catch { /* ignore — fall through to group */ }
-          }
-          const devPlanType = mapGroupToDevPlanTypeUtil(etStr || n.group);
-
-          // Filter out project nodes that don't belong to the current project.
-          // The Rust layer returns ALL entities matching the type filter, which may
-          // include stale project nodes from other projects (e.g. "devplan-db").
-          if (devPlanType === 'project' && n.id !== currentProjectId) {
-            continue;
-          }
-
-          nodes.push({
-            id: n.id,
-            label: n.label || n.id,
-            type: devPlanType,
-            degree: includeNodeDegree ? (n.degree ?? 0) : undefined,
-            properties: data,
-          });
-        }
-
-        // Transform Rust GraphEdge -> DevPlanGraphEdge
-        const edges: DevPlanGraphEdge[] = rustEdges.map((e: any) => ({
-          from: e.from,
-          to: e.to,
-          label: e.label || e.relation_type || '',
-        }));
-
-        return {
-          nodes,
-          edges,
-          totalNodes: result.totalNodes ?? nodes.length,
-          totalEdges: result.totalEdges ?? edges.length,
-          offset: result.offset ?? offset,
-          limit: result.limit ?? limit,
-          hasMore: result.hasMore ?? false,
-        };
-      }
-    } catch {
-      // If NAPI method not available, fall back to in-memory pagination
-    }
-
-    // Fallback: full load + in-memory pagination
-    const fullGraph = this.exportGraph({
-      includeDocuments,
-      includeModules,
-      includeNodeDegree,
-      enableBackendDegreeFallback: true,
-    });
-
-    const allNodes = fullGraph.nodes;
-    const pageNodes = allNodes.slice(offset, offset + limit);
-    const pageNodeIds = new Set(pageNodes.map((n) => n.id));
-    const pageEdges = fullGraph.edges.filter(
-      (e) => pageNodeIds.has(e.from) && pageNodeIds.has(e.to)
-    );
-
-    return {
-      nodes: pageNodes,
-      edges: pageEdges,
-      totalNodes: allNodes.length,
-      totalEdges: fullGraph.edges.length,
-      offset,
-      limit,
-      hasMore: offset + limit < allNodes.length,
-    };
+    return exportGraphPaginatedImpl(this.visualizeStoreBindings, offset, limit, options);
   }
 
   /**
@@ -6486,22 +3513,7 @@ export class DevPlanGraphStore implements IDevPlanStore {
    * @returns Node.js Buffer 或 null (如果 NAPI 方法不可用)
    */
   exportGraphCompact(): Buffer | null {
-    try {
-      // Phase-46: 移除 as any 断言 — aifastdb ≥2.8.0 已有正式类型
-      const buf = this.graph.exportGraphCompact({
-        maxNodes: 1000000,
-        includeTags: true,
-        includeCompanies: true,
-        includeNodeDegree: true,
-        includeEdgeMeta: false,
-      });
-      if (buf && buf.length > 16) {
-        return buf;
-      }
-    } catch {
-      // NAPI method not available
-    }
-    return null;
+    return exportGraphCompactImpl(this.visualizeStoreBindings);
   }
 
   /**
@@ -6513,26 +3525,7 @@ export class DevPlanGraphStore implements IDevPlanStore {
    * @returns 聚合结果或 null (如果 NAPI 方法不可用)
    */
   getEntityGroupSummary(): EntityGroupAggregation | null {
-    try {
-      // Phase-46: 移除 as any 断言 — aifastdb ≥2.8.0 已有正式类型
-      const result = this.graph.getEntityGroupSummary();
-      if (result && typeof result === 'object') {
-        // Phase-46: result.groups 是 Record<string, GroupSummary>，转换为 DevPlan 格式
-        const groupEntries = Object.entries(result.groups || {});
-        return {
-          groups: groupEntries.map(([entityType, summary]) => ({
-            entityType,
-            count: summary.count ?? 0,
-            sampleIds: summary.sampleIds ?? [],
-          })),
-          totalEntities: result.totalEntities ?? 0,
-          totalRelations: result.totalRelations ?? 0,
-        };
-      }
-    } catch {
-      // NAPI method not available
-    }
-    return null;
+    return getEntityGroupSummaryImpl(this.visualizeStoreBindings);
   }
 
   // ==========================================================================
@@ -6543,32 +3536,14 @@ export class DevPlanGraphStore implements IDevPlanStore {
    * 获取下一个主任务的 order 值（当前最大 order + 1）
    */
   private getNextMainTaskOrder(): number {
-    const entities = this.findEntitiesByType(ET.MAIN_TASK);
-    let maxOrder = 0;
-    for (const e of entities) {
-      const o = (e.properties as any).order;
-      if (typeof o === 'number' && o > maxOrder) {
-        maxOrder = o;
-      }
-    }
-    return maxOrder + 1;
+    return getNextMainTaskOrderImpl(this.taskStoreBindings);
   }
 
   /**
    * 获取下一个子任务的 order 值（当前父任务下最大 order + 1）
    */
   private getNextSubTaskOrder(parentTaskId: string): number {
-    const entities = this.findEntitiesByType(ET.SUB_TASK).filter(
-      (e) => (e.properties as any).parentTaskId === parentTaskId
-    );
-    let maxOrder = 0;
-    for (const e of entities) {
-      const o = (e.properties as any).order;
-      if (typeof o === 'number' && o > maxOrder) {
-        maxOrder = o;
-      }
-    }
-    return maxOrder + 1;
+    return getNextSubTaskOrderImpl(this.taskStoreBindings, parentTaskId);
   }
 
   /**
@@ -6584,70 +3559,15 @@ export class DevPlanGraphStore implements IDevPlanStore {
   }
 
   private refreshMainTaskCounts(mainTaskId: string): MainTask | null {
-    const mainTask = this.getMainTask(mainTaskId);
-    if (!mainTask) return null;
-
-    const subs = this.listSubTasks(mainTaskId);
-    const completedCount = subs.filter((s) => s.status === 'completed').length;
-
-    if (mainTask.totalSubtasks === subs.length && mainTask.completedSubtasks === completedCount) {
-      return mainTask;
-    }
-
-    const now = Date.now();
-    // Phase-45: 使用 upsertEntityByProp 代替 updateEntity（修复分片路由不一致）
-    this.graph.upsertEntityByProp(
-      ET.MAIN_TASK, 'taskId', mainTaskId, mainTask.title, {
-        projectName: this.projectName,
-        taskId: mainTaskId,
-        title: mainTask.title,
-        priority: mainTask.priority,
-        description: mainTask.description || '',
-        estimatedHours: mainTask.estimatedHours || 0,
-        relatedSections: mainTask.relatedSections || [],
-        relatedPromptIds: mainTask.relatedPromptIds || [],
-        moduleId: mainTask.moduleId || null,
-        totalSubtasks: subs.length,
-        completedSubtasks: completedCount,
-        status: mainTask.status,
-        order: mainTask.order,
-        createdAt: mainTask.createdAt,
-        updatedAt: now,
-        completedAt: mainTask.completedAt,
-      }
-    );
-
-    this.graph.flush();
-    return this.getMainTask(mainTaskId) || mainTask;
+    return refreshMainTaskCountsImpl(this.taskStoreBindings, mainTaskId);
   }
 
   private reconcileMainTaskAfterSubTaskDeletion(mainTaskId: string): MainTask | null {
-    const refreshed = this.refreshMainTaskCounts(mainTaskId);
-    if (!refreshed) return null;
-
-    if (
-      refreshed.status !== 'completed'
-      && refreshed.totalSubtasks > 0
-      && refreshed.completedSubtasks >= refreshed.totalSubtasks
-    ) {
-      return this.updateMainTaskStatus(mainTaskId, 'completed');
-    }
-
-    return refreshed;
+    return reconcileMainTaskAfterSubTaskDeletionImpl(this.taskStoreBindings, mainTaskId);
   }
 
   private resolveTaskDeleteType(taskId: string, taskType?: 'main' | 'sub'): 'main' | 'sub' | null {
-    if (taskType === 'main') return this.getMainTask(taskId) ? 'main' : null;
-    if (taskType === 'sub') return this.getSubTask(taskId) ? 'sub' : null;
-
-    const hasMainTask = this.getMainTask(taskId) !== null;
-    const hasSubTask = this.getSubTask(taskId) !== null;
-    if (hasMainTask && hasSubTask) {
-      throw new Error(`Task "${taskId}" exists as both main and sub task. Please provide taskType explicitly.`);
-    }
-    if (hasMainTask) return 'main';
-    if (hasSubTask) return 'sub';
-    return null;
+    return resolveTaskDeleteTypeImpl(this.taskStoreBindings, taskId, taskType);
   }
 
   /**
@@ -6656,71 +3576,7 @@ export class DevPlanGraphStore implements IDevPlanStore {
    * @returns 修复报告
    */
   repairAllMainTaskCounts(): { repaired: number; autoCompleted: number; details: Array<{ taskId: string; action: string }> } {
-    const allMainTasks = this.listMainTasks();
-    const report = { repaired: 0, autoCompleted: 0, details: [] as Array<{ taskId: string; action: string }> };
-
-    for (const mt of allMainTasks) {
-      if (mt.status === 'cancelled') continue;
-
-      const subs = this.listSubTasks(mt.taskId);
-      const completedCount = subs.filter((s) => s.status === 'completed').length;
-      const totalCount = subs.length;
-
-      let needsRepair = false;
-      let needsAutoComplete = false;
-
-      // 检查计数是否正确
-      if (mt.totalSubtasks !== totalCount || mt.completedSubtasks !== completedCount) {
-        needsRepair = true;
-      }
-
-      // 检查是否应自动完成
-      if (totalCount > 0 && completedCount >= totalCount && mt.status !== 'completed') {
-        needsAutoComplete = true;
-        needsRepair = true;
-      }
-
-      if (!needsRepair) continue;
-
-      const now = Date.now();
-      const finalStatus = needsAutoComplete ? 'completed' as TaskStatus : mt.status;
-      const finalCompletedAt = needsAutoComplete ? now : mt.completedAt;
-
-      this.graph.upsertEntityByProp(
-        ET.MAIN_TASK, 'taskId', mt.taskId, mt.title, {
-          projectName: this.projectName,
-          taskId: mt.taskId,
-          title: mt.title,
-          priority: mt.priority,
-          description: mt.description || '',
-          estimatedHours: mt.estimatedHours || 0,
-          relatedSections: mt.relatedSections || [],
-          relatedPromptIds: mt.relatedPromptIds || [],
-          moduleId: mt.moduleId || null,
-          totalSubtasks: totalCount,
-          completedSubtasks: completedCount,
-          status: finalStatus,
-          order: mt.order,
-          createdAt: mt.createdAt,
-          updatedAt: now,
-          completedAt: finalCompletedAt,
-        }
-      );
-
-      report.repaired++;
-      if (needsAutoComplete) {
-        report.autoCompleted++;
-        report.details.push({ taskId: mt.taskId, action: `auto-completed (${completedCount}/${totalCount} subtasks done)` });
-      } else {
-        report.details.push({ taskId: mt.taskId, action: `counts fixed: ${mt.completedSubtasks}→${completedCount}/${totalCount}` });
-      }
-    }
-
-    if (report.repaired > 0) {
-      this.graph.flush();
-    }
-
-    return report;
+    return repairAllMainTaskCountsImpl(this.taskStoreBindings);
   }
 
   private autoUpdateMilestones(completedMainTask: MainTask): void {
@@ -6882,7 +3738,7 @@ export class DevPlanGraphStore implements IDevPlanStore {
    * 失败时仅输出警告，不影响文档保存。
    */
   private autoIndexDocument(entityId: string, title: string, content: string): void {
-    if (!this.semanticSearchReady || !this.synapse) return;
+    if (!this.ensureSynapseReady() || !this.synapse) return;
 
     try {
       const text = `${title}\n${content}`;

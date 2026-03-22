@@ -521,6 +521,20 @@ export interface RecallSearchTuningConfig {
    * 当 query token 命中记忆的 tags 时，每命中一个 tag 加分 score * tagBoostFactor。
    */
   tagBoostFactor?: number;
+  /**
+   * 技术关键词覆盖率加分（默认 0.35）。
+   * query token 越多地覆盖到 memory content/tags/anchor 字段，排序越靠前。
+   */
+  queryCoverageBoost?: number;
+  /**
+   * 带 phase/task 语境的记忆额外加分（默认 0.12）。
+   * 用于让真实 backfill / phase 结论略高于无上下文的临时测试记忆。
+   */
+  relatedTaskBoost?: number;
+  /**
+   * 非测试查询下，对 probe/test/fixture 类记忆的降权幅度（默认 0.3）。
+   */
+  testMemoryPenalty?: number;
 }
 
 /**
@@ -1049,6 +1063,8 @@ export type MemoryType =
   | 'preference'  // 用户偏好和项目约定
   | 'summary';    // 会话/阶段摘要
 
+export type MemoryRecallProfile = 'default' | 'test_probe';
+
 export type AnchorMergeMode = 'merge' | 'soft_merge' | 'create_distinct';
 
 /**
@@ -1067,6 +1083,13 @@ export interface MemoryInput {
   relatedTaskId?: string;
   /** 重要性 (0~1，默认 0.5) */
   importance?: number;
+  /**
+   * 召回画像（可选）
+   *
+   * - `default`: 常规业务/长期知识记忆
+   * - `test_probe`: 测试探针/验证样本记忆，非测试查询时可被适度降权
+   */
+  recallProfile?: MemoryRecallProfile;
   /**
    * 统一来源标识（可选）— ai_db 底层 source_ref 规范
    */
@@ -1247,6 +1270,8 @@ export interface Memory {
   relatedTaskId?: string;
   /** 重要性 (0~1) */
   importance: number;
+  /** 召回画像（default | test_probe） */
+  recallProfile?: MemoryRecallProfile;
   /** 访问次数（每次 recall 命中 +1） */
   hitCount: number;
   /** 最后访问时间 */

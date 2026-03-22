@@ -48,6 +48,12 @@ export type ResolvedRecallSearchTuning = {
   bm25UserDictPath?: string;
   /** Phase-215: 记忆标签匹配加分因子 */
   tagBoostFactor: number;
+  /** 技术关键词覆盖率加分 */
+  queryCoverageBoost: number;
+  /** 带 phase/task 语境的记忆额外加分 */
+  relatedTaskBoost: number;
+  /** 非测试查询下对 probe/test 记忆的降权幅度 */
+  testMemoryPenalty: number;
 };
 
 /** 触点类型常量 */

@@ -14,6 +14,12 @@ export type ResolvedRecallSearchTuningLike = {
   bm25UserDictPath?: string;
   /** Phase-215: 记忆标签匹配加分因子 */
   tagBoostFactor: number;
+  /** 技术关键词覆盖率加分 */
+  queryCoverageBoost: number;
+  /** 带 phase/task 语境的记忆额外加分 */
+  relatedTaskBoost: number;
+  /** 非测试查询下对 probe/test 记忆的降权幅度 */
+  testMemoryPenalty: number;
 };
 
 export const DEFAULT_BM25_DOMAIN_TERMS = [
@@ -80,6 +86,9 @@ export function resolveRecallSearchTuning(
     bm25DomainTerms,
     bm25UserDictPath: config?.bm25UserDictPath,
     tagBoostFactor: safeNumber(config?.tagBoostFactor, 0.15),
+    queryCoverageBoost: safeNumber(config?.queryCoverageBoost, 0.35),
+    relatedTaskBoost: safeNumber(config?.relatedTaskBoost, 0.12),
+    testMemoryPenalty: safeNumber(config?.testMemoryPenalty, 0.3),
   };
 }
 
