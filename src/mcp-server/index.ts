@@ -107,6 +107,7 @@ class AsyncMutex {
 
 /** 全局互斥锁 — 所有 memory_save 操作共享，保证串行执行 */
 const memorySaveMutex = new AsyncMutex();
+let processErrorGuardsRegistered = false;
 
 // ============================================================================
 // DevPlan Store Cache
@@ -174,11 +175,26 @@ async function handleToolCall(name: string, args: ToolArgs): Promise<string> {
   throw new McpError(ErrorCode.MethodNotFound, `Unknown tool: ${name}`);
 }
 
+export function registerProcessErrorGuards(): void {
+  if (processErrorGuardsRegistered) return;
+  processErrorGuardsRegistered = true;
+
+  process.on('unhandledRejection', (reason) => {
+    // Keep the stdio transport alive when a background async task rejects outside
+    // the request/response path. Request-scoped failures still surface normally.
+    console.error(
+      '[aifastdb-devplan] Unhandled promise rejection (kept process alive):',
+      reason instanceof Error ? reason.stack || reason.message : reason,
+    );
+  });
+}
+
 // ============================================================================
 // Server Setup
 // ============================================================================
 
 async function main() {
+  registerProcessErrorGuards();
   const server = new Server(
     {
       name: 'aifastdb-devplan',

@@ -23,6 +23,7 @@ import { CodeBridgeStore, EmbeddedCodeIntelligenceStore, runCodeIntelRegressionC
 import type { IDevPlanStore } from '../dev-plan-interface';
 import { getVisualizationHTML } from './template';
 import { getGraphCanvasScript } from './graph-canvas/index';
+import { buildPutRelationMutation } from '../graph-mutation-utils';
 import {
   getAutopilotStatus,
   getAutopilotNextAction,
@@ -1241,15 +1242,9 @@ function startServer(projectName: string, basePath: string, port: number): void 
 
             // 尝试使用 applyMutations (Phase-44)，回退到 putRelation
             if (typeof graph.applyMutations === 'function') {
-              graph.applyMutations([{
-                type: 'PutRelation',
-                relation: {
-                  source_id: fromId,
-                  target_id: toId,
-                  relation_type: relationType,
-                  weight: weight,
-                }
-              }]);
+              await graph.applyMutations([
+                buildPutRelationMutation(fromId, toId, relationType, weight),
+              ]);
             } else if (typeof graph.putRelation === 'function') {
               graph.putRelation({
                 source_id: fromId,

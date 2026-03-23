@@ -14,6 +14,7 @@ import {
   ET,
   RT,
 } from './dev-plan-graph-store.shared';
+import { buildPutRelationMutation } from './graph-mutation-utils';
 
 export type MemoryWriteStoreBindings = {
   projectName: string;
@@ -256,24 +257,8 @@ export function autoLinkSimilarMemories(
     if (store.nativeApplyMutationsReady) {
       const mutations: any[] = [];
       for (const { targetId, score } of relationsToCreate) {
-        mutations.push({
-          type: 'PutRelation',
-          relation: {
-            source_id: newMemoryId,
-            target_id: targetId,
-            relation_type: RT.MEMORY_RELATES,
-            weight: score,
-          },
-        });
-        mutations.push({
-          type: 'PutRelation',
-          relation: {
-            source_id: targetId,
-            target_id: newMemoryId,
-            relation_type: RT.MEMORY_RELATES,
-            weight: score,
-          },
-        });
+        mutations.push(buildPutRelationMutation(newMemoryId, targetId, RT.MEMORY_RELATES, score));
+        mutations.push(buildPutRelationMutation(targetId, newMemoryId, RT.MEMORY_RELATES, score));
       }
       store.graph.applyMutations(mutations).catch((e: any) => {
         console.warn(`[DevPlan] applyMutations for memory links failed: ${e}`);
