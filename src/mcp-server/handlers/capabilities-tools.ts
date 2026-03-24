@@ -7,6 +7,32 @@ import type { IDevPlanStore } from '../../dev-plan-interface';
 
 type GetDevPlan = (projectName: string) => IDevPlanStore;
 
+function getExpectedAifastdbNativeModulePath(): string | null {
+  const { platform, arch } = process;
+
+  if (platform === 'win32' && arch === 'x64') {
+    return 'aifastdb/aifastdb.win32-x64-msvc.node';
+  }
+
+  if (platform === 'darwin' && arch === 'arm64') {
+    return 'aifastdb/aifastdb.darwin-arm64.node';
+  }
+
+  if (platform === 'darwin' && arch === 'x64') {
+    return 'aifastdb/aifastdb.darwin-x64.node';
+  }
+
+  if (platform === 'linux' && arch === 'x64') {
+    return 'aifastdb/aifastdb.linux-x64-gnu.node';
+  }
+
+  if (platform === 'linux' && arch === 'arm64') {
+    return 'aifastdb/aifastdb.linux-arm64-gnu.node';
+  }
+
+  return null;
+}
+
 export async function handleCapabilitiesToolCall(name: string, args: ToolArgs, deps: { getDevPlan: GetDevPlan }): Promise<string | null> {
   const { getDevPlan } = deps;
   switch (name) {
@@ -53,7 +79,10 @@ export async function handleCapabilitiesToolCall(name: string, args: ToolArgs, d
       const aifastdbVersion = safeReadDependencyVersion('aifastdb');
       const aifastdbPkgJsonPath = safeResolveModuleFile('aifastdb/package.json');
       const aifastdbEntryPath = safeResolveModuleFile('aifastdb');
-      const aifastdbNativePath = safeResolveModuleFile('aifastdb/aifastdb.win32-x64-msvc.node');
+      const expectedAifastdbNativeModulePath = getExpectedAifastdbNativeModulePath();
+      const aifastdbNativePath = expectedAifastdbNativeModulePath
+        ? safeResolveModuleFile(expectedAifastdbNativeModulePath)
+        : null;
 
       const missingCapabilities = Object.entries(nativeCaps)
         .filter(([, ok]) => !ok)
@@ -82,6 +111,7 @@ export async function handleCapabilitiesToolCall(name: string, args: ToolArgs, d
         loadedPaths: {
           aifastdbPackageJson: aifastdbPkgJsonPath,
           aifastdbEntry: aifastdbEntryPath,
+          expectedAifastdbNativeModule: expectedAifastdbNativeModulePath,
           aifastdbNativeNode: aifastdbNativePath,
         },
         recommendedActions,
