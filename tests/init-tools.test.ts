@@ -64,4 +64,97 @@ describe('handleInitToolCall devplan_init cursor rule refresh', () => {
     expect(nextContent).toContain('## 文档搜索约定');
     expect(nextContent).toContain('searchBy: "id"');
   });
+
+  test('registers sibling workspace project and creates project-local config when default base is global', async () => {
+    const workspaceRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'devplan-workspace-'));
+    const serverProjectRoot = path.join(workspaceRoot, 'aifastdb-devplan');
+    const targetProjectRoot = path.join(workspaceRoot, 'api-ime');
+    const globalBase = fs.mkdtempSync(path.join(os.tmpdir(), 'devplan-global-'));
+    tempDirs.push(workspaceRoot, globalBase);
+
+    fs.mkdirSync(serverProjectRoot, { recursive: true });
+    fs.mkdirSync(targetProjectRoot, { recursive: true });
+    fs.writeFileSync(path.join(serverProjectRoot, 'package.json'), JSON.stringify({ name: 'aifastdb-devplan' }), 'utf-8');
+    fs.writeFileSync(path.join(targetProjectRoot, 'package.json'), JSON.stringify({ name: 'api-ime' }), 'utf-8');
+    fs.writeFileSync(
+      path.join(globalBase, 'config.json'),
+      JSON.stringify({ defaultProject: 'english-coach', enableSemanticSearch: true }, null, 2),
+      'utf-8'
+    );
+
+    process.chdir(serverProjectRoot);
+    process.env.AIFASTDB_DEVPLAN_PATH = globalBase;
+
+    const getDevPlan = jest.fn(() => ({} as any));
+    const clearDevPlanCache = jest.fn();
+
+    const result = JSON.parse(await handleInitToolCall(
+      'devplan_init',
+      { projectName: 'api-ime' },
+      { getDevPlan, clearDevPlanCache }
+    ) as string);
+
+    const projectBase = path.join(targetProjectRoot, '.devplan');
+    const localConfigPath = path.join(projectBase, 'config.json');
+    const globalConfigPath = path.join(globalBase, 'config.json');
+    const localConfig = JSON.parse(fs.readFileSync(localConfigPath, 'utf-8'));
+    const globalConfig = JSON.parse(fs.readFileSync(globalConfigPath, 'utf-8'));
+
+    expect(result.basePath).toBe(projectBase);
+    expect(result.autoRegistered).toBe(true);
+    expect(fs.existsSync(localConfigPath)).toBe(true);
+    expect(localConfig.defaultProject).toBe('api-ime');
+    expect(localConfig.projects['api-ime'].rootPath).toBe(targetProjectRoot);
+    expect(globalConfig.projects['api-ime'].rootPath).toBe(targetProjectRoot);
+  });
+
+  test('corrects an existing wrong rootPath mapping and avoids writing project config into global base', async () => {
+    const workspaceRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'devplan-workspace-fix-'));
+    const serverProjectRoot = path.join(workspaceRoot, 'aifastdb-devplan');
+    const targetProjectRoot = path.join(workspaceRoot, 'api-ime');
+    const globalBase = fs.mkdtempSync(path.join(os.tmpdir(), 'devplan-global-fix-'));
+    tempDirs.push(workspaceRoot, globalBase);
+
+    fs.mkdirSync(serverProjectRoot, { recursive: true });
+    fs.mkdirSync(targetProjectRoot, { recursive: true });
+    fs.writeFileSync(path.join(serverProjectRoot, 'package.json'), JSON.stringify({ name: 'aifastdb-devplan' }), 'utf-8');
+    fs.writeFileSync(path.join(targetProjectRoot, 'package.json'), JSON.stringify({ name: 'api-ime' }), 'utf-8');
+    fs.writeFileSync(
+      path.join(globalBase, 'config.json'),
+      JSON.stringify({
+        defaultProject: 'api-ime',
+        enableSemanticSearch: true,
+        projects: {
+          'api-ime': {
+            rootPath: path.dirname(globalBase),
+          },
+        },
+      }, null, 2),
+      'utf-8'
+    );
+
+    process.chdir(serverProjectRoot);
+    process.env.AIFASTDB_DEVPLAN_PATH = globalBase;
+
+    const getDevPlan = jest.fn(() => ({} as any));
+    const clearDevPlanCache = jest.fn();
+
+    const result = JSON.parse(await handleInitToolCall(
+      'devplan_init',
+      { projectName: 'api-ime' },
+      { getDevPlan, clearDevPlanCache }
+    ) as string);
+
+    const projectBase = path.join(targetProjectRoot, '.devplan');
+    const localConfigPath = path.join(projectBase, 'config.json');
+    const globalConfigPath = path.join(globalBase, 'config.json');
+    const globalConfig = JSON.parse(fs.readFileSync(globalConfigPath, 'utf-8'));
+    const localConfig = JSON.parse(fs.readFileSync(localConfigPath, 'utf-8'));
+
+    expect(result.basePath).toBe(projectBase);
+    expect(fs.existsSync(localConfigPath)).toBe(true);
+    expect(globalConfig.projects['api-ime'].rootPath).toBe(targetProjectRoot);
+    expect(localConfig.projects['api-ime'].rootPath).toBe(targetProjectRoot);
+    expect(fs.existsSync(path.join(path.dirname(globalBase), '.devplan', 'config.json'))).toBe(false);
+  });
 });

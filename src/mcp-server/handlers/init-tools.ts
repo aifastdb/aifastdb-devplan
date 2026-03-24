@@ -6,8 +6,67 @@ import { ALL_SECTIONS, SECTION_DESCRIPTIONS } from '../../types';
 import { generateCursorRuleTemplate } from '../cursor-rule-template';
 import type { ToolArgs } from '../tool-definitions';
 import type { IDevPlanStore } from '../../dev-plan-interface';
+import type { DevPlanConfig } from '../../dev-plan-factory';
 
 type GetDevPlan = (projectName: string) => IDevPlanStore;
+
+function findProjectRootFromCwd(): string | null {
+  let dir = process.cwd();
+  const root = path.parse(dir).root;
+
+  while (dir !== root) {
+    if (fs.existsSync(path.join(dir, '.git')) || fs.existsSync(path.join(dir, 'package.json'))) {
+      return dir;
+    }
+    dir = path.dirname(dir);
+  }
+
+  return null;
+}
+
+function findCandidateProjectRoot(projectName: string, defaultBase: string): string | null {
+  const candidates = new Set<string>();
+
+  const cwdProjectRoot = findProjectRootFromCwd();
+  if (cwdProjectRoot) {
+    if (path.basename(cwdProjectRoot) === projectName) {
+      candidates.add(cwdProjectRoot);
+    }
+    candidates.add(path.join(path.dirname(cwdProjectRoot), projectName));
+  }
+
+  const defaultBaseParent = path.dirname(defaultBase);
+  if (path.basename(defaultBase) === '.devplan') {
+    if (path.basename(defaultBaseParent) === projectName) {
+      candidates.add(defaultBaseParent);
+    }
+    candidates.add(path.join(path.dirname(defaultBaseParent), projectName));
+  }
+
+  for (const candidate of candidates) {
+    if (fs.existsSync(candidate) && fs.statSync(candidate).isDirectory()) {
+      return candidate;
+    }
+  }
+
+  return null;
+}
+
+function buildProjectLocalConfig(workspaceConfig: DevPlanConfig | null | undefined, projectName: string, projectRoot: string): DevPlanConfig {
+  return {
+    ...(workspaceConfig || {}),
+    defaultProject: projectName,
+    enableSemanticSearch: workspaceConfig?.enableSemanticSearch ?? true,
+    projects: {
+      ...(workspaceConfig?.projects || {}),
+      [projectName]: { rootPath: projectRoot },
+    },
+  };
+}
+
+function isProjectLocalDevplanBase(basePath: string): boolean {
+  return path.basename(basePath).toLowerCase() === '.devplan';
+}
 
 export async function handleInitToolCall(name: string, args: ToolArgs, deps: { getDevPlan: GetDevPlan; clearDevPlanCache: (projectName: string) => void }): Promise<string | null> {
   const { getDevPlan, clearDevPlanCache } = deps;
@@ -54,38 +113,45 @@ export async function handleInitToolCall(name: string, args: ToolArgs, deps: { g
         defaultProject: args.projectName,
         enableSemanticSearch: true,
       };
-      if (!workspaceConfig.projects?.[args.projectName]) {
-        // 尝试自动发现项目根目录：
-        // 如果 defaultBase 在某个项目下 (如 D:\xxx\ai_db\.devplan)，
-        // 取其父目录 (D:\xxx\) 作为工作区根，查找 D:\xxx\{projectName}\
-        const devplanParent = path.dirname(defaultBase); // e.g. D:\Project\git\ai_db
-        const workspaceRoot = path.dirname(devplanParent); // e.g. D:\Project\git
-        const candidateRoot = path.join(workspaceRoot, args.projectName);
+      // 优先从当前 cwd 所在项目和 defaultBase 推断工作区同级项目根目录。
+      const candidateRoot = findCandidateProjectRoot(args.projectName, defaultBase);
+      const registeredRoot = workspaceConfig.projects?.[args.projectName]?.rootPath;
 
-        if (fs.existsSync(candidateRoot) && fs.statSync(candidateRoot).isDirectory()) {
-          // 找到了同名目录，自动注册到 projects 表
+      if (candidateRoot) {
+        const shouldRegister = !registeredRoot || path.resolve(registeredRoot) !== path.resolve(candidateRoot);
+        if (shouldRegister) {
           if (!workspaceConfig.projects) {
             workspaceConfig.projects = {};
           }
           workspaceConfig.projects[args.projectName] = { rootPath: candidateRoot };
           writeDevPlanConfig(workspaceConfig, defaultBase);
           autoRegistered = true;
-          console.error(`[devplan] Auto-registered project "${args.projectName}" → ${candidateRoot}`);
-        } else {
-          console.error(`[devplan] Project "${args.projectName}" not found at candidate path: ${candidateRoot}, using default basePath`);
+          console.error(
+            registeredRoot
+              ? `[devplan] Corrected project "${args.projectName}" rootPath from ${registeredRoot} to ${candidateRoot}`
+              : `[devplan] Auto-registered project "${args.projectName}" → ${candidateRoot}`
+          );
         }
+      } else if (!registeredRoot) {
+        console.error(`[devplan] Project "${args.projectName}" not found at candidate path: ${candidateRoot}, using default basePath`);
       }
 
-      // 多项目工作区：如果项目路由到独立目录，也在该目录创建 config.json
+      // 多项目工作区：如果项目已路由到独立目录，在该目录创建/同步项目级 .devplan/config.json
       const projectBase = resolveBasePathForProject(args.projectName);
-      if (projectBase !== defaultBase) {
+      const projectRoot = path.dirname(projectBase);
+      if (isProjectLocalDevplanBase(projectBase)) {
+        const refreshedWorkspaceConfig = readDevPlanConfig(defaultBase) || workspaceConfig;
         const projectLocalConfig = readDevPlanConfig(projectBase);
+        const targetProjectConfig = buildProjectLocalConfig(refreshedWorkspaceConfig, args.projectName, projectRoot);
         if (!projectLocalConfig) {
-          writeDevPlanConfig({
-            defaultProject: args.projectName,
-            enableSemanticSearch: true,
-          }, projectBase);
+          writeDevPlanConfig(targetProjectConfig, projectBase);
           console.error(`[devplan] Created project-level config.json at ${projectBase}`);
+        } else {
+          const localRoot = projectLocalConfig.projects?.[args.projectName]?.rootPath;
+          if (!localRoot || path.resolve(localRoot) !== path.resolve(projectRoot)) {
+            writeDevPlanConfig(buildProjectLocalConfig(projectLocalConfig, args.projectName, projectRoot), projectBase);
+            console.error(`[devplan] Updated project-level config.json at ${projectBase}`);
+          }
         }
       }
 
@@ -103,7 +169,6 @@ export async function handleInitToolCall(name: string, args: ToolArgs, deps: { g
       let cursorRuleGenerated = false;
       let cursorRuleRefreshed = false;
       const refreshCursorRule = args.refreshCursorRule === true;
-      const projectRoot = path.dirname(projectBase); // projectBase = xxx/.devplan → projectRoot = xxx
       const cursorRulesDir = path.join(projectRoot, '.cursor', 'rules');
       const cursorRuleFile = path.join(cursorRulesDir, 'dev-plan-management.mdc');
 
