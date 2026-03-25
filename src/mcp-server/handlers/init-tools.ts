@@ -68,9 +68,28 @@ function isProjectLocalDevplanBase(basePath: string): boolean {
   return path.basename(basePath).toLowerCase() === '.devplan';
 }
 
-export async function handleInitToolCall(name: string, args: ToolArgs, deps: { getDevPlan: GetDevPlan; clearDevPlanCache: (projectName: string) => void }): Promise<string | null> {
-  const { getDevPlan, clearDevPlanCache } = deps;
-  switch (name) {
+const MUTATING_INIT_TOOLS = new Set([
+  'devplan_init',
+  'devplan_cleanup_duplicates',
+  'devplan_repair_counts',
+]);
+
+export async function handleInitToolCall(
+  name: string,
+  args: ToolArgs,
+  deps: {
+    getDevPlan: GetDevPlan;
+    clearDevPlanCache: (projectName: string) => void;
+    taskWriteMutex: { acquire(): Promise<void>; release(): void };
+  },
+): Promise<string | null> {
+  const { getDevPlan, clearDevPlanCache, taskWriteMutex } = deps;
+  const shouldSerializeWrite = MUTATING_INIT_TOOLS.has(name);
+  if (shouldSerializeWrite) {
+    await taskWriteMutex.acquire();
+  }
+  try {
+    switch (name) {
     case 'devplan_init': {
       if (!args.projectName) {
         // List existing plans with engine info
@@ -297,7 +316,12 @@ export async function handleInitToolCall(name: string, args: ToolArgs, deps: { g
 
 
 
-    default:
-      return null;
+      default:
+        return null;
+    }
+  } finally {
+    if (shouldSerializeWrite) {
+      taskWriteMutex.release();
+    }
   }
 }

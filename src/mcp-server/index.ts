@@ -107,6 +107,8 @@ class AsyncMutex {
 
 /** 全局互斥锁 — 所有 memory_save 操作共享，保证串行执行 */
 const memorySaveMutex = new AsyncMutex();
+/** 全局互斥锁 — 所有 task 写操作共享，避免并发写同一项目 store 导致请求悬挂 */
+const taskWriteMutex = new AsyncMutex();
 let processErrorGuardsRegistered = false;
 
 // ============================================================================
@@ -153,15 +155,15 @@ async function handleToolCall(name: string, args: ToolArgs): Promise<string> {
   args.projectName = resolveProjectName(args, name);
 
   const dispatchers: Array<(name: string, args: ToolArgs) => Promise<string | null>> = [
-    (n, a) => handleTaskToolCall(n, a, { getDevPlan }),
+    (n, a) => handleTaskToolCall(n, a, { getDevPlan, taskWriteMutex }),
     (n, a) => handleMemoryToolCall(n, a, { getDevPlan, memorySaveMutex }),
     (n, a) => handleAnchorToolCall(n, a, { getDevPlan }),
-    (n, a) => handleSectionToolCall(n, a, { getDevPlan }),
-    (n, a) => handleModuleToolCall(n, a, { getDevPlan, clearDevPlanCache: (projectName: string) => devPlanCache.delete(projectName) }),
-    (n, a) => handleAutopilotToolCall(n, a, { getDevPlan }),
+    (n, a) => handleSectionToolCall(n, a, { getDevPlan, taskWriteMutex }),
+    (n, a) => handleModuleToolCall(n, a, { getDevPlan, clearDevPlanCache: (projectName: string) => devPlanCache.delete(projectName), taskWriteMutex }),
+    (n, a) => handleAutopilotToolCall(n, a, { getDevPlan, taskWriteMutex }),
     (n, a) => handleBatchToolCall(n, a, { getDevPlan, memorySaveMutex }),
     (n, a) => handleCapabilitiesToolCall(n, a, { getDevPlan }),
-    (n, a) => handleInitToolCall(n, a, { getDevPlan, clearDevPlanCache: (projectName: string) => devPlanCache.delete(projectName) }),
+    (n, a) => handleInitToolCall(n, a, { getDevPlan, clearDevPlanCache: (projectName: string) => devPlanCache.delete(projectName), taskWriteMutex }),
     (n, a) => handlePromptToolCall(n, a, { getDevPlan }),
     (n, a) => handleLlmAnalyzeToolCall(n, a, { getDevPlan }),
     (n, a) => handleCodeToolCall(n, a),

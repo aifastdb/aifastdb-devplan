@@ -7,46 +7,68 @@ import type { IDevPlanStore } from '../../dev-plan-interface';
 
 type GetDevPlan = (projectName: string) => IDevPlanStore;
 
-export async function handleTaskToolCall(name: string, args: ToolArgs, deps: { getDevPlan: GetDevPlan }): Promise<string | null> {
-  const { getDevPlan } = deps;
+const MUTATING_TASK_TOOLS = new Set([
+  'devplan_create_main_task',
+  'devplan_add_sub_task',
+  'devplan_delete_task',
+  'devplan_update_task_status',
+  'devplan_upsert_task',
+  'devplan_complete_task',
+  'devplan_sync_git',
+]);
 
-  switch (name) {
-    case 'devplan_create_main_task': {
-      if (!args.projectName || !args.taskId || !args.title || !args.priority) {
-        throw new McpError(ErrorCode.InvalidParams, 'Missing required: projectName, taskId, title, priority');
+export async function handleTaskToolCall(
+  name: string,
+  args: ToolArgs,
+  deps: {
+    getDevPlan: GetDevPlan;
+    taskWriteMutex: { acquire(): Promise<void>; release(): void };
+  },
+): Promise<string | null> {
+  const { getDevPlan, taskWriteMutex } = deps;
+  const shouldSerializeWrite = MUTATING_TASK_TOOLS.has(name);
+  if (shouldSerializeWrite) {
+    await taskWriteMutex.acquire();
+  }
+
+  try {
+    switch (name) {
+      case 'devplan_create_main_task': {
+        if (!args.projectName || !args.taskId || !args.title || !args.priority) {
+          throw new McpError(ErrorCode.InvalidParams, 'Missing required: projectName, taskId, title, priority');
+        }
+
+        const plan = getDevPlan(args.projectName);
+        try {
+          // Phase-23: createMainTask 内部已幂等处理（upsertEntityByProp），无需额外检查
+          const mainTask = plan.createMainTask({
+            projectName: args.projectName,
+            taskId: args.taskId,
+            title: args.title,
+            priority: args.priority as TaskPriority,
+            description: args.description,
+            estimatedHours: args.estimatedHours,
+            moduleId: args.moduleId,
+            relatedSections: args.relatedDocSections,
+            relatedPromptIds: args.relatedPromptIds,
+            order: args.order,
+          });
+
+          return JSON.stringify({
+            success: true,
+            mainTask: {
+              id: mainTask.id,
+              taskId: mainTask.taskId,
+              title: mainTask.title,
+              priority: mainTask.priority,
+              status: mainTask.status,
+            },
+          });
+        } catch (err) {
+          throw new McpError(ErrorCode.InvalidParams,
+            err instanceof Error ? err.message : String(err));
+        }
       }
-
-      const plan = getDevPlan(args.projectName);
-      try {
-        // Phase-23: createMainTask 内部已幂等处理（upsertEntityByProp），无需额外检查
-        const mainTask = plan.createMainTask({
-          projectName: args.projectName,
-          taskId: args.taskId,
-          title: args.title,
-          priority: args.priority as TaskPriority,
-          description: args.description,
-          estimatedHours: args.estimatedHours,
-          moduleId: args.moduleId,
-          relatedSections: args.relatedDocSections,
-          relatedPromptIds: args.relatedPromptIds,
-          order: args.order,
-        });
-
-        return JSON.stringify({
-          success: true,
-          mainTask: {
-            id: mainTask.id,
-            taskId: mainTask.taskId,
-            title: mainTask.title,
-            priority: mainTask.priority,
-            status: mainTask.status,
-          },
-        });
-      } catch (err) {
-        throw new McpError(ErrorCode.InvalidParams,
-          err instanceof Error ? err.message : String(err));
-      }
-    }
 
 
     case 'devplan_add_sub_task': {
@@ -571,7 +593,12 @@ export async function handleTaskToolCall(name: string, args: ToolArgs, deps: { g
     }
 
 
-    default:
-      return null;
+      default:
+        return null;
+    }
+  } finally {
+    if (shouldSerializeWrite) {
+      taskWriteMutex.release();
+    }
   }
 }

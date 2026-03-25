@@ -17,6 +17,7 @@ import {
   type DocumentInput,
 } from 'aifastdb';
 import type { IDevPlanStore } from './dev-plan-interface';
+import { normalizeMainTaskTitle } from './task-title-utils';
 import type {
   DevPlanSection,
   DevPlanDocInput,
@@ -359,9 +360,10 @@ export class DevPlanDocumentStore implements IDevPlanStore {
 
     const now = Date.now();
     const order = input.order != null ? input.order : this.getNextMainTaskOrder();
+    const normalizedTitle = normalizeMainTaskTitle(input.taskId, input.title);
     const taskData = {
       taskId: input.taskId,
-      title: input.title,
+      title: normalizedTitle,
       priority: input.priority,
       description: input.description || '',
       estimatedHours: input.estimatedHours || 0,
@@ -434,10 +436,11 @@ export class DevPlanDocumentStore implements IDevPlanStore {
     const preserveStatus = options?.preserveStatus !== false; // 默认 true
     const targetStatus = options?.status || 'pending';
     const existing = this.getMainTask(input.taskId);
+    const normalizedTitle = normalizeMainTaskTitle(input.taskId, input.title);
 
     if (!existing) {
       // 新建
-      const task = this.createMainTask(input);
+      const task = this.createMainTask({ ...input, title: normalizedTitle });
       // 如果目标状态不是 pending，更新状态
       if (targetStatus !== 'pending') {
         return this.updateMainTaskStatus(task.taskId, targetStatus) || task;
@@ -471,7 +474,7 @@ export class DevPlanDocumentStore implements IDevPlanStore {
 
     const taskData = {
       taskId: input.taskId,
-      title: input.title,
+      title: normalizedTitle,
       priority: input.priority,
       description: input.description || existing.description || '',
       estimatedHours: input.estimatedHours || existing.estimatedHours || 0,

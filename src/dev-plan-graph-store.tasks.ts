@@ -15,6 +15,7 @@ import {
 } from './types';
 import { ET, RT } from './dev-plan-graph-store.shared';
 import { getCurrentGitCommit as getCurrentGitCommitUtil } from './dev-plan-graph-store.utils';
+import { normalizeMainTaskTitle } from './task-title-utils';
 
 export type TaskStoreBindings = {
   projectName: string;
@@ -41,11 +42,12 @@ export function createMainTask(store: TaskStoreBindings, input: MainTaskInput): 
 
   const now = Date.now();
   const order = input.order != null ? input.order : getNextMainTaskOrder(store);
+  const normalizedTitle = normalizeMainTaskTitle(input.taskId, input.title);
   const entity = store.graph.upsertEntityByProp(
-    ET.MAIN_TASK, 'taskId', input.taskId, input.title, {
+    ET.MAIN_TASK, 'taskId', input.taskId, normalizedTitle, {
       projectName: store.projectName,
       taskId: input.taskId,
-      title: input.title,
+      title: normalizedTitle,
       priority: input.priority,
       description: input.description || '',
       estimatedHours: input.estimatedHours || 0,
@@ -125,12 +127,13 @@ export function upsertMainTask(
   const completedAt = finalStatus === 'completed' ? (existing.completedAt || now) : null;
   const finalModuleId = input.moduleId || existing.moduleId;
   const finalOrder = input.order != null ? input.order : existing.order;
+  const normalizedTitle = normalizeMainTaskTitle(input.taskId, input.title);
 
   const upsertedEntity = store.graph.upsertEntityByProp(
-    ET.MAIN_TASK, 'taskId', input.taskId, input.title, {
+    ET.MAIN_TASK, 'taskId', input.taskId, normalizedTitle, {
       projectName: store.projectName,
       taskId: input.taskId,
-      title: input.title,
+      title: normalizedTitle,
       priority: input.priority,
       description: input.description || existing.description || '',
       estimatedHours: input.estimatedHours || existing.estimatedHours || 0,

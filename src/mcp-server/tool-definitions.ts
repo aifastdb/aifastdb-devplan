@@ -516,7 +516,7 @@ const ALL_TOOLS = [
         },
         title: {
           type: 'string',
-          description: 'Task title (e.g., "Phase 7: Store Trait & Adapters")\n任务标题（如 "阶段七：Store Trait 与适配器"）',
+          description: 'Task title. For phase taskIds like "phase-7", include the same phase prefix in title (e.g., "Phase-7: Store Trait & Adapters"). The runtime will normalize missing or mismatched phase prefixes.\n任务标题。若 taskId 为 "phase-7" 这类主任务，title 应包含相同的 phase 前缀（如 "Phase-7: Store Trait 与适配器"）；运行时会自动规范缺失或不匹配的前缀。',
         },
         priority: {
           type: 'string',

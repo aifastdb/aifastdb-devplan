@@ -6,9 +6,28 @@ import type { IDevPlanStore } from '../../dev-plan-interface';
 
 type GetDevPlan = (projectName: string) => IDevPlanStore;
 
-export async function handleModuleToolCall(name: string, args: ToolArgs, deps: { getDevPlan: GetDevPlan; clearDevPlanCache: (projectName: string) => void }): Promise<string | null> {
-  const { getDevPlan, clearDevPlanCache } = deps;
-  switch (name) {
+const MUTATING_MODULE_TOOLS = new Set([
+  'devplan_create_module',
+  'devplan_update_module',
+  'devplan_migrate_engine',
+]);
+
+export async function handleModuleToolCall(
+  name: string,
+  args: ToolArgs,
+  deps: {
+    getDevPlan: GetDevPlan;
+    clearDevPlanCache: (projectName: string) => void;
+    taskWriteMutex: { acquire(): Promise<void>; release(): void };
+  },
+): Promise<string | null> {
+  const { getDevPlan, clearDevPlanCache, taskWriteMutex } = deps;
+  const shouldSerializeWrite = MUTATING_MODULE_TOOLS.has(name);
+  if (shouldSerializeWrite) {
+    await taskWriteMutex.acquire();
+  }
+  try {
+    switch (name) {
     case 'devplan_create_module': {
       if (!args.projectName || !args.moduleId || !args.name) {
         throw new McpError(ErrorCode.InvalidParams, 'Missing required: projectName, moduleId, name');
@@ -281,7 +300,12 @@ export async function handleModuleToolCall(name: string, args: ToolArgs, deps: {
     }
 
 
-    default:
-      return null;
+      default:
+        return null;
+    }
+  } finally {
+    if (shouldSerializeWrite) {
+      taskWriteMutex.release();
+    }
   }
 }

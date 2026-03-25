@@ -6,9 +6,27 @@ import { rankLiteralDocMatches, type DocSearchBy } from '../../doc-search-utils'
 
 type GetDevPlan = (projectName: string) => IDevPlanStore;
 
-export async function handleSectionToolCall(name: string, args: ToolArgs, deps: { getDevPlan: GetDevPlan }): Promise<string | null> {
-  const { getDevPlan } = deps;
-  switch (name) {
+const MUTATING_SECTION_TOOLS = new Set([
+  'devplan_save_section',
+  'devplan_delete_section',
+  'devplan_rebuild_index',
+]);
+
+export async function handleSectionToolCall(
+  name: string,
+  args: ToolArgs,
+  deps: {
+    getDevPlan: GetDevPlan;
+    taskWriteMutex: { acquire(): Promise<void>; release(): void };
+  },
+): Promise<string | null> {
+  const { getDevPlan, taskWriteMutex } = deps;
+  const shouldSerializeWrite = MUTATING_SECTION_TOOLS.has(name);
+  if (shouldSerializeWrite) {
+    await taskWriteMutex.acquire();
+  }
+  try {
+    switch (name) {
     case 'devplan_save_section': {
       if (!args.projectName || !args.section || !args.title || !args.content) {
         throw new McpError(ErrorCode.InvalidParams, 'Missing required: projectName, section, title, content');
@@ -325,7 +343,12 @@ export async function handleSectionToolCall(name: string, args: ToolArgs, deps: 
     // ==================================================================
 
 
-    default:
-      return null;
+      default:
+        return null;
+    }
+  } finally {
+    if (shouldSerializeWrite) {
+      taskWriteMutex.release();
+    }
   }
 }

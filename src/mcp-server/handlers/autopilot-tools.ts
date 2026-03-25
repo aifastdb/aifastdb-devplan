@@ -5,56 +5,69 @@ import type { IDevPlanStore } from '../../dev-plan-interface';
 
 type GetDevPlan = (projectName: string) => IDevPlanStore;
 
-export async function handleAutopilotToolCall(name: string, args: ToolArgs, deps: { getDevPlan: GetDevPlan }): Promise<string | null> {
-  const { getDevPlan } = deps;
-  switch (name) {
-    case 'devplan_start_phase': {
-      if (!args.projectName) throw new McpError(ErrorCode.InvalidParams, 'projectName is required');
-      if (!args.taskId) throw new McpError(ErrorCode.InvalidParams, 'taskId is required');
+export async function handleAutopilotToolCall(
+  name: string,
+  args: ToolArgs,
+  deps: {
+    getDevPlan: GetDevPlan;
+    taskWriteMutex: { acquire(): Promise<void>; release(): void };
+  },
+): Promise<string | null> {
+  const { getDevPlan, taskWriteMutex } = deps;
+  const shouldSerializeWrite = name === 'devplan_start_phase';
+  if (shouldSerializeWrite) {
+    await taskWriteMutex.acquire();
+  }
 
-      const plan = getDevPlan(args.projectName);
-      const mainTask = plan.getMainTask(args.taskId);
-      if (!mainTask) {
-        throw new McpError(ErrorCode.InvalidParams, `Main task "${args.taskId}" not found in project "${args.projectName}"`);
+  try {
+    switch (name) {
+      case 'devplan_start_phase': {
+        if (!args.projectName) throw new McpError(ErrorCode.InvalidParams, 'projectName is required');
+        if (!args.taskId) throw new McpError(ErrorCode.InvalidParams, 'taskId is required');
+
+        const plan = getDevPlan(args.projectName);
+        const mainTask = plan.getMainTask(args.taskId);
+        if (!mainTask) {
+          throw new McpError(ErrorCode.InvalidParams, `Main task "${args.taskId}" not found in project "${args.projectName}"`);
+        }
+
+        // Mark main task as in_progress (if still pending)
+        if (mainTask.status === 'pending') {
+          plan.updateMainTaskStatus(args.taskId, 'in_progress');
+        }
+
+        // Fetch all sub-tasks
+        const subTasks = plan.listSubTasks(args.taskId);
+
+        // Get related document sections (if any)
+        const relatedDocs = mainTask.relatedSections || [];
+
+        // Return structured result optimized for Cursor TodoList creation
+        return JSON.stringify({
+          mainTask: {
+            taskId: mainTask.taskId,
+            title: mainTask.title,
+            priority: mainTask.priority,
+            status: 'in_progress',
+            description: mainTask.description,
+            estimatedHours: mainTask.estimatedHours,
+            moduleId: mainTask.moduleId,
+            order: mainTask.order,
+            totalSubtasks: subTasks.length,
+            completedSubtasks: subTasks.filter(s => s.status === 'completed').length,
+          },
+          subTasks: subTasks.map(s => ({
+            taskId: s.taskId,
+            title: s.title,
+            status: s.status,
+            description: s.description,
+            estimatedHours: s.estimatedHours,
+            order: s.order,
+          })),
+          relatedDocSections: relatedDocs,
+          message: `Phase ${args.taskId} started. ${subTasks.length} sub-tasks total, ${subTasks.filter(s => s.status === 'completed').length} already completed.`,
+        }, null, 2);
       }
-
-      // Mark main task as in_progress (if still pending)
-      if (mainTask.status === 'pending') {
-        plan.updateMainTaskStatus(args.taskId, 'in_progress');
-      }
-
-      // Fetch all sub-tasks
-      const subTasks = plan.listSubTasks(args.taskId);
-
-      // Get related document sections (if any)
-      const relatedDocs = mainTask.relatedSections || [];
-
-      // Return structured result optimized for Cursor TodoList creation
-      return JSON.stringify({
-        mainTask: {
-          taskId: mainTask.taskId,
-          title: mainTask.title,
-          priority: mainTask.priority,
-          status: 'in_progress',
-          description: mainTask.description,
-          estimatedHours: mainTask.estimatedHours,
-          moduleId: mainTask.moduleId,
-          order: mainTask.order,
-          totalSubtasks: subTasks.length,
-          completedSubtasks: subTasks.filter(s => s.status === 'completed').length,
-        },
-        subTasks: subTasks.map(s => ({
-          taskId: s.taskId,
-          title: s.title,
-          status: s.status,
-          description: s.description,
-          estimatedHours: s.estimatedHours,
-          order: s.order,
-        })),
-        relatedDocSections: relatedDocs,
-        message: `Phase ${args.taskId} started. ${subTasks.length} sub-tasks total, ${subTasks.filter(s => s.status === 'completed').length} already completed.`,
-      }, null, 2);
-    }
 
 
     case 'devplan_auto_status': {
@@ -114,7 +127,12 @@ export async function handleAutopilotToolCall(name: string, args: ToolArgs, deps
     // ==================================================================
 
 
-    default:
-      return null;
+      default:
+        return null;
+    }
+  } finally {
+    if (shouldSerializeWrite) {
+      taskWriteMutex.release();
+    }
   }
 }

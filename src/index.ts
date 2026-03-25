@@ -27,7 +27,7 @@
  * const graphPlan = createDevPlan('my-project', undefined, 'graph');
  * const docPlan = createDevPlan('my-project', undefined, 'document');
  *
- * plan.createMainTask({ projectName: 'my-project', taskId: 'phase-1', title: '阶段一', priority: 'P0' });
+ * plan.createMainTask({ projectName: 'my-project', taskId: 'phase-1', title: 'Phase-1: 阶段一', priority: 'P0' });
  * plan.addSubTask({ projectName: 'my-project', taskId: 'T1.1', parentTaskId: 'phase-1', title: '初始化' });
  * plan.completeSubTask('T1.1');
  *
