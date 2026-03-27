@@ -9,6 +9,8 @@ export const ET = {
   MODULE: 'devplan-module',
   PROMPT: 'devplan-prompt',
   MEMORY: 'devplan-memory',
+  MESSAGE: 'devplan-message',
+  USER: 'devplan-user',
 } as const;
 
 /** Relation 类型常量 */

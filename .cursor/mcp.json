@@ -1,0 +1,7 @@
+{
+  "mcpServers": {
+    "aifastdb-devplan": {
+      "command": "/Users/doufu/project/git/aifastdb-devplan/scripts/start-mcp.sh"
+    }
+  }
+}

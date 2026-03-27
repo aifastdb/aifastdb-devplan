@@ -84,6 +84,16 @@ export const DEVPLAN_SHARDS: readonly DevPlanShardDefinition[] = [
     name: 'memory',
     entityTypes: ['devplan-memory'],
   },
+  {
+    index: 6,
+    name: 'message',
+    entityTypes: ['devplan-message'],
+  },
+  {
+    index: 7,
+    name: 'user',
+    entityTypes: ['devplan-user'],
+  },
 ] as const;
 
 // ============================================================================
