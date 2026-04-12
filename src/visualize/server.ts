@@ -17,6 +17,7 @@
 
 import * as http from 'http';
 import * as path from 'path';
+import * as fs from 'fs/promises';
 import { DevPlanGraphStore } from '../dev-plan-graph-store';
 import { createDevPlan, getDefaultBasePath, resolveBasePathForProject, readDevPlanConfig } from '../dev-plan-factory';
 import { CodeBridgeStore, EmbeddedCodeIntelligenceStore, runCodeIntelRegressionCheck } from '../code-intelligence';
@@ -49,6 +50,13 @@ interface CliArgs {
 }
 
 const TEST_TOOLS_REGISTRY_FILE = process.env.DEVPLAN_TEST_TOOLS_REGISTRY;
+const THREE_VENDOR_FILE = path.resolve(__dirname, '../../node_modules/three/build/three.min.js');
+const FORCE_GRAPH_VENDOR_FILE = path.resolve(__dirname, '../../node_modules/3d-force-graph/dist/3d-force-graph.min.js');
+const VIS_NETWORK_VENDOR_FILE = path.resolve(__dirname, '../../node_modules/vis-network/standalone/umd/vis-network.min.js');
+const MARKED_VENDOR_FILE = path.resolve(__dirname, '../../node_modules/marked/lib/marked.umd.js');
+const HIGHLIGHT_JS_VENDOR_FILE = path.resolve(__dirname, '../../node_modules/@highlightjs/cdn-assets/highlight.min.js');
+const MERMAID_VENDOR_FILE = path.resolve(__dirname, '../../node_modules/mermaid/dist/mermaid.min.js');
+const DECK_GL_VENDOR_FILE = path.resolve(__dirname, '../../node_modules/deck.gl/dist.min.js');
 
 function normalizeNonEmptyString(v: unknown): string | undefined {
   if (typeof v !== 'string') return undefined;
@@ -370,6 +378,26 @@ function startServer(projectName: string, basePath: string, port: number): void 
     res.end(JSON.stringify(body));
   }
 
+  async function writeStaticJsFile(
+    res: http.ServerResponse,
+    filePath: string,
+  ): Promise<void> {
+    try {
+      const content = await fs.readFile(filePath);
+      res.writeHead(200, {
+        'Content-Type': 'application/javascript; charset=utf-8',
+        'Cache-Control': 'public, max-age=3600',
+      });
+      res.end(content);
+    } catch (error) {
+      writeJson(res, 404, {
+        error: '静态资源不存在',
+        filePath,
+        message: error instanceof Error ? error.message : String(error),
+      });
+    }
+  }
+
   async function writeCodeIntelOk(
     res: http.ServerResponse,
     requestedRepoPath: string | undefined,
@@ -437,6 +465,34 @@ function startServer(projectName: string, basePath: string, port: number): void 
 
     try {
       switch (url.pathname) {
+        case '/vendor/three.min.js':
+          await writeStaticJsFile(res, THREE_VENDOR_FILE);
+          break;
+
+        case '/vendor/3d-force-graph.min.js':
+          await writeStaticJsFile(res, FORCE_GRAPH_VENDOR_FILE);
+          break;
+
+        case '/vendor/vis-network.min.js':
+          await writeStaticJsFile(res, VIS_NETWORK_VENDOR_FILE);
+          break;
+
+        case '/vendor/marked.umd.js':
+          await writeStaticJsFile(res, MARKED_VENDOR_FILE);
+          break;
+
+        case '/vendor/highlight.min.js':
+          await writeStaticJsFile(res, HIGHLIGHT_JS_VENDOR_FILE);
+          break;
+
+        case '/vendor/mermaid.min.js':
+          await writeStaticJsFile(res, MERMAID_VENDOR_FILE);
+          break;
+
+        case '/vendor/deck.gl.min.js':
+          await writeStaticJsFile(res, DECK_GL_VENDOR_FILE);
+          break;
+
         case '/':
         case '/graph':
         case '/stats':

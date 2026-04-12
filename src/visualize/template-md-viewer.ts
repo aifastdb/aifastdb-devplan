@@ -2,8 +2,8 @@
  * DevPlan 图可视化 — Markdown 预览器模块
  *
  * 内置 .md 文件预览基础能力。
- * 支持: 文件拖放/选择、直接粘贴输入、Markdown 渲染（marked.js CDN）、
- * 代码语法高亮（highlight.js CDN）、目录导航、文档统计、搜索、打印。
+ * 支持: 文件拖放/选择、直接粘贴输入、Markdown 渲染（本地优先 + CDN 回退）、
+ * 代码语法高亮、目录导航、文档统计、搜索、打印。
  */
 
 export function getMdViewerStyles(): string {
@@ -307,36 +307,54 @@ function loadMdViewerPage() {
     mdvInitEvents();
     mdvInited = true;
   }
-  mdvLoadCDN();
+  mdvLoadRenderAssets();
 }
 
-// ===== CDN Loading =====
-var MDV_MARKED_URLS = [
-  'https://cdn.jsdelivr.net/npm/marked@12.0.1/marked.min.js',
-  'https://unpkg.com/marked@12.0.1/marked.min.js'
+// ===== Markdown Render Assets =====
+var MDV_MARKED_LOCAL_URL = '/vendor/marked.umd.js';
+var MDV_MARKED_CDN_URLS = [
+  'https://cdn.jsdelivr.net/npm/marked@18.0.0/lib/marked.umd.js',
+  'https://unpkg.com/marked@18.0.0/lib/marked.umd.js'
 ];
-var MDV_HLJS_URLS = [
-  'https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.9.0/highlight.min.js',
-  'https://cdn.jsdelivr.net/npm/highlight.js@11.9.0/lib/highlight.min.js'
+var MDV_HLJS_LOCAL_URL = '/vendor/highlight.min.js';
+var MDV_HLJS_CDN_URLS = [
+  'https://cdn.jsdelivr.net/npm/@highlightjs/cdn-assets@11.11.1/highlight.min.js',
+  'https://unpkg.com/@highlightjs/cdn-assets@11.11.1/highlight.min.js'
 ];
-var MDV_MERMAID_URLS = [
-  'https://cdn.jsdelivr.net/npm/mermaid@11/dist/mermaid.min.js',
-  'https://unpkg.com/mermaid@11/dist/mermaid.min.js'
+var MDV_MERMAID_LOCAL_URL = '/vendor/mermaid.min.js';
+var MDV_MERMAID_CDN_URLS = [
+  'https://cdn.jsdelivr.net/npm/mermaid@11.14.0/dist/mermaid.min.js',
+  'https://unpkg.com/mermaid@11.14.0/dist/mermaid.min.js'
 ];
 var mdvMermaidReady = false;
 
-function mdvLoadCDN() {
+function mdvLoadRenderAssets() {
   if (mdvCdnLoaded || mdvCdnLoading) return;
   mdvCdnLoading = true;
   var statusEl = document.getElementById('mdvCdnStatus');
   if (statusEl) statusEl.textContent = '⏳ 加载渲染引擎...';
 
-  mdvLoadScript(MDV_MARKED_URLS, 0, function(markedOk) {
+  loadScriptWithFallbacks({
+    label: 'marked',
+    localUrl: MDV_MARKED_LOCAL_URL,
+    cdnUrls: MDV_MARKED_CDN_URLS,
+    globalCheck: function() { return typeof marked !== 'undefined' && typeof marked.parse === 'function'; }
+  }, function(markedOk) {
     if (markedOk && typeof marked !== 'undefined') {
       marked.setOptions({ gfm: true, breaks: false });
     }
-    mdvLoadScript(MDV_HLJS_URLS, 0, function(hljsOk) {
-      mdvLoadScript(MDV_MERMAID_URLS, 0, function(mermaidOk) {
+    loadScriptWithFallbacks({
+      label: 'highlight.js',
+      localUrl: MDV_HLJS_LOCAL_URL,
+      cdnUrls: MDV_HLJS_CDN_URLS,
+      globalCheck: function() { return typeof hljs !== 'undefined' && typeof hljs.highlightElement === 'function'; }
+    }, function(hljsOk) {
+      loadScriptWithFallbacks({
+        label: 'mermaid',
+        localUrl: MDV_MERMAID_LOCAL_URL,
+        cdnUrls: MDV_MERMAID_CDN_URLS,
+        globalCheck: function() { return typeof mermaid !== 'undefined' && typeof mermaid.initialize === 'function'; }
+      }, function(mermaidOk) {
         if (mermaidOk && typeof mermaid !== 'undefined') {
           try {
             mermaid.initialize({
@@ -372,22 +390,13 @@ function mdvLoadCDN() {
             statusEl.textContent = '✅ marked' + (extra.length ? ' + ' + extra.join(' + ') : '');
             statusEl.className = 'mdv-cdn-status loaded';
           } else {
-            statusEl.textContent = '⚠️ CDN 加载失败，使用简易渲染';
+            statusEl.textContent = '⚠️ 资源加载失败，使用简易渲染';
             statusEl.className = 'mdv-cdn-status failed';
           }
         }
       });
     });
   });
-}
-
-function mdvLoadScript(urls, index, callback) {
-  if (index >= urls.length) { callback(false); return; }
-  var s = document.createElement('script');
-  s.src = urls[index];
-  s.onload = function() { callback(true); };
-  s.onerror = function() { mdvLoadScript(urls, index + 1, callback); };
-  document.head.appendChild(s);
 }
 
 // ===== Markdown Parsing =====

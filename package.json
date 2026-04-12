@@ -24,12 +24,18 @@
     "test-hub": "node packages/test-tools-hub/dist/server.js"
   },
   "dependencies": {
-    "3d-force-graph": "^1.80.0",
+    "3d-force-graph": "^1.78.4",
     "@aifastdb/test-tools-hub": "file:./packages/test-tools-hub",
+    "@highlightjs/cdn-assets": "^11.11.1",
     "@modelcontextprotocol/sdk": "^1.0.0",
     "aifastdb": "^3.10.2",
+    "deck.gl": "^9.2.11",
+    "highlight.js": "^11.11.1",
+    "marked": "^18.0.0",
+    "mermaid": "^11.14.0",
     "three": "^0.160.0",
-    "typescript": "^5.3.3"
+    "typescript": "^5.3.3",
+    "vis-network": "^10.0.2"
   },
   "devDependencies": {
     "@jest/globals": "^29.7.0",

@@ -1,7 +1,7 @@
 /**
  * DevPlan 图可视化 HTML 模板 — 主入口
  *
- * 自包含的 HTML 页面，通过 CDN 引入渲染引擎。
+ * 自包含的 HTML 页面，按需加载渲染引擎与前端资源。
  * 所有模块化代码通过 import 组合为完整页面。
  *
  * 模块结构:
@@ -14,7 +14,7 @@
  * - template-detail-panel.ts — 共享详情面板、Markdown 渲染
  * - template-stats-modal.ts  — 统计弹层、手动刷新
  * - template-pages.ts        — 文档浏览、RAG 聊天、统计仪表盘
- * - template-md-viewer.ts    — Markdown 预览器（CDN marked.js + highlight.js）
+ * - template-md-viewer.ts    — Markdown 预览器（本地优先 + CDN 回退）
  */
 
 import { getStyles } from './template-styles';
@@ -60,7 +60,7 @@ function startApp() {
   }
   loadData();
   // 预加载 Markdown 渲染引擎 (marked.js + hljs)，供文档库/详情面板使用
-  if (typeof mdvLoadCDN === 'function') mdvLoadCDN();
+  if (typeof mdvLoadRenderAssets === 'function') mdvLoadRenderAssets();
 }
 
 

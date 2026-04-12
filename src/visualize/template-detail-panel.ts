@@ -450,7 +450,7 @@ function fixOrphanPipeRows(md) {
   return result.join('\\n');
 }
 
-/** Markdown 渲染 — 优先使用 marked.js（CDN），降级到简易解析器 */
+/** Markdown 渲染 — 优先使用已加载引擎（本地优先 + CDN 回退），降级到简易解析器 */
 function renderMarkdown(md) {
   if (!md) return '';
 
@@ -462,7 +462,7 @@ function renderMarkdown(md) {
   // 预处理：修复孤立管道行
   md = fixOrphanPipeRows(md);
 
-  // 优先使用 marked.js（由 MD Viewer CDN 加载）
+  // 优先使用 marked.js（由 MD Viewer 资源加载器预加载）
   if (typeof marked !== 'undefined') {
     try { return marked.parse(md); } catch(e) { console.warn('marked.parse fallback:', e); }
   }

@@ -2184,9 +2184,10 @@ function ensureCodeIntelAtlasLoaded(callback) {
   if (codeIntelAtlasLoading) return;
   codeIntelAtlasLoading = true;
 
-  var atlasUrls = [
-    'https://cdn.jsdelivr.net/npm/deck.gl@8.9.36/dist.min.js',
-    'https://unpkg.com/deck.gl@8.9.36/dist.min.js'
+  var atlasLocalUrl = '/vendor/deck.gl.min.js';
+  var atlasCdnUrls = [
+    'https://cdn.jsdelivr.net/npm/deck.gl@9.2.11/dist.min.js',
+    'https://unpkg.com/deck.gl@9.2.11/dist.min.js'
   ];
 
   function flushCallbacks() {
@@ -2203,44 +2204,16 @@ function ensureCodeIntelAtlasLoaded(callback) {
     codeIntelAtlasLoading = false;
   }
 
-  function loadOne(index) {
-    if (typeof deck !== 'undefined' && deck.Deck && deck.TextLayer && deck.PolygonLayer) {
-      flushCallbacks();
-      return;
-    }
-    if (index >= atlasUrls.length) {
-      failCallbacks();
-      return;
-    }
-    var s = document.createElement('script');
-    var settled = false;
-    var timer = setTimeout(function() {
-      if (settled) return;
-      settled = true;
-      try { s.remove(); } catch (e) {}
-      loadOne(index + 1);
-    }, CODE_INTEL_ATLAS_LOAD_TIMEOUT_MS);
-    s.src = atlasUrls[index];
-    s.onload = function() {
-      if (settled) return;
-      settled = true;
-      clearTimeout(timer);
-      if (typeof deck !== 'undefined' && deck.Deck && deck.TextLayer && deck.PolygonLayer) {
-        flushCallbacks();
-      } else {
-        loadOne(index + 1);
-      }
-    };
-    s.onerror = function() {
-      if (settled) return;
-      settled = true;
-      clearTimeout(timer);
-      loadOne(index + 1);
-    };
-    document.head.appendChild(s);
-  }
-
-  loadOne(0);
+  loadScriptWithFallbacks({
+    label: 'deck.gl',
+    localUrl: atlasLocalUrl,
+    cdnUrls: atlasCdnUrls,
+    timeoutMs: CODE_INTEL_ATLAS_LOAD_TIMEOUT_MS,
+    globalCheck: function() { return typeof deck !== 'undefined' && deck.Deck && deck.TextLayer && deck.PolygonLayer; }
+  }, function(ok) {
+    if (ok) flushCallbacks();
+    else failCallbacks();
+  });
 }
 
 function ensureCodeIntelVisLoaded(callback) {
@@ -2270,44 +2243,16 @@ function ensureCodeIntelVisLoaded(callback) {
     }
   }
 
-  function loadOne(index) {
-    if (typeof vis !== 'undefined' && vis.Network && vis.DataSet) {
-      flushCallbacks();
-      return;
-    }
-    if (!VIS_URLS || index >= VIS_URLS.length) {
-      failCallbacks('vis-network CDN 加载失败');
-      return;
-    }
-    var s = document.createElement('script');
-    var settled = false;
-    var timer = setTimeout(function() {
-      if (settled) return;
-      settled = true;
-      try { s.remove(); } catch (e) {}
-      loadOne(index + 1);
-    }, CODE_INTEL_VIS_LOAD_TIMEOUT_MS);
-    s.src = VIS_URLS[index];
-    s.onload = function() {
-      if (settled) return;
-      settled = true;
-      clearTimeout(timer);
-      if (typeof vis !== 'undefined' && vis.Network && vis.DataSet) {
-        flushCallbacks();
-      } else {
-        loadOne(index + 1);
-      }
-    };
-    s.onerror = function() {
-      if (settled) return;
-      settled = true;
-      clearTimeout(timer);
-      loadOne(index + 1);
-    };
-    document.head.appendChild(s);
-  }
-
-  loadOne(0);
+  loadScriptWithFallbacks({
+    label: 'vis-network',
+    localUrl: LOCAL_VIS_NETWORK_URL,
+    cdnUrls: VIS_NETWORK_CDN_URLS,
+    timeoutMs: CODE_INTEL_VIS_LOAD_TIMEOUT_MS,
+    globalCheck: function() { return typeof vis !== 'undefined' && vis.Network && vis.DataSet; }
+  }, function(ok) {
+    if (ok) flushCallbacks();
+    else failCallbacks('vis-network 资源加载失败');
+  });
 }
 
 function renderCodeIntelGraph3D(graph, container) {
