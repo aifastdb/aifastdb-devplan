@@ -294,7 +294,6 @@ function closePanel() {
 var panelDefaultWidth = 340;
 var panelExpandedWidth = 680;
 var panelIsExpanded = false;
-var panelResizing = false;
 
 // 双击标题栏切换宽度
 (function() {
@@ -313,45 +312,21 @@ var panelResizing = false;
   });
 })();
 
-// 拖拽左边线调整宽度
+// 拖拽左边线调整宽度（与左侧弹层共用同一套逻辑）
 (function() {
-  var handle = document.getElementById('panelResizeHandle');
-  var panel = document.getElementById('panel');
-  if (!handle || !panel) return;
-
-  var startX = 0;
-  var startWidth = 0;
-
-  handle.addEventListener('mousedown', function(e) {
-    e.preventDefault();
-    e.stopPropagation();
-    panelResizing = true;
-    startX = e.clientX;
-    startWidth = panel.offsetWidth;
-    handle.classList.add('active');
-    document.body.style.cursor = 'col-resize';
-    document.body.style.userSelect = 'none';
-
-    function onMouseMove(ev) {
-      if (!panelResizing) return;
-      // 面板在右侧，向左拖 = 增大宽度
-      var dx = startX - ev.clientX;
-      var newWidth = Math.max(280, Math.min(startWidth + dx, window.innerWidth - 40));
-      panel.style.width = newWidth + 'px';
-      panelIsExpanded = newWidth > (panelDefaultWidth + 50);
+  if (typeof initHorizontalResize !== 'function') return;
+  initHorizontalResize({
+    targetId: 'panel',
+    handleId: 'panelResizeHandle',
+    edge: 'left',
+    minWidth: 280,
+    storageKey: 'devplan_detail_panel_width',
+    getMaxWidth: function() {
+      return Math.max(280, window.innerWidth - 40);
+    },
+    onWidthChange: function(width) {
+      panelIsExpanded = width > (panelDefaultWidth + 50);
     }
-
-    function onMouseUp() {
-      panelResizing = false;
-      handle.classList.remove('active');
-      document.body.style.cursor = '';
-      document.body.style.userSelect = '';
-      document.removeEventListener('mousemove', onMouseMove);
-      document.removeEventListener('mouseup', onMouseUp);
-    }
-
-    document.addEventListener('mousemove', onMouseMove);
-    document.addEventListener('mouseup', onMouseUp);
   });
 })();
 

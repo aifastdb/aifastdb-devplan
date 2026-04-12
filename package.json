@@ -24,9 +24,11 @@
     "test-hub": "node packages/test-tools-hub/dist/server.js"
   },
   "dependencies": {
+    "3d-force-graph": "^1.80.0",
     "@aifastdb/test-tools-hub": "file:./packages/test-tools-hub",
     "@modelcontextprotocol/sdk": "^1.0.0",
-    "aifastdb": "^3.9.0",
+    "aifastdb": "^3.10.2",
+    "three": "^0.160.0",
     "typescript": "^5.3.3"
   },
   "devDependencies": {

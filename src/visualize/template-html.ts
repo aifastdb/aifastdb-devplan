@@ -192,7 +192,8 @@ export function getHTML(projectName: string): string {
     <div class="page-view" id="pageDocs">
       <div class="docs-page">
         <!-- Left: Document List -->
-        <div class="docs-sidebar">
+        <div class="docs-sidebar" id="docsSidebar">
+          <div class="docs-sidebar-resize-handle" id="docsSidebarResizeHandle"></div>
           <div class="docs-sidebar-header">
             <div class="docs-sidebar-title-row">
               <h3>📄 文档库</h3>
@@ -892,7 +893,8 @@ export function getHTML(projectName: string): string {
 
 <!-- Stats Modal -->
 <div class="stats-modal-overlay" id="statsModalOverlay">
-  <div class="stats-modal">
+  <div class="stats-modal" id="statsModal">
+    <div class="stats-modal-resize-handle" id="statsModalResizeHandle"></div>
     <div class="stats-modal-header">
       <div><span class="stats-modal-title" id="statsModalTitle">列表</span><span class="stats-modal-count" id="statsModalCount"></span></div>
       <button class="stats-modal-close" onclick="closeStatsModal()">&times;</button>

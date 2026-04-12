@@ -109,8 +109,9 @@ function loadDataTiered() {
   ]).then(function(results) {
     var graphRes = results[0];
     var progressRes = results[1];
-    allNodes = graphRes.nodes || [];
-    allEdges = graphRes.edges || [];
+    var normalized = normalizeGraphPayload(graphRes, 'tiered-load');
+    allNodes = normalized.nodes;
+    allEdges = normalized.edges;
     tieredLoadState.l0l1Loaded = true;
     tieredLoadState.totalNodes = graphRes.total || allNodes.length;
 
@@ -141,8 +142,9 @@ function loadDataFull() {
   ]).then(function(results) {
     var graphRes = results[0];
     var progressRes = results[1];
-    allNodes = graphRes.nodes || [];
-    allEdges = graphRes.edges || [];
+    var normalized = normalizeGraphPayload(graphRes, 'full-load');
+    allNodes = normalized.nodes;
+    allEdges = normalized.edges;
     tieredLoadState.l0l1Loaded = true;
     tieredLoadState.l2Loaded = true;
     tieredLoadState.l3Loaded = true;
@@ -306,9 +308,13 @@ function getNodeTypeById(nodeId) {
 function incrementalAddNodes(rawNodes, rawEdges) {
   if (!nodesDataSet || !edgesDataSet) return;
   var addedVisNodes = [];
+  var existingNodeIds = {};
+  var currentIds = nodesDataSet.getIds();
+  for (var i = 0; i < currentIds.length; i++) existingNodeIds[currentIds[i]] = true;
   for (var i = 0; i < rawNodes.length; i++) {
     var n = rawNodes[i];
     if (hiddenTypes[n.type]) continue;
+    if (existingNodeIds[n.id]) continue;
     var deg = getNodeDegree(n);
     var s = nodeStyle(n, deg);
     addedVisNodes.push({
@@ -318,16 +324,19 @@ function incrementalAddNodes(rawNodes, rawEdges) {
       borderWidth: s.borderWidth, _type: n.type,
       _props: n.properties || {},
     });
+    existingNodeIds[n.id] = true;
   }
   var addedVisEdges = [];
-  var existingNodeIds = {};
-  var currentIds = nodesDataSet.getIds();
-  for (var i = 0; i < currentIds.length; i++) existingNodeIds[currentIds[i]] = true;
-  for (var i = 0; i < addedVisNodes.length; i++) existingNodeIds[addedVisNodes[i].id] = true;
+  var edgeSeen = {};
+  edgesDataSet.forEach(function(edge) {
+    edgeSeen[getGraphEdgeDedupKey(edge)] = true;
+  });
 
   for (var i = 0; i < rawEdges.length; i++) {
     var e = rawEdges[i];
     if (!existingNodeIds[e.from] || !existingNodeIds[e.to]) continue;
+    var edgeKey = getGraphEdgeDedupKey(e);
+    if (edgeSeen[edgeKey]) continue;
     var es = edgeStyle(e);
     addedVisEdges.push({
       id: 'e_inc_' + Date.now() + '_' + i, from: e.from, to: e.to,
@@ -335,6 +344,7 @@ function incrementalAddNodes(rawNodes, rawEdges) {
       color: es.color, dashes: es.dashes, arrows: es.arrows,
       _label: e.label, _highlightColor: es._highlightColor || '#9ca3af',
     });
+    edgeSeen[edgeKey] = true;
   }
 
   if (addedVisNodes.length > 0) nodesDataSet.add(addedVisNodes);

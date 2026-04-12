@@ -601,6 +601,11 @@ function renderGraph() {
       }
       visibleNodes.push({ id: n.id, label: label, _origLabel: n.label, _origFontSize: origFontSize, title: tooltip, shape: s.shape, size: s.size, color: s.color, font: nodeFont, borderWidth: s.borderWidth, _type: n.type, _props: n.properties || {}, _isParentDoc: isParentDoc });
     }
+    var dedupedVisibleNodes = dedupeItemsById(visibleNodes, {});
+    visibleNodes = dedupedVisibleNodes.items;
+    if (dedupedVisibleNodes.removed > 0) {
+      log('渲染前节点去重: -' + dedupedVisibleNodes.removed, true);
+    }
 
     var visibleIds = {};
     var _projectNodeIds = {}; // 收集所有 project 类型节点 ID

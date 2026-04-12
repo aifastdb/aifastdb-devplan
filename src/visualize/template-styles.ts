@@ -93,10 +93,12 @@ export function getStyles(): string {
     /* Detail Panel */
     .panel { position: absolute; top: 12px; right: 12px; width: 340px; max-height: calc(100vh - 180px); background: #1f2937; border: 1px solid #374151; border-radius: 12px; box-shadow: 0 20px 40px rgba(0,0,0,0.5); z-index: 10; display: none; overflow: hidden; min-width: 280px; max-width: calc(100vw - 40px); transition: none; }
     .panel.show { display: flex; flex-direction: column; }
-    .panel-resize-handle { position: absolute; top: 0; left: -4px; width: 8px; height: 100%; cursor: col-resize; z-index: 15; background: transparent; }
-    .panel-resize-handle:hover, .panel-resize-handle.active { background: linear-gradient(90deg, transparent, rgba(99,102,241,0.4), transparent); }
-    .panel-resize-handle::after { content: ''; position: absolute; top: 50%; left: 50%; transform: translate(-50%, -50%); width: 3px; height: 32px; background: #4b5563; border-radius: 2px; opacity: 0; transition: opacity 0.2s; }
-    .panel-resize-handle:hover::after, .panel-resize-handle.active::after { opacity: 1; background: #6366f1; }
+    .panel-resize-handle, .docs-sidebar-resize-handle, .stats-modal-resize-handle { position: absolute; top: 0; width: 10px; height: 100%; cursor: col-resize; z-index: 15; background: transparent; }
+    .panel-resize-handle { left: -5px; }
+    .docs-sidebar-resize-handle, .stats-modal-resize-handle { right: -5px; }
+    .panel-resize-handle:hover, .panel-resize-handle.active, .docs-sidebar-resize-handle:hover, .docs-sidebar-resize-handle.active, .stats-modal-resize-handle:hover, .stats-modal-resize-handle.active { background: linear-gradient(90deg, transparent, rgba(99,102,241,0.4), transparent); }
+    .panel-resize-handle::after, .docs-sidebar-resize-handle::after, .stats-modal-resize-handle::after { content: ''; position: absolute; top: 50%; left: 50%; transform: translate(-50%, -50%); width: 3px; height: 36px; background: #4b5563; border-radius: 2px; opacity: 0; transition: opacity 0.2s, background 0.2s; }
+    .panel-resize-handle:hover::after, .panel-resize-handle.active::after, .docs-sidebar-resize-handle:hover::after, .docs-sidebar-resize-handle.active::after, .stats-modal-resize-handle:hover::after, .stats-modal-resize-handle.active::after { opacity: 1; background: #6366f1; }
     .panel-header { padding: 12px 16px; display: flex; align-items: center; justify-content: space-between; flex-shrink: 0; cursor: default; user-select: none; }
     .panel-header.project { background: linear-gradient(135deg, #d97706, #f59e0b); }
     .panel-header.module { background: linear-gradient(135deg, #cc5200, #ff6600); }
@@ -522,7 +524,7 @@ export function getStyles(): string {
 
     /* ===== Docs Browser Page ===== */
     .docs-page { display: flex; flex: 1; min-height: 0; overflow: hidden; background: #111827; }
-    .docs-sidebar { width: 280px; background: #1f2937; border-right: 1px solid #374151; display: flex; flex-direction: column; flex-shrink: 0; overflow: hidden; }
+    .docs-sidebar { position: relative; width: 280px; background: #1f2937; border-right: 1px solid #374151; display: flex; flex-direction: column; flex-shrink: 0; overflow: hidden; min-width: 240px; }
     .docs-sidebar-header { padding: 16px 20px 12px; border-bottom: 1px solid #374151; flex-shrink: 0; }
     .docs-sidebar-title-row { display: flex; align-items: center; justify-content: space-between; margin-bottom: 8px; }
     .docs-sidebar-title-row h3 { font-size: 15px; font-weight: 700; color: #f3f4f6; margin: 0; }
@@ -715,7 +717,7 @@ export function getStyles(): string {
     /* Stats Modal — left side panel */
     .stats-modal-overlay { display: none; position: fixed; inset: 0; z-index: 200; pointer-events: none; }
     .stats-modal-overlay.active { display: block; }
-    .stats-modal { position: fixed; top: 0; bottom: 0; left: 48px; width: 300px; background: #1f2937; border-right: 1px solid #374151; display: flex; flex-direction: column; box-shadow: 4px 0 24px rgba(0,0,0,0.4); animation: modal-slide-in 0.2s ease; z-index: 201; pointer-events: auto; transition: left 0.25s ease; }
+    .stats-modal { position: fixed; top: 0; bottom: 0; left: 48px; width: 300px; background: #1f2937; border-right: 1px solid #374151; display: flex; flex-direction: column; box-shadow: 4px 0 24px rgba(0,0,0,0.4); animation: modal-slide-in 0.2s ease; z-index: 201; pointer-events: auto; transition: left 0.25s ease; min-width: 280px; }
     @keyframes modal-slide-in { from { opacity: 0; transform: translateX(-16px); } to { opacity: 1; transform: translateX(0); } }
     .stats-modal-header { display: flex; align-items: center; justify-content: space-between; padding: 16px 20px; border-bottom: 1px solid #374151; }
     .stats-modal-title { font-size: 15px; font-weight: 700; color: #f3f4f6; }

@@ -31,6 +31,176 @@ function updateStatsModalPosition() {
   }
 }
 
+function safeLocalStorageGet(key) {
+  try { return localStorage.getItem(key); } catch (e) { return null; }
+}
+
+function safeLocalStorageSet(key, value) {
+  try { localStorage.setItem(key, value); } catch (e) {}
+}
+
+function dedupeItemsById(items, existingIdMap) {
+  var list = Array.isArray(items) ? items : [];
+  var seen = existingIdMap || {};
+  var unique = [];
+  var removed = 0;
+  for (var i = 0; i < list.length; i++) {
+    var item = list[i];
+    var itemId = item && item.id;
+    if (!itemId) {
+      unique.push(item);
+      continue;
+    }
+    if (seen[itemId]) {
+      removed++;
+      continue;
+    }
+    seen[itemId] = true;
+    unique.push(item);
+  }
+  return { items: unique, removed: removed, seen: seen };
+}
+
+function getGraphEdgeDedupKey(edge) {
+  if (!edge) return '';
+  return [
+    edge.id != null ? String(edge.id) : '',
+    edge.from != null ? String(edge.from) : '',
+    edge.to != null ? String(edge.to) : '',
+    edge.label != null ? String(edge.label) : (edge._label != null ? String(edge._label) : '')
+  ].join('|');
+}
+
+function normalizeGraphPayload(graphRes, context) {
+  var ctx = context || 'graph';
+  var nodeResult = dedupeItemsById(graphRes && graphRes.nodes, {});
+  var edgeSeen = {};
+  var rawEdges = graphRes && Array.isArray(graphRes.edges) ? graphRes.edges : [];
+  var uniqueEdges = [];
+  var removedEdges = 0;
+  for (var i = 0; i < rawEdges.length; i++) {
+    var edge = rawEdges[i];
+    var key = getGraphEdgeDedupKey(edge);
+    if (key && edgeSeen[key]) {
+      removedEdges++;
+      continue;
+    }
+    if (key) edgeSeen[key] = true;
+    uniqueEdges.push(edge);
+  }
+  if ((nodeResult.removed || removedEdges) && typeof log === 'function') {
+    log('图谱数据已去重 [' + ctx + ']: 节点 -' + nodeResult.removed + ', 边 -' + removedEdges, true);
+  }
+  return {
+    nodes: nodeResult.items,
+    edges: uniqueEdges,
+    duplicateNodeCount: nodeResult.removed,
+    duplicateEdgeCount: removedEdges
+  };
+}
+
+function initHorizontalResize(options) {
+  if (!options) return;
+  var target = document.getElementById(options.targetId);
+  var handle = document.getElementById(options.handleId);
+  if (!target || !handle) return;
+
+  var edge = options.edge === 'left' ? 'left' : 'right';
+  var minWidth = options.minWidth || 240;
+
+  function getMaxWidth() {
+    if (typeof options.getMaxWidth === 'function') {
+      var dynamicMax = Number(options.getMaxWidth());
+      if (!isNaN(dynamicMax) && dynamicMax > minWidth) return dynamicMax;
+    }
+    return Math.max(minWidth, window.innerWidth - 40);
+  }
+
+  function clampWidth(width) {
+    return Math.max(minWidth, Math.min(width, getMaxWidth()));
+  }
+
+  function applyWidth(width, persist) {
+    var nextWidth = clampWidth(width);
+    target.style.width = nextWidth + 'px';
+    if (persist && options.storageKey) {
+      safeLocalStorageSet(options.storageKey, String(Math.round(nextWidth)));
+    }
+    if (typeof options.onWidthChange === 'function') {
+      options.onWidthChange(nextWidth);
+    }
+    return nextWidth;
+  }
+
+  if (options.storageKey) {
+    var savedWidth = parseInt(safeLocalStorageGet(options.storageKey) || '', 10);
+    if (!isNaN(savedWidth) && savedWidth > 0) {
+      applyWidth(savedWidth, false);
+    }
+  }
+
+  handle.addEventListener('mousedown', function(e) {
+    e.preventDefault();
+    e.stopPropagation();
+
+    var startX = e.clientX;
+    var startWidth = target.getBoundingClientRect().width;
+    handle.classList.add('active');
+    document.body.style.cursor = 'col-resize';
+    document.body.style.userSelect = 'none';
+
+    function onMouseMove(ev) {
+      var dx = edge === 'left' ? (startX - ev.clientX) : (ev.clientX - startX);
+      applyWidth(startWidth + dx, false);
+    }
+
+    function onMouseUp() {
+      handle.classList.remove('active');
+      document.body.style.cursor = '';
+      document.body.style.userSelect = '';
+      applyWidth(target.getBoundingClientRect().width, true);
+      document.removeEventListener('mousemove', onMouseMove);
+      document.removeEventListener('mouseup', onMouseUp);
+    }
+
+    document.addEventListener('mousemove', onMouseMove);
+    document.addEventListener('mouseup', onMouseUp);
+  });
+
+  window.addEventListener('resize', function() {
+    if (!target.style.width) return;
+    applyWidth(target.getBoundingClientRect().width, false);
+  });
+}
+
+(function() {
+  initHorizontalResize({
+    targetId: 'docsSidebar',
+    handleId: 'docsSidebarResizeHandle',
+    edge: 'right',
+    minWidth: 240,
+    storageKey: 'devplan_docs_sidebar_width',
+    getMaxWidth: function() {
+      var page = document.querySelector('.docs-page');
+      var pageWidth = page ? page.getBoundingClientRect().width : window.innerWidth;
+      return Math.max(240, pageWidth - 320);
+    }
+  });
+
+  initHorizontalResize({
+    targetId: 'statsModal',
+    handleId: 'statsModalResizeHandle',
+    edge: 'right',
+    minWidth: 280,
+    storageKey: 'devplan_stats_modal_width',
+    getMaxWidth: function() {
+      var sidebar = document.getElementById('sidebar');
+      var leftOffset = sidebar && sidebar.classList.contains('expanded') ? 200 : 48;
+      return Math.max(280, window.innerWidth - leftOffset - 240);
+    }
+  });
+})();
+
 var currentPage = 'graph';
 var pageMap = { graph: 'pageGraph', stats: 'pageStats', docs: 'pageDocs', 'code-intel': 'pageCodeIntel', 'test-tools': 'pageTestTools', memory: 'pageMemory', 'md-viewer': 'pageMdViewer', settings: 'pageSettings' };
 var routePages = { '/': 'graph', '/graph': 'graph', '/stats': 'stats', '/docs': 'docs', '/code-intel': 'code-intel', '/test-tools': 'test-tools', '/memory': 'memory', '/md-viewer': 'md-viewer', '/settings': 'settings' };
