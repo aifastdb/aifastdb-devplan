@@ -481,6 +481,28 @@ function mdEnhanceContent(container) {
 
 var _mdvMermaidCounter = 0;
 
+/**
+ * Mermaid v11+ uses a strict Langium-based parser that rejects unquoted
+ * special characters (parentheses, %, etc.) inside node labels.
+ * Automatically wrap such labels in double-quotes so diagrams authored
+ * for older / more lenient parsers (e.g. Cursor's built-in preview) render correctly.
+ *
+ * NOTE: This code lives inside a JS template-literal string returned by
+ * getMdViewerScript(), so regex backslashes would be swallowed.
+ * We use new RegExp() with properly escaped strings instead.
+ */
+function mdvPreprocessMermaid(source) {
+  var reRect = new RegExp('\\\\[([^\\\\]"]+)\\\\]', 'g');
+  var reSpecial = /[()%]/;
+  source = source.replace(reRect, function(_match, content) {
+    if (reSpecial.test(content)) {
+      return '["' + content + '"]';
+    }
+    return _match;
+  });
+  return source;
+}
+
 function mdvRenderMermaidBlocks(container) {
   if (!container) return;
   if (!mdvMermaidReady || typeof mermaid === 'undefined') return;
@@ -510,6 +532,7 @@ function mdvRenderMermaidBlocks(container) {
 
       var source = codeEl.textContent || '';
       if (!source.trim()) return;
+      source = mdvPreprocessMermaid(source.trim());
 
       var containerId = 'mermaid-graph-' + (++_mdvMermaidCounter);
       var wrapper = document.createElement('div');
@@ -517,7 +540,7 @@ function mdvRenderMermaidBlocks(container) {
       wrapper.id = containerId + '-wrap';
 
       try {
-        mermaid.render(containerId, source.trim()).then(function(result) {
+        mermaid.render(containerId, source).then(function(result) {
           wrapper.innerHTML = '<span class="mermaid-label">mermaid</span>' + result.svg;
           pre.parentNode.replaceChild(wrapper, pre);
         }).catch(function(err) {
