@@ -742,6 +742,8 @@ export function getStyles(): string {
     .stats-modal-more-menu { position: absolute; top: 22px; right: 0; min-width: 120px; background: #111827; border: 1px solid #374151; border-radius: 8px; box-shadow: 0 8px 24px rgba(0,0,0,0.45); overflow: hidden; z-index: 10; }
     .stats-modal-more-item { width: 100%; text-align: left; background: transparent; border: none; color: #d1d5db; font-size: 12px; padding: 8px 10px; cursor: pointer; }
     .stats-modal-more-item:hover { background: #1f2937; color: #a5b4fc; }
+    .stats-modal-more-item--danger { color: #f87171; }
+    .stats-modal-more-item--danger:hover { background: rgba(239,68,68,0.15); color: #fca5a5; }
     .stats-modal-item-badge { font-size: 11px; padding: 2px 8px; border-radius: 9999px; flex-shrink: 0; }
     .stats-modal-item-badge.completed { background: rgba(16,185,129,0.15); color: #6ee7b7; }
     .stats-modal-item-badge.in_progress { background: rgba(59,130,246,0.15); color: #93c5fd; }

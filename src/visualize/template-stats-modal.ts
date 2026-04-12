@@ -44,6 +44,9 @@ function toggleMainTaskMoreMenu(btn, taskId, nodeId, status) {
   if (CANCELABLE_MAIN_TASK_STATUSES[status]) {
     menuHtml += '<button class="stats-modal-more-item" onclick="event.stopPropagation();markMainTaskStatus(\\x27' + safeNodeId + '\\x27,\\x27' + safeTaskId + '\\x27,\\x27cancelled\\x27,event)">🚫 标记为废弃</button>';
   }
+  if (status === 'cancelled') {
+    menuHtml += '<button class="stats-modal-more-item stats-modal-more-item--danger" onclick="event.stopPropagation();deleteMainTask(\\x27' + safeNodeId + '\\x27,\\x27' + safeTaskId + '\\x27,event)">🗑️ 删除任务</button>';
+  }
   menu.innerHTML = menuHtml;
   menu.addEventListener('click', function(e) { e.stopPropagation(); });
   btn.parentNode.appendChild(menu);
@@ -131,6 +134,55 @@ function markMainTaskStatus(nodeId, taskId, status, e) {
     })
     .catch(function(err) {
       if (typeof log === 'function') log('更新主任务状态失败: ' + err.message, false);
+    });
+}
+
+function deleteMainTask(nodeId, taskId, e) {
+  if (e) e.stopPropagation();
+  closeMainTaskMoreMenu();
+  if (!taskId) return;
+  if (!confirm('确定要删除已取消的任务 "' + taskId + '" 吗？\\n此操作会级联删除其所有子任务且不可恢复。')) return;
+  fetch('/api/main-task/delete', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ taskId: taskId })
+  })
+    .then(function(r) {
+      return r.json().then(function(body) {
+        if (!r.ok) throw new Error(body && body.error ? body.error : ('HTTP ' + r.status));
+        return body;
+      });
+    })
+    .then(function() {
+      // Remove node + related edges from local graph state
+      var target = findMainTaskNode(nodeId, taskId);
+      if (target) {
+        var targetId = target.id;
+        for (var i = allNodes.length - 1; i >= 0; i--) {
+          if (allNodes[i].id === targetId) { allNodes.splice(i, 1); break; }
+        }
+        for (var j = allEdges.length - 1; j >= 0; j--) {
+          if (allEdges[j].from === targetId || allEdges[j].to === targetId) allEdges.splice(j, 1);
+        }
+        if (nodesDataSet && typeof nodesDataSet.remove === 'function') nodesDataSet.remove(targetId);
+        if (edgesDataSet && typeof edgesDataSet.remove === 'function') {
+          var edgeIdsToRemove = [];
+          if (typeof edgesDataSet.getIds === 'function') {
+            var allEdgeIds = edgesDataSet.getIds();
+            for (var k = 0; k < allEdgeIds.length; k++) {
+              var edge = edgesDataSet.get(allEdgeIds[k]);
+              if (edge && (edge.from === targetId || edge.to === targetId)) edgeIdsToRemove.push(allEdgeIds[k]);
+            }
+          }
+          if (edgeIdsToRemove.length) edgesDataSet.remove(edgeIdsToRemove);
+        }
+        if (network && typeof network.redraw === 'function') network.redraw();
+      }
+      showStatsModal('main-task');
+      if (typeof log === 'function') log('已删除任务: ' + taskId, true);
+    })
+    .catch(function(err) {
+      if (typeof log === 'function') log('删除任务失败: ' + err.message, false);
     });
 }
 

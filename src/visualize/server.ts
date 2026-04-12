@@ -1049,6 +1049,37 @@ function startServer(projectName: string, basePath: string, port: number): void 
           break;
         }
 
+        case '/api/main-task/delete': {
+          if (req.method !== 'POST') {
+            res.writeHead(405, { 'Content-Type': 'application/json; charset=utf-8' });
+            res.end(JSON.stringify({ error: 'Method Not Allowed. Use POST.' }));
+            break;
+          }
+          const delBody = await readRequestBody(req);
+          const delTaskId = delBody?.taskId;
+          if (!delTaskId) {
+            res.writeHead(400, { 'Content-Type': 'application/json; charset=utf-8' });
+            res.end(JSON.stringify({ error: '缺少 taskId 参数' }));
+            break;
+          }
+          const delStore = createFreshStore(projectName, basePath);
+          const delTarget = delStore.getMainTask(delTaskId);
+          if (!delTarget) {
+            res.writeHead(404, { 'Content-Type': 'application/json; charset=utf-8' });
+            res.end(JSON.stringify({ error: `主任务 "${delTaskId}" 未找到` }));
+            break;
+          }
+          if (delTarget.status !== 'cancelled') {
+            res.writeHead(409, { 'Content-Type': 'application/json; charset=utf-8' });
+            res.end(JSON.stringify({ error: `仅允许删除已取消的任务，当前状态: ${delTarget.status}` }));
+            break;
+          }
+          const delResult = delStore.deleteTask(delTaskId, 'main');
+          res.writeHead(200, { 'Content-Type': 'application/json; charset=utf-8' });
+          res.end(JSON.stringify({ success: delResult.deleted, taskId: delTaskId, ...delResult }));
+          break;
+        }
+
         case '/api/stats': {
           // 详细统计数据 — 用于仪表盘页面
           const store = getCachedStore(projectName, basePath);
