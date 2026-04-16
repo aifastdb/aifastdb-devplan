@@ -60,18 +60,6 @@ export function getHTML(projectName: string): string {
         <span class="nav-item-text">代码智能</span>
         <span class="nav-tooltip">Code Intelligence</span>
       </div>
-      <div class="nav-item" data-page="test-tools" onclick="navTo('test-tools')">
-        <span class="nav-item-icon">
-          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
-            <path d="M9.5 3.5h5l2 2v3h-2v-2h-5v2h-2v-3z"></path>
-            <rect x="4" y="9" width="16" height="10.5" rx="2"></rect>
-            <path d="M9 13.5h6"></path>
-            <path d="M12 11v5"></path>
-          </svg>
-        </span>
-        <span class="nav-item-text">测试工具</span>
-        <span class="nav-tooltip">测试工具</span>
-      </div>
       <div class="nav-item" data-page="memory" onclick="navTo('memory')">
         <span class="nav-item-icon">🧠</span>
         <span class="nav-item-text">记忆</span>
@@ -315,20 +303,6 @@ export function getHTML(projectName: string): string {
             </div>
             <input type="file" id="batchImportInput" webkitdirectory multiple style="display:none" onchange="handleBatchImportFiles(this.files)">
           </div>
-        </div>
-      </div>
-    </div>
-
-    <!-- ===== PAGE: Test Tools ===== -->
-    <div class="page-view" id="pageTestTools">
-      <div class="stats-page" style="padding-bottom:12px;">
-        <div class="stats-header">
-          <h2>🧪 测试工具中心 — ${projectName}</h2>
-          <p>集中查看可视化测试工具状态与当前阶段进度（文档页下方入口）</p>
-        </div>
-        <div id="testToolsSummary" style="display:flex;gap:10px;flex-wrap:wrap;margin:0 0 12px 0;"></div>
-        <div id="testToolsContent" style="background:#0f172a;border:1px solid #1f2a44;border-radius:10px;padding:12px;min-height:280px;">
-          <div style="text-align:center;padding:60px;color:#6b7280;">加载中...</div>
         </div>
       </div>
     </div>

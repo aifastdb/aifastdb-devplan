@@ -88,9 +88,9 @@ export interface DevPlanConfig {
    * Phase-52/216: Perception 预设名称 — 快捷选择 Embedding 模型
    *
    * 常用值:
-   * - "qwen3Local06b"（默认）— 本地 Qwen3-Embedding 0.6B, 1024d, 无需 Ollama
+   * - "qwen3Hybrid06b"（默认）— Ollama qwen3-embedding 优先 + 本地回退, 1024d
+   * - "qwen3Local06b" — 本地 Qwen3-Embedding 0.6B, 1024d, 无需 Ollama
    * - "ollamaQwen3Embedding8b" — Ollama Qwen3 8B, 4096d, 最高质量
-   * - "qwen3Hybrid06b" — Ollama 优先 + 本地回退, 1024d
    *
    * 全部可选值参见 PerceptionPresetName 类型定义。
    * 维度从模型自动解析，无需手动指定。

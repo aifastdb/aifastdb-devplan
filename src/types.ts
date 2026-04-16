@@ -565,7 +565,7 @@ export interface DevPlanGraphStoreConfig {
   /**
    * Phase-52/216: Perception 预设名称 — 快捷选择 Embedding 模型
    *
-   * 优先级：perceptionConfig > perceptionPreset > 默认 qwen3Local06b(1024d)
+   * 优先级：perceptionConfig > perceptionPreset > 默认 qwen3Hybrid06b(1024d, Ollama优先+本地回退)
    *
    * 在 .devplan/config.json 中配置：
    * ```json

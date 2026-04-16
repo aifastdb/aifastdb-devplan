@@ -32,11 +32,8 @@ import {
   getLastHeartbeat,
 } from '../autopilot';
 import type { ExecutorHeartbeat } from '../types';
-import {
-  loadRegistryFromFile,
-  getEnabledTools,
-  collectToolStatus,
-  type PhaseSnapshot,
+import type {
+  PhaseSnapshot,
 } from '../../packages/test-tools-hub/dist/index';
 
 // ============================================================================
@@ -49,7 +46,6 @@ interface CliArgs {
   basePath: string;
 }
 
-const TEST_TOOLS_REGISTRY_FILE = process.env.DEVPLAN_TEST_TOOLS_REGISTRY;
 const THREE_VENDOR_FILE = path.resolve(__dirname, '../../node_modules/three/build/three.min.js');
 const FORCE_GRAPH_VENDOR_FILE = path.resolve(__dirname, '../../node_modules/3d-force-graph/dist/3d-force-graph.min.js');
 const VIS_NETWORK_VENDOR_FILE = path.resolve(__dirname, '../../node_modules/vis-network/standalone/umd/vis-network.min.js');
@@ -497,7 +493,6 @@ function startServer(projectName: string, basePath: string, port: number): void 
         case '/graph':
         case '/stats':
         case '/docs':
-        case '/test-tools':
         case '/memory':
         case '/code-intel':
         case '/md-viewer':
@@ -889,50 +884,6 @@ function startServer(projectName: string, basePath: string, port: number): void 
             normalizeNonEmptyString(body?.note) || undefined,
           );
           await writeCodeIntelOk(res, repoPath, { link }, { link });
-          break;
-        }
-
-        case '/api/test-tools/registry': {
-          const registry = loadRegistryFromFile(TEST_TOOLS_REGISTRY_FILE);
-          res.writeHead(200, { 'Content-Type': 'application/json; charset=utf-8' });
-          res.end(JSON.stringify(registry));
-          break;
-        }
-
-        case '/api/test-tools/status': {
-          const targetProject = (url.searchParams.get('project') || '').trim();
-          const includeRaw = url.searchParams.get('includeRaw') === 'true';
-          const registry = loadRegistryFromFile(TEST_TOOLS_REGISTRY_FILE);
-          let tools = getEnabledTools(registry);
-          if (targetProject) {
-            tools = tools.filter((t) => t.projectName === targetProject);
-          }
-          const items = await Promise.all(
-            tools.map((t) =>
-              collectToolStatus(t, {
-                getCurrentPhase: getCurrentPhaseSnapshot,
-              }),
-            ),
-          );
-          const mapped = includeRaw
-            ? items
-            : items.map((it) => ({
-                tool: it.tool,
-                reachable: it.reachable,
-                checkedAt: it.checkedAt,
-                state: it.state,
-                progress: it.progress,
-                phase: it.phase,
-                error: it.error,
-              }));
-          res.writeHead(200, { 'Content-Type': 'application/json; charset=utf-8' });
-          res.end(
-            JSON.stringify({
-              updatedAt: new Date().toISOString(),
-              count: mapped.length,
-              items: mapped,
-            })
-          );
           break;
         }
 
@@ -2713,7 +2664,7 @@ function startServer(projectName: string, basePath: string, port: number): void 
               skippedEmbeddingCount = targetMems.length;
               firstEmbedError = 'VibeSynapse 不可用（semanticSearchReady=' + rSemanticReady +
                 ', synapseAvailable=' + rSynapseAvail +
-                '）。请确保 Ollama 正在运行且 qwen3-embedding:8b 模型已加载。';
+                '）。请确保 Ollama 正在运行且 qwen3-embedding 模型已加载（或使用本地 qwen3Local06b 回退）。';
             }
 
             for (const mem of targetMems) {

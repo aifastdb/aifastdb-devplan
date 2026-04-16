@@ -3111,49 +3111,52 @@ function buildCodeIntelDegreeMap(graph) {
 }
 
 function codeIntelNodeStyle(node, degree) {
-  var size = Math.max(12, Math.min(28, 12 + Math.sqrt(Math.max(0, degree || 0)) * 2.4));
+  var size = Math.max(14, Math.min(32, 14 + Math.sqrt(Math.max(0, degree || 0)) * 2.8));
   if (node.type === 'community') {
     return {
       shape: 'hexagon',
-      size: Math.max(size, 22),
-      color: { background: '#4f46e5', border: '#a5b4fc', highlight: { background: '#4f46e5', border: '#ffffff' } },
-      font: { color: '#eef2ff', size: 14, face: 'Inter, Segoe UI, sans-serif' },
-      borderWidth: 2
+      size: Math.max(size, 24),
+      color: { background: '#6366f1', border: '#a5b4fc', highlight: { background: '#818cf8', border: '#e0e7ff' }, hover: { background: '#818cf8', border: '#c7d2fe' } },
+      font: { color: '#eef2ff', size: 14, face: 'Inter, Segoe UI, sans-serif', strokeWidth: 3, strokeColor: 'rgba(15,23,42,0.7)' },
+      borderWidth: 2.5,
+      shadow: { enabled: true, color: 'rgba(99,102,241,0.35)', size: 12, x: 0, y: 0 }
     };
   }
   if (node.type === 'folder') {
     return {
       shape: 'diamond',
-      size: Math.max(size - 1, 16),
-      color: { background: '#0f766e', border: '#5eead4', highlight: { background: '#0f766e', border: '#ffffff' } },
-      font: { color: '#ccfbf1', size: 12, face: 'Inter, Segoe UI, sans-serif' },
+      size: Math.max(size, 18),
+      color: { background: '#0d9488', border: '#5eead4', highlight: { background: '#14b8a6', border: '#a7f3d0' }, hover: { background: '#14b8a6', border: '#99f6e4' } },
+      font: { color: '#ccfbf1', size: 12, face: 'Inter, Segoe UI, sans-serif', strokeWidth: 2, strokeColor: 'rgba(15,23,42,0.6)' },
       borderWidth: 2
     };
   }
   if (node.type === 'process') {
     return {
       shape: 'star',
-      size: Math.max(size, 18),
-      color: { background: '#7c3aed', border: '#d8b4fe', highlight: { background: '#7c3aed', border: '#ffffff' } },
-      font: { color: '#f5f3ff', size: 13, face: 'Inter, Segoe UI, sans-serif' },
-      borderWidth: 2
+      size: Math.max(size, 20),
+      color: { background: '#8b5cf6', border: '#d8b4fe', highlight: { background: '#a78bfa', border: '#ede9fe' }, hover: { background: '#a78bfa', border: '#ddd6fe' } },
+      font: { color: '#f5f3ff', size: 13, face: 'Inter, Segoe UI, sans-serif', strokeWidth: 3, strokeColor: 'rgba(15,23,42,0.7)' },
+      borderWidth: 2.5,
+      shadow: { enabled: true, color: 'rgba(139,92,246,0.3)', size: 10, x: 0, y: 0 }
     };
   }
   if (String(node.id || '').indexOf('module-overlay:') === 0) {
     return {
       shape: 'triangle',
-      size: Math.max(size, 18),
-      color: { background: '#ea580c', border: '#fdba74', highlight: { background: '#ea580c', border: '#ffffff' } },
-      font: { color: '#ffedd5', size: 12, face: 'Inter, Segoe UI, sans-serif' },
-      borderWidth: 2
+      size: Math.max(size, 20),
+      color: { background: '#f97316', border: '#fdba74', highlight: { background: '#fb923c', border: '#fed7aa' }, hover: { background: '#fb923c', border: '#ffedd5' } },
+      font: { color: '#ffedd5', size: 12, face: 'Inter, Segoe UI, sans-serif', strokeWidth: 2, strokeColor: 'rgba(15,23,42,0.6)' },
+      borderWidth: 2,
+      shadow: { enabled: true, color: 'rgba(249,115,22,0.25)', size: 8, x: 0, y: 0 }
     };
   }
   return {
-    shape: 'box',
+    shape: 'dot',
     size: Math.max(size, 14),
-    color: { background: '#1d4ed8', border: '#93c5fd', highlight: { background: '#1d4ed8', border: '#ffffff' } },
-    font: { color: '#dbeafe', size: 12, face: 'Inter, Segoe UI, sans-serif' },
-    borderWidth: 1.5
+    color: { background: '#3b82f6', border: '#93c5fd', highlight: { background: '#60a5fa', border: '#dbeafe' }, hover: { background: '#60a5fa', border: '#bfdbfe' } },
+    font: { color: '#e0f2fe', size: 12, face: 'Inter, Segoe UI, sans-serif', strokeWidth: 2, strokeColor: 'rgba(15,23,42,0.55)' },
+    borderWidth: 1.8
   };
 }
 
@@ -3161,22 +3164,23 @@ function codeIntelEdgeStyle(edge) {
   var label = String(edge.label || '');
   var bridgeKind = String((edge.properties && edge.properties.bridgeKind) || '');
   if (label === 'IMPORTS') {
-    return { width: 1.6, color: { color: '#4b5563', highlight: '#60a5fa', hover: '#60a5fa' }, dashes: false, arrows: { to: { enabled: true, scaleFactor: 0.45 } }, _highlightColor: '#60a5fa' };
+    return { width: 1.8, color: { color: 'rgba(96,165,250,0.35)', highlight: '#60a5fa', hover: '#93c5fd' }, dashes: false, arrows: { to: { enabled: true, scaleFactor: 0.5, type: 'arrow' } }, smooth: { type: 'curvedCW', roundness: 0.15 }, _highlightColor: '#60a5fa' };
   }
   if (label === 'MEMBER_OF') {
-    return { width: 1.2, color: { color: '#4b5563', highlight: '#f59e0b', hover: '#f59e0b' }, dashes: [4, 3], arrows: { to: { enabled: true, scaleFactor: 0.4 } }, _highlightColor: '#f59e0b' };
+    return { width: 1.4, color: { color: 'rgba(245,158,11,0.3)', highlight: '#f59e0b', hover: '#fbbf24' }, dashes: [5, 4], arrows: { to: { enabled: true, scaleFactor: 0.45 } }, _highlightColor: '#f59e0b' };
   }
   if (label === 'STEP_IN_PROCESS') {
-    return { width: 1.2, color: { color: '#4b5563', highlight: '#c084fc', hover: '#c084fc' }, dashes: [5, 4], arrows: { to: { enabled: true, scaleFactor: 0.4 } }, _highlightColor: '#c084fc' };
+    return { width: 1.4, color: { color: 'rgba(192,132,252,0.3)', highlight: '#c084fc', hover: '#d8b4fe' }, dashes: [6, 5], arrows: { to: { enabled: true, scaleFactor: 0.45 } }, _highlightColor: '#c084fc' };
   }
   if (label === 'BRIDGE_LINK') {
-    return { width: 2.2, color: { color: '#4b5563', highlight: '#fb923c', hover: '#fb923c' }, dashes: false, arrows: { to: { enabled: true, scaleFactor: 0.5 } }, _highlightColor: '#fb923c' };
+    return { width: 2.4, color: { color: 'rgba(251,146,60,0.4)', highlight: '#fb923c', hover: '#fdba74' }, dashes: false, arrows: { to: { enabled: true, scaleFactor: 0.55, type: 'arrow' } }, _highlightColor: '#fb923c' };
   }
   if (label === 'BRIDGE_RECOMMEND') {
     var recommendColor = bridgeKind === 'recommended-process' ? '#38bdf8' : '#facc15';
-    return { width: 1.8, color: { color: '#4b5563', highlight: recommendColor, hover: recommendColor }, dashes: [6, 4], arrows: { to: { enabled: true, scaleFactor: 0.45 } }, _highlightColor: recommendColor };
+    var recommendHover = bridgeKind === 'recommended-process' ? '#7dd3fc' : '#fde68a';
+    return { width: 2, color: { color: 'rgba(75,85,99,0.25)', highlight: recommendColor, hover: recommendHover }, dashes: [7, 5], arrows: { to: { enabled: true, scaleFactor: 0.5 } }, _highlightColor: recommendColor };
   }
-  return { width: 1, color: { color: '#4b5563', highlight: '#9ca3af', hover: '#9ca3af' }, dashes: false, arrows: { to: { enabled: false } }, _highlightColor: '#9ca3af' };
+  return { width: 0.8, color: { color: 'rgba(75,85,99,0.2)', highlight: '#9ca3af', hover: '#d1d5db' }, dashes: false, arrows: { to: { enabled: false } }, _highlightColor: '#9ca3af' };
 }
 
 function buildCodeIntelPhysicsOptions(nodeCount) {
@@ -3234,21 +3238,37 @@ function buildCodeIntelPhysicsOptions(nodeCount) {
 function updateCodeIntelMapEdgeVisibility(selectedNodeId) {
   if (!codeIntelMapEdgesDataSet || !codeIntelMapEdges || !codeIntelMapEdges.length) return;
   var selected = selectedNodeId ? String(selectedNodeId) : '';
-  var updates = [];
+  var edgeUpdates = [];
   for (var i = 0; i < codeIntelMapEdges.length; i++) {
     var edge = codeIntelMapEdges[i];
     var active = !!selected && (edge.from === selected || edge.to === selected);
-    updates.push({
+    edgeUpdates.push({
       id: edge.id,
       hidden: false,
-      width: selected ? (active ? edge._activeWidth : edge._baseWidth) : edge._baseWidth,
+      width: selected ? (active ? edge._activeWidth : edge._baseWidth * 0.5) : edge._baseWidth,
       color: selected
-        ? { color: active ? edge._highlightColor : 'rgba(75,85,99,0.16)', highlight: edge._highlightColor, hover: edge._highlightColor }
+        ? { color: active ? edge._highlightColor : 'rgba(75,85,99,0.08)', highlight: edge._highlightColor, hover: edge._highlightColor }
         : edge._baseColor,
       dashes: edge._dashed
     });
   }
-  codeIntelMapEdgesDataSet.update(updates);
+  codeIntelMapEdgesDataSet.update(edgeUpdates);
+  if (codeIntelMapNodesDataSet) {
+    var connectedIds = {};
+    if (selected) {
+      connectedIds[selected] = true;
+      for (var j = 0; j < codeIntelMapEdges.length; j++) {
+        if (codeIntelMapEdges[j].from === selected) connectedIds[codeIntelMapEdges[j].to] = true;
+        if (codeIntelMapEdges[j].to === selected) connectedIds[codeIntelMapEdges[j].from] = true;
+      }
+    }
+    var nodeUpdates = [];
+    codeIntelMapNodesDataSet.forEach(function(node) {
+      var isConnected = !selected || connectedIds[node.id];
+      nodeUpdates.push({ id: node.id, opacity: isConnected ? 1.0 : 0.2 });
+    });
+    codeIntelMapNodesDataSet.update(nodeUpdates);
+  }
 }
 
 function renderCodeIntelGraph(graph) {
@@ -3349,26 +3369,30 @@ function renderCodeIntelGraph(graph) {
     {
       nodes: {
         borderWidth: 2,
-        chosen: false,
-        shadow: isLargeGraph ? false : { enabled: true, color: 'rgba(0,0,0,0.3)', size: 5, x: 0, y: 2 }
+        chosen: { node: function(values) { values.borderWidth = 3; values.shadowSize = 15; values.shadowColor = 'rgba(99,102,241,0.5)'; } },
+        shadow: isLargeGraph ? false : { enabled: true, color: 'rgba(0,0,0,0.25)', size: 8, x: 0, y: 2 },
+        scaling: { label: { enabled: true, min: 10, max: 16 } }
       },
       edges: {
-        chosen: false,
+        chosen: { edge: function(values) { values.width = values.width * 1.6; } },
         selectionWidth: 0,
-        smooth: isLargeGraph ? false : { enabled: true, type: 'continuous', roundness: 0.45 },
-        shadow: false
+        smooth: isLargeGraph ? false : { enabled: true, type: 'continuous', roundness: 0.35 },
+        shadow: false,
+        hoverWidth: function(w) { return w * 1.4; }
       },
       physics: buildCodeIntelPhysicsOptions(nodeCount),
       interaction: {
         hover: !isVeryLargeGraph,
-        tooltipDelay: 200,
+        tooltipDelay: 150,
         zoomView: true,
         dragView: true,
-        dragNodes: false,
+        dragNodes: !isVeryLargeGraph,
         multiselect: false,
         hideEdgesOnDrag: isLargeGraph,
         hideEdgesOnZoom: isLargeGraph,
-        zoomSpeed: isVeryLargeGraph ? 0.8 : 1
+        zoomSpeed: isVeryLargeGraph ? 0.8 : 1,
+        navigationButtons: false,
+        keyboard: { enabled: false }
       },
       layout: {
         improvedLayout: (nodeCount > 200 && nodeCount <= 800),
@@ -3730,191 +3754,6 @@ function phaseItem(task, status, icon) {
   }
   h += '</div>';
   return h;
-}
-
-// ========== Test Tools ==========
-var testToolsLoaded = false;
-var testToolsTimer = null;
-var testToolsLatestData = { items: [] };
-var testToolsSelectedToolId = '';
-
-function loadTestToolsPage() {
-  if (!testToolsLoaded) {
-    var content = document.getElementById('testToolsContent');
-    if (content) {
-      content.innerHTML = '<div style="text-align:center;padding:60px;color:#6b7280;"><div class="spinner" style="margin:0 auto 12px;"></div>加载测试工具状态...</div>';
-    }
-  }
-  refreshTestTools();
-
-  if (testToolsTimer) return;
-  testToolsTimer = setInterval(function() {
-    if (currentPage === 'test-tools') {
-      refreshTestTools();
-    }
-  }, 10000);
-}
-
-function refreshTestTools() {
-  fetch('/api/test-tools/status?includeRaw=true')
-    .then(function(r) {
-      if (!r.ok) throw new Error('HTTP ' + r.status);
-      return r.json();
-    })
-    .then(function(data) {
-      testToolsLoaded = true;
-      testToolsLatestData = data || { items: [] };
-      renderTestToolsPage(data || {});
-    })
-    .catch(function(err) {
-      var content = document.getElementById('testToolsContent');
-      if (content) {
-        content.innerHTML = '<div style="text-align:center;padding:60px;color:#f87171;">加载失败: ' +
-          escHtml(err.message || String(err)) +
-          '<br><button class="refresh-btn" style="margin-top:12px;" onclick="refreshTestTools()">重试</button></div>';
-      }
-    });
-}
-
-function openTestToolDetail(toolId) {
-  testToolsSelectedToolId = String(toolId || '');
-  renderTestToolsPage(testToolsLatestData || { items: [] });
-}
-
-function openTestToolDetailByIndex(idx) {
-  var items = (testToolsLatestData && testToolsLatestData.items) ? testToolsLatestData.items : [];
-  var it = items[idx];
-  var toolId = it && it.tool && it.tool.id ? String(it.tool.id) : '';
-  if (!toolId) return;
-  openTestToolDetail(toolId);
-}
-
-function closeTestToolDetail() {
-  testToolsSelectedToolId = '';
-  renderTestToolsPage(testToolsLatestData || { items: [] });
-}
-
-function fmtNum(n) {
-  var x = Number(n || 0);
-  if (!isFinite(x)) return '0';
-  return x.toLocaleString('en-US');
-}
-
-function formatProgressWithCount(it) {
-  var pct = Number(it && it.progress || 0);
-  var raw = it && it.raw ? it.raw : null;
-  var inserted = raw && raw.inserted != null ? Number(raw.inserted) : NaN;
-  var total = raw && raw.totalImages != null ? Number(raw.totalImages) : NaN;
-  if (isFinite(inserted) && isFinite(total) && total > 0) {
-    return pct + '% (' + fmtNum(inserted) + '/' + fmtNum(total) + ')';
-  }
-  return pct + '%';
-}
-
-function renderTestToolsPage(data) {
-  var summary = document.getElementById('testToolsSummary');
-  var content = document.getElementById('testToolsContent');
-  if (!summary || !content) return;
-
-  var items = data.items || [];
-  var reachable = 0;
-  var running = 0;
-  var stalled = 0;
-  var completed = 0;
-  for (var i = 0; i < items.length; i++) {
-    var st = String(items[i].state || '');
-    if (items[i].reachable) reachable++;
-    if (
-      st === 'running' ||
-      st === 'compiling' ||
-      st === 'preparing_data' ||
-      st === 'compile_active' ||
-      st === 'build_planning' ||
-      st === 'build_handoff_to_run'
-    ) running++;
-    if (st === 'stalled' || st === 'aborted' || st === 'unreachable') stalled++;
-    if (st === 'completed') completed++;
-  }
-
-  summary.innerHTML =
-    statCard('🧩', items.length, '已注册工具', '', 'blue') +
-    statCard('🟢', reachable, '可达', '', 'green') +
-    statCard('🔄', running, '运行中', '', 'amber') +
-    statCard('⏸', stalled, '异常/卡住', '', 'rose') +
-    statCard('✅', completed, '已完成', '', 'purple');
-
-  if (items.length === 0) {
-    content.innerHTML = '<div style="text-align:center;padding:60px;color:#6b7280;">暂无已注册测试工具</div>';
-    return;
-  }
-
-  var html = '';
-  html += '<table style="width:100%;border-collapse:collapse;font-size:12px;">';
-  html += '<thead><tr style="color:#93a4c7;border-bottom:1px solid #263655;">' +
-    '<th style="text-align:left;padding:8px;">工具</th>' +
-    '<th style="text-align:left;padding:8px;">项目</th>' +
-    '<th style="text-align:left;padding:8px;">状态</th>' +
-    '<th style="text-align:left;padding:8px;">进度</th>' +
-    '<th style="text-align:left;padding:8px;">当前阶段</th>' +
-    '<th style="text-align:left;padding:8px;">入口</th>' +
-    '</tr></thead><tbody>';
-
-  for (var j = 0; j < items.length; j++) {
-    var it = items[j];
-    var state = String(it.state || 'unknown');
-    var stateColor = '#fbbf24';
-    if (state === 'completed' || state === 'ok') stateColor = '#34d399';
-    if (state === 'stalled' || state === 'aborted' || state === 'unreachable') stateColor = '#f87171';
-    var phase = it.phase ? (it.phase.taskId + ' (' + (it.phase.percent || 0) + '%)') : '-';
-    var endpoint = it.tool && it.tool.endpoint ? String(it.tool.endpoint) : '';
-    var openAction = endpoint
-      ? '<a href="' + escHtml(endpoint) + '" target="_blank" style="color:#818cf8;text-decoration:none;">打开</a>'
-      : '<a href="javascript:void(0)" onclick="openTestToolDetailByIndex(' + j + ')" style="color:#818cf8;text-decoration:none;">打开</a>';
-    html += '<tr style="border-bottom:1px solid #1e2b46;">' +
-      '<td style="padding:8px;">' + escHtml((it.tool && it.tool.name) || '-') + '</td>' +
-      '<td style="padding:8px;color:#9fb0d1;">' + escHtml((it.tool && it.tool.projectName) || '-') + '</td>' +
-      '<td style="padding:8px;color:' + stateColor + ';font-weight:600;">' + escHtml(state) + '</td>' +
-      '<td style="padding:8px;">' + formatProgressWithCount(it) + '</td>' +
-      '<td style="padding:8px;color:#9fb0d1;">' + escHtml(phase) + '</td>' +
-      '<td style="padding:8px;">' + openAction + '</td>' +
-      '</tr>';
-  }
-  html += '</tbody></table>';
-
-  var selected = null;
-  if (testToolsSelectedToolId) {
-    for (var k = 0; k < items.length; k++) {
-      var cur = items[k];
-      if (cur && cur.tool && String(cur.tool.id || '') === testToolsSelectedToolId) {
-        selected = cur;
-        break;
-      }
-    }
-  }
-
-  if (selected && selected.raw) {
-    var raw = selected.raw || {};
-    var inserted = fmtNum(raw.inserted || 0);
-    var total = fmtNum(raw.totalImages || 0);
-    var stale = Number(raw.staleSeconds || 0);
-    var logTail = (raw.tail && raw.tail.join) ? raw.tail.join(String.fromCharCode(10)) : '';
-    html += '<div style="margin-top:14px;border:1px solid #223150;border-radius:12px;background:rgba(14,22,45,.5);padding:14px;">';
-    html += '<div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:8px;">' +
-      '<div style="font-size:13px;font-weight:700;color:#dbe7ff;">内置详情 · ' + escHtml((selected.tool && selected.tool.name) || '-') + '</div>' +
-      '<a href="javascript:void(0)" onclick="closeTestToolDetail()" style="color:#8da2d6;text-decoration:none;font-size:12px;">关闭</a>' +
-      '</div>';
-    html += '<div style="display:grid;grid-template-columns:repeat(4,minmax(120px,1fr));gap:8px;margin-bottom:10px;">' +
-      '<div style="background:#111d39;border:1px solid #223150;border-radius:8px;padding:8px;"><div style="font-size:11px;color:#8da2d6;">progress</div><div style="font-size:14px;color:#e9f2ff;font-weight:700;">' + Number(selected.progress || 0) + '%</div></div>' +
-      '<div style="background:#111d39;border:1px solid #223150;border-radius:8px;padding:8px;"><div style="font-size:11px;color:#8da2d6;">inserted</div><div style="font-size:14px;color:#e9f2ff;font-weight:700;">' + inserted + '</div></div>' +
-      '<div style="background:#111d39;border:1px solid #223150;border-radius:8px;padding:8px;"><div style="font-size:11px;color:#8da2d6;">total</div><div style="font-size:14px;color:#e9f2ff;font-weight:700;">' + total + '</div></div>' +
-      '<div style="background:#111d39;border:1px solid #223150;border-radius:8px;padding:8px;"><div style="font-size:11px;color:#8da2d6;">staleSeconds</div><div style="font-size:14px;color:#e9f2ff;font-weight:700;">' + stale + '</div></div>' +
-      '</div>';
-    html += '<div style="font-size:11px;color:#8da2d6;margin-bottom:6px;">log tail</div>';
-    html += '<pre style="margin:0;max-height:260px;overflow:auto;background:#0a1430;border:1px solid #223150;border-radius:8px;padding:10px;color:#c6d5f3;font-size:11px;line-height:1.45;">' + escHtml(logTail || '(empty)') + '</pre>';
-    html += '</div>';
-  }
-
-  content.innerHTML = html;
 }
 
 // ========== Memory Browser ==========

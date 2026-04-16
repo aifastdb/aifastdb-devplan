@@ -50,13 +50,12 @@ export function resolvePerceptionConfig(config: DevPlanGraphStoreConfig): Percep
     }
     console.warn(
       `[DevPlan] Unknown perception preset "${config.perceptionPreset}", ` +
-      `available: ${Object.keys(PerceptionPresets).join(', ')}. Falling back to qwen3Local06b.`
+      `available: ${Object.keys(PerceptionPresets).join(', ')}. Falling back to qwen3Hybrid06b.`
     );
   }
 
-  // Phase-216: 默认从 miniLM(384d) 升级为 qwen3Local06b(1024d)
-  // qwen3Local06b 是本地推理（无需 Ollama），中文支持更好，维度更高
-  const defaultPreset = PerceptionPresets.qwen3Local06b?.() ?? PerceptionPresets.miniLM();
+  // Ollama 优先使用 qwen3-embedding (0.6b)，不可用时自动降级到本地 qwen3Local06b
+  const defaultPreset = PerceptionPresets.qwen3Hybrid06b?.() ?? PerceptionPresets.qwen3Local06b?.() ?? PerceptionPresets.miniLM();
   return { ...defaultPreset, autoDownload: true };
 }
 

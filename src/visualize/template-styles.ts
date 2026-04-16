@@ -224,7 +224,7 @@ export function getStyles(): string {
     .code-intel-stats-bar .stat-card-label { font-size: 11px; }
     .code-intel-stats-bar .stat-card-sub { font-size: 10px; }
     .code-intel-graph-container { position: relative; flex: 1; min-height: 0; z-index: 0; }
-    #codeIntelGraph { width: 100%; height: 100%; background: #111827; }
+    #codeIntelGraph { width: 100%; height: 100%; background: #0c1222; background-image: radial-gradient(circle, rgba(99,102,241,0.04) 1px, transparent 1px); background-size: 24px 24px; }
     .code-intel-bottom-sheet { position: absolute; left: 18px; right: 18px; bottom: 12px; z-index: 24; display: flex; flex-direction: column; border: 1px solid rgba(59,130,246,0.22); border-radius: 16px; background: rgba(15,23,42,0.84); backdrop-filter: blur(12px); box-shadow: 0 20px 60px rgba(0,0,0,0.38); overflow: hidden; transition: transform 0.28s ease, box-shadow 0.2s ease, background 0.2s ease; }
     .code-intel-bottom-sheet.collapsed { transform: translateY(calc(100% - 48px)); }
     .code-intel-bottom-sheet:hover { box-shadow: 0 24px 70px rgba(0,0,0,0.45); }
