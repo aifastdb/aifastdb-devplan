@@ -2191,6 +2191,7 @@ export const TOOL_GROUPS = {
   tasks: [
     'devplan_create_main_task',
     'devplan_add_sub_task',
+    'devplan_upsert_task',
     'devplan_delete_task',
     'devplan_update_task_status',
     'devplan_complete_task',
@@ -2211,6 +2212,12 @@ export const TOOL_GROUPS = {
     'devplan_memory_batch_commit',
     'devplan_memory_batch_status',
   ],
+  modules: [
+    'devplan_create_module',
+    'devplan_list_modules',
+    'devplan_get_module',
+    'devplan_update_module',
+  ],
 } as const;
 
 type ToolGroup = keyof typeof TOOL_GROUPS;
@@ -2226,9 +2233,14 @@ export const MICRO_EXPOSED_TOOL_NAMES = [
   'devplan_start_phase',
   'devplan_create_main_task',
   'devplan_add_sub_task',
+  'devplan_upsert_task',
   'devplan_complete_task',
   'devplan_memory_save',
   'devplan_recall_unified',
+  'devplan_create_module',
+  'devplan_list_modules',
+  'devplan_get_module',
+  'devplan_update_module',
 ] as const;
 
 export const SLIM_EXPOSED_TOOL_NAMES = [
@@ -2242,6 +2254,7 @@ export const SLIM_EXPOSED_TOOL_NAMES = [
   'devplan_delete_section',
   'devplan_create_main_task',
   'devplan_add_sub_task',
+  'devplan_upsert_task',
   'devplan_delete_task',
   'devplan_update_task_status',
   'devplan_complete_task',
@@ -2257,6 +2270,10 @@ export const SLIM_EXPOSED_TOOL_NAMES = [
   'devplan_memory_batch_prepare',
   'devplan_memory_batch_commit',
   'devplan_memory_batch_status',
+  'devplan_create_module',
+  'devplan_list_modules',
+  'devplan_get_module',
+  'devplan_update_module',
 ] as const;
 
 export const DEFAULT_EXPOSED_TOOL_NAMES = MICRO_EXPOSED_TOOL_NAMES;
@@ -2281,6 +2298,7 @@ const TOOL_SHORT_DESCRIPTION_BY_NAME: Record<string, string> = {
   devplan_delete_section: 'delete a doc section',
   devplan_create_main_task: 'create a phase/main task',
   devplan_add_sub_task: 'add a sub-task',
+  devplan_upsert_task: 'idempotent upsert main or sub task (preserves higher status; sets moduleId)',
   devplan_delete_task: 'delete a main or sub task',
   devplan_update_task_status: 'set task status (not completed)',
   devplan_complete_task: 'complete a task',
@@ -2296,6 +2314,10 @@ const TOOL_SHORT_DESCRIPTION_BY_NAME: Record<string, string> = {
   devplan_memory_batch_prepare: 'prepare batch memory import',
   devplan_memory_batch_commit: 'commit batch memory import',
   devplan_memory_batch_status: 'check batch import status',
+  devplan_create_module: 'create or register a feature module',
+  devplan_list_modules: 'list feature modules with task and doc counts',
+  devplan_get_module: 'get module detail with associated tasks and docs',
+  devplan_update_module: 'update module name, description, or status',
 };
 
 const TOOL_COMPACT_PROPERTY_DESCRIPTIONS_BY_NAME: Record<string, Record<string, string>> = {
@@ -2353,6 +2375,17 @@ const TOOL_COMPACT_PROPERTY_DESCRIPTIONS_BY_NAME: Record<string, Record<string, 
     taskId: 'sub-task id',
     parentTaskId: 'parent phase id',
     title: 'sub-task title',
+  },
+  devplan_upsert_task: {
+    projectName: 'project name',
+    taskType: 'main | sub',
+    taskId: 'task id',
+    title: 'task title',
+    priority: 'P0 | P1 | P2 (main only)',
+    parentTaskId: 'parent phase id (sub only)',
+    moduleId: 'attach module (main only)',
+    status: 'target status',
+    preserveStatus: 'keep higher existing status (default true)',
   },
   devplan_delete_task: {
     projectName: 'project name',
@@ -2436,6 +2469,28 @@ const TOOL_COMPACT_PROPERTY_DESCRIPTIONS_BY_NAME: Record<string, Record<string, 
   devplan_memory_batch_status: {
     projectName: 'project name',
     clear: 'clear cache after status',
+  },
+  devplan_create_module: {
+    projectName: 'project name',
+    moduleId: 'module identifier (kebab-case)',
+    name: 'module display name',
+    description: 'optional description',
+    status: 'planning | active | completed | deprecated',
+  },
+  devplan_list_modules: {
+    projectName: 'project name',
+    status: 'filter by status',
+  },
+  devplan_get_module: {
+    projectName: 'project name',
+    moduleId: 'module identifier',
+  },
+  devplan_update_module: {
+    projectName: 'project name',
+    moduleId: 'module identifier',
+    name: 'new name',
+    description: 'new description',
+    status: 'planning | active | completed | deprecated',
   },
 };
 

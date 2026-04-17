@@ -108,6 +108,37 @@ function getRelatedTasksForDoc(docNodeId) {
   return tasks;
 }
 
+/** 根据模块节点 ID，从 allNodes/allEdges 中查找其所有主任务节点 */
+function getMainTasksForModule(moduleNodeId) {
+  var taskIds = [];
+  for (var i = 0; i < allEdges.length; i++) {
+    var e = allEdges[i];
+    if (e.from === moduleNodeId && e.label === 'module_has_task') {
+      taskIds.push(e.to);
+    }
+  }
+  var tasks = [];
+  var idSet = {};
+  for (var i = 0; i < taskIds.length; i++) idSet[taskIds[i]] = true;
+  for (var i = 0; i < allNodes.length; i++) {
+    if (idSet[allNodes[i].id]) tasks.push(allNodes[i]);
+  }
+  return tasks;
+}
+
+/** 根据主任务节点 ID，从 allNodes/allEdges 中反查所属模块节点（通常 0 或 1 个） */
+function getModuleForMainTask(mainTaskNodeId) {
+  for (var i = 0; i < allEdges.length; i++) {
+    var e = allEdges[i];
+    if (e.to === mainTaskNodeId && e.label === 'module_has_task') {
+      for (var j = 0; j < allNodes.length; j++) {
+        if (allNodes[j].id === e.from) return allNodes[j];
+      }
+    }
+  }
+  return null;
+}
+
 /** 跨引擎通用: 根据 nodeId 获取节点数据 */
 function getNodeById(nodeId) {
   // 1. 优先从 nodesDataSet (vis-network DataSet / SimpleDataSet) 获取
@@ -149,6 +180,19 @@ function showPanel(nodeId) {
     html += row('任务ID', p.taskId);
     html += row('优先级', '<span class="status-badge priority-' + (p.priority || 'P2') + '">' + (p.priority || 'P2') + '</span>');
     html += row('状态', statusBadge(p.status));
+    var ownerModule = getModuleForMainTask(nodeId);
+    if (ownerModule) {
+      var modProps = ownerModule._props || ownerModule.properties || {};
+      var modLabel = ownerModule.label || ownerModule._origLabel || modProps.moduleId || '';
+      var modSubId = modProps.moduleId || '';
+      html += '<div class="panel-row"><span class="panel-label">所属模块</span>'
+        + '<span class="panel-value" style="cursor:pointer;color:#fb923c;" '
+        + 'onclick="navigateToPanel(\\x27' + ownerModule.id + '\\x27)" '
+        + 'title="' + escHtml(modLabel) + '">'
+        + '&#x1F539; ' + escHtml(modLabel)
+        + (modSubId && modSubId !== modLabel ? ' <span style="color:#94a3b8;font-size:11px;">(' + escHtml(modSubId) + ')</span>' : '')
+        + '</span></div>';
+    }
     if (p.completedAt) { html += row('完成时间', '<span style="color:#6ee7b7;">' + fmtTime(p.completedAt) + '</span>'); }
     if (p.totalSubtasks !== undefined) {
       var pct = p.totalSubtasks > 0 ? Math.round((p.completedSubtasks || 0) / p.totalSubtasks * 100) : 0;
@@ -219,6 +263,48 @@ function showPanel(nodeId) {
     html += row('模块ID', p.moduleId);
     html += row('状态', statusBadge(p.status || 'active'));
     html += row('主任务数', p.mainTaskCount);
+
+    // 查找并显示关联主任务列表
+    var modMainTasks = getMainTasksForModule(nodeId);
+    if (modMainTasks.length > 0) {
+      var modCompleted = 0;
+      for (var mi = 0; mi < modMainTasks.length; mi++) {
+        if ((modMainTasks[mi].properties || {}).status === 'completed') modCompleted++;
+      }
+      // 排序：进行中 > 待开始 > 已完成 > 已取消；同状态按 taskId 升序
+      var modStatusOrder = { in_progress: 0, pending: 1, completed: 2, cancelled: 3 };
+      modMainTasks.sort(function(a, b) {
+        var sa = (a.properties || {}).status || 'pending';
+        var sb = (b.properties || {}).status || 'pending';
+        var d = (modStatusOrder[sa] || 1) - (modStatusOrder[sb] || 1);
+        if (d !== 0) return d;
+        var ta = (a.properties || {}).taskId || '';
+        var tb = (b.properties || {}).taskId || '';
+        return ta < tb ? -1 : ta > tb ? 1 : 0;
+      });
+      html += '<div class="subtask-section">';
+      html += '<div class="subtask-section-title"><span style="color:#fb923c;">主任务列表</span><span style="color:#6b7280;">' + modCompleted + '/' + modMainTasks.length + '</span></div>';
+      html += '<ul class="subtask-list">';
+      for (var mi = 0; mi < modMainTasks.length; mi++) {
+        var mt = modMainTasks[mi];
+        var mtProps = mt.properties || {};
+        var mtStatus = mtProps.status || 'pending';
+        var mtIcon = mtStatus === 'completed' ? '✓' : mtStatus === 'in_progress' ? '▶' : mtStatus === 'cancelled' ? '✗' : '○';
+        var mtPriority = mtProps.priority || 'P2';
+        var mtSub = (mtProps.totalSubtasks !== undefined)
+          ? ((mtProps.completedSubtasks || 0) + '/' + mtProps.totalSubtasks)
+          : '';
+        html += '<li class="subtask-item" style="cursor:pointer;" onclick="navigateToPanel(\\x27' + mt.id + '\\x27)">';
+        html += '<span class="subtask-icon ' + mtStatus + '">' + mtIcon + '</span>';
+        html += '<span class="subtask-name ' + mtStatus + '" title="' + escHtml(mt.label) + '">' + escHtml(mt.label) + '</span>';
+        html += '<span class="status-badge priority-' + mtPriority + '" style="margin-right:4px;">' + mtPriority + '</span>';
+        if (mtSub) html += '<span class="subtask-time">' + mtSub + '</span>';
+        html += '<span class="subtask-id">' + escHtml(mtProps.taskId || '') + '</span>';
+        html += '</li>';
+      }
+      html += '</ul>';
+      html += '</div>';
+    }
   } else if (node._type === 'document') {
     html += row('类型', p.section);
     if (p.subSection) html += row('子类型', p.subSection);

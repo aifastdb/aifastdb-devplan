@@ -17,4 +17,17 @@ describe('generateCursorRuleTemplate', () => {
     expect(template).toContain('searchBy: "auto", mode: "hybrid"');
     expect(template).not.toContain('## Anchor Merge Mode 选择规则');
   });
+
+  test('includes batch-write read-back verification guidance to prevent MCP state loss', () => {
+    const template = generateCursorRuleTemplate('zeroclaw');
+
+    expect(template).toContain('## 批量写操作后必读回验证（防止 MCP 状态丢失）');
+    expect(template).toContain('### 必须执行的兜底验证');
+    expect(template).toContain('### 回滚处置');
+    expect(template).toContain('### 高风险触发场景（看到这些信号时主动验证）');
+    expect(template).toContain('连续 ≥ 3 次以下任意写操作之后');
+    expect(template).toContain('devplan_search_tasks(projectName: "zeroclaw", query: "<刚改的 phase id>", includeSubTasks: true)');
+    expect(template).toContain('devplan_get_module(projectName: "zeroclaw", moduleId: "<刚改的 module id>")');
+    expect(template).toContain('Workspace folders changed');
+  });
 });

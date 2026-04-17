@@ -95,14 +95,14 @@ Or in Claude Desktop (`claude_desktop_config.json`):
 }
 ```
 
-Once configured, your AI assistant can use the default `micro` MCP tool set (13 core `devplan_*` tools) to manage your development plans.
+Once configured, your AI assistant can use the default `micro` MCP tool set (18 core `devplan_*` tools) to manage your development plans.
 
 #### MCP Tool Exposure Modes
 
 `aifastdb-devplan` now supports three MCP tool exposure modes:
 
-- `micro` (default): expose 13 core tools for the most common DevPlan workflow
-- `slim`: expose 25 commonly used tools
+- `micro` (default): expose 18 core tools for the most common DevPlan workflow
+- `slim`: expose 30 commonly used tools
 - `full`: expose the complete MCP tool catalog for advanced or low-frequency workflows
 
 The exposed tools are organized into five groups:
@@ -115,8 +115,8 @@ The exposed tools are organized into five groups:
 
 By default, the server starts in `micro` mode, which means:
 
-- MCP `ListTools` only returns those 13 tools
-- only those 13 tools are exposed to the AI assistant
+- MCP `ListTools` only returns those 18 tools
+- only those 18 tools are exposed to the AI assistant
 - tools outside that set are not just hidden; they are rejected at call time
 
 To temporarily enable the full catalog:
@@ -188,7 +188,7 @@ const progress = plan.getProgress();
 console.log(progress);
 ```
 
-### MCP Tools (default micro mode: 13 total, slim mode: 25 total)
+### MCP Tools (default micro mode: 18 total, slim mode: 30 total)
 
 #### Grouped Catalog
 
@@ -196,9 +196,10 @@ console.log(progress);
 |------|-------|
 | `project` | `devplan_init`, `devplan_save_prompt`, `devplan_get_progress` |
 | `docs` | `devplan_save_section`, `devplan_get_section`, `devplan_list_sections`, `devplan_search_sections`, `devplan_delete_section` |
-| `tasks` | `devplan_create_main_task`, `devplan_add_sub_task`, `devplan_delete_task`, `devplan_update_task_status`, `devplan_complete_task`, `devplan_list_tasks`, `devplan_search_tasks`, `devplan_start_phase` |
+| `tasks` | `devplan_create_main_task`, `devplan_add_sub_task`, `devplan_upsert_task`, `devplan_delete_task`, `devplan_update_task_status`, `devplan_complete_task`, `devplan_list_tasks`, `devplan_search_tasks`, `devplan_start_phase` |
 | `memory` | `devplan_memory_save`, `devplan_recall_unified`, `devplan_memory_context`, `devplan_memory_list`, `devplan_memory_delete`, `devplan_memory_generate` |
 | `batch` | `devplan_memory_batch_prepare`, `devplan_memory_batch_commit`, `devplan_memory_batch_status` |
+| `modules` | `devplan_create_module`, `devplan_list_modules`, `devplan_get_module`, `devplan_update_module` |
 
 #### Default `micro` Mode
 
@@ -206,10 +207,11 @@ console.log(progress);
 
 - `project`: `devplan_init`, `devplan_save_prompt`
 - `docs`: `devplan_get_section`, `devplan_search_sections`, `devplan_save_section`
-- `tasks`: `devplan_list_tasks`, `devplan_search_tasks`, `devplan_start_phase`, `devplan_create_main_task`, `devplan_add_sub_task`, `devplan_complete_task`
+- `tasks`: `devplan_list_tasks`, `devplan_search_tasks`, `devplan_start_phase`, `devplan_create_main_task`, `devplan_add_sub_task`, `devplan_upsert_task`, `devplan_complete_task`
 - `memory`: `devplan_memory_save`, `devplan_recall_unified`
+- `modules`: `devplan_create_module`, `devplan_list_modules`, `devplan_get_module`, `devplan_update_module`
 
-`slim` expands that to the 25 commonly used tools above, and `full` exposes the entire catalog.
+`slim` expands that to the 30 commonly used tools above, and `full` exposes the entire catalog.
 
 ### Dual Storage Engine
 
@@ -552,28 +554,29 @@ npm install -g aifastdb-devplan
 }
 ```
 
-配置完成后，AI 助手默认即可使用 `micro` MCP 工具集（12 个核心 `devplan_*` 工具）来管理你的开发计划。
+配置完成后，AI 助手默认即可使用 `micro` MCP 工具集（18 个核心 `devplan_*` 工具）来管理你的开发计划。
 
 #### MCP 工具暴露模式
 
 `aifastdb-devplan` 现在支持三种 MCP 工具暴露模式：
 
-- `micro`（默认）：只暴露 12 个核心工具
-- `slim`：暴露 24 个常用 DevPlan 工具
+- `micro`（默认）：只暴露 18 个核心工具
+- `slim`：暴露 30 个常用 DevPlan 工具
 - `full`：暴露完整 MCP 工具目录，适合高级或低频工作流
 
-工具同时按 5 组组织：
+工具同时按 6 组组织：
 
 - `project`
 - `docs`
 - `tasks`
 - `memory`
 - `batch`
+- `modules`
 
 默认启动时使用 `micro` 模式，这意味着：
 
-- MCP `ListTools` 只会返回这 12 个工具
-- AI 助手上下文里也只会看到并使用这 12 个工具
+- MCP `ListTools` 只会返回这 18 个工具
+- AI 助手上下文里也只会看到并使用这 18 个工具
 - 白名单外工具不只是“隐藏”，而是调用时会被直接拒绝
 
 临时开启全量工具目录：
@@ -645,7 +648,7 @@ const progress = plan.getProgress();
 console.log(progress);
 ```
 
-### MCP 工具一览（默认 micro 13 个，slim 25 个）
+### MCP 工具一览（默认 micro 18 个，slim 30 个）
 
 #### 分组目录
 
@@ -653,9 +656,10 @@ console.log(progress);
 |------|------|
 | `project` | `devplan_init`、`devplan_save_prompt`、`devplan_get_progress` |
 | `docs` | `devplan_save_section`、`devplan_get_section`、`devplan_list_sections`、`devplan_search_sections`、`devplan_delete_section` |
-| `tasks` | `devplan_create_main_task`、`devplan_add_sub_task`、`devplan_delete_task`、`devplan_update_task_status`、`devplan_complete_task`、`devplan_list_tasks`、`devplan_search_tasks`、`devplan_start_phase` |
+| `tasks` | `devplan_create_main_task`、`devplan_add_sub_task`、`devplan_upsert_task`、`devplan_delete_task`、`devplan_update_task_status`、`devplan_complete_task`、`devplan_list_tasks`、`devplan_search_tasks`、`devplan_start_phase` |
 | `memory` | `devplan_memory_save`、`devplan_recall_unified`、`devplan_memory_context`、`devplan_memory_list`、`devplan_memory_delete`、`devplan_memory_generate` |
 | `batch` | `devplan_memory_batch_prepare`、`devplan_memory_batch_commit`、`devplan_memory_batch_status` |
+| `modules` | `devplan_create_module`、`devplan_list_modules`、`devplan_get_module`、`devplan_update_module` |
 
 #### 默认 `micro` 模式
 
@@ -663,10 +667,11 @@ console.log(progress);
 
 - `project`：`devplan_init`、`devplan_save_prompt`
 - `docs`：`devplan_get_section`、`devplan_search_sections`、`devplan_save_section`
-- `tasks`：`devplan_list_tasks`、`devplan_search_tasks`、`devplan_start_phase`、`devplan_create_main_task`、`devplan_add_sub_task`、`devplan_complete_task`
+- `tasks`：`devplan_list_tasks`、`devplan_search_tasks`、`devplan_start_phase`、`devplan_create_main_task`、`devplan_add_sub_task`、`devplan_upsert_task`、`devplan_complete_task`
 - `memory`：`devplan_memory_save`、`devplan_recall_unified`
+- `modules`：`devplan_create_module`、`devplan_list_modules`、`devplan_get_module`、`devplan_update_module`
 
-当前默认 `micro` 的 13 个工具完整清单：
+当前默认 `micro` 的 18 个工具完整清单：
 
 - `devplan_init`
 - `devplan_save_prompt`
@@ -678,11 +683,16 @@ console.log(progress);
 - `devplan_start_phase`
 - `devplan_create_main_task`
 - `devplan_add_sub_task`
+- `devplan_upsert_task`
 - `devplan_complete_task`
 - `devplan_memory_save`
 - `devplan_recall_unified`
+- `devplan_create_module`
+- `devplan_list_modules`
+- `devplan_get_module`
+- `devplan_update_module`
 
-`slim` 扩展为上面的 25 个常用工具，`full` 则暴露全部工具目录。
+`slim` 扩展为上面的 30 个常用工具，`full` 则暴露全部工具目录。
 
 ### 双存储引擎
 

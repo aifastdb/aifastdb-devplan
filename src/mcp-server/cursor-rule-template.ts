@@ -103,5 +103,39 @@ devplan_create_main_task(
 
 - 在 Cursor 场景保存记忆时，默认优先调用 \`devplan_memory_save_cursor_profile\`（支持双会话 ID + hook 语义）。
 - 非 Cursor 或无需会话绑定时，继续使用 \`devplan_memory_save\`。
+
+## 批量写操作后必读回验证（防止 MCP 状态丢失）
+
+> **背景**：MCP server 在某些场景下（workspace 路径变化、IDE 重启、网络抖动、进程被回收）可能丢失内存中尚未刷盘的写操作。一次连续多次的 \`devplan_upsert_*\` / \`devplan_update_*\` / \`devplan_create_*\` 调用，靠前的几次最容易被回滚，靠后的反而幸存——这种"部分丢失"比全丢更危险，因为肉眼难发现。
+
+### 必须执行的兜底验证
+
+每次完成连续 ≥ 3 次以下任意写操作之后，**必须**在同一会话内立即执行一次读回验证：
+
+- \`devplan_create_main_task\`
+- \`devplan_add_sub_task\`
+- \`devplan_upsert_task\`
+- \`devplan_create_module\` / \`devplan_update_module\`
+- \`devplan_complete_task\`
+
+读回方式（任选其一，覆盖刚改动的范围即可）：
+
+- \`devplan_search_tasks(projectName: "${projectName}", query: "<刚改的 phase id>", includeSubTasks: true)\`
+- \`devplan_get_module(projectName: "${projectName}", moduleId: "<刚改的 module id>")\`
+- \`devplan_list_tasks(projectName: "${projectName}", limit: ...)\`
+
+### 回滚处置
+
+- 比对写入意图与实际状态，**任何回滚到旧值的项必须立即重做**（重新调用对应的写工具）。
+- 重做后再读回一次确认。
+- 在用户可见的回复中**必须**提及"已读回验证"和最终落盘状态，避免用户基于错误假设继续推进。
+
+### 高风险触发场景（看到这些信号时主动验证）
+
+- workspace 路径大小写或盘符变化（例如 \`D:\\\` → \`d:\\\`）
+- 系统提示 \`Workspace folders changed\`
+- IDE 重启 / 重新加载窗口
+- 切换 git 分支或刚 pull 远端后
+- 跨多个 MCP server 串联写入
 `;
 }
