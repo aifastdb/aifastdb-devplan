@@ -28,7 +28,7 @@
     "@aifastdb/test-tools-hub": "file:./packages/test-tools-hub",
     "@highlightjs/cdn-assets": "^11.11.1",
     "@modelcontextprotocol/sdk": "^1.0.0",
-    "aifastdb": "^3.10.2",
+    "aifastdb": "^3.10.6",
     "deck.gl": "^9.2.11",
     "highlight.js": "^11.11.1",
     "marked": "^18.0.0",

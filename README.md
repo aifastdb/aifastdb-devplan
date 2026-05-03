@@ -220,7 +220,7 @@ Each project can independently choose its storage engine:
 | Engine | Backend | Default | Features |
 |--------|---------|---------|----------|
 | `graph` | SocialGraphV2 (WAL + sharding) | ✅ New projects | Graph visualization, entity-relation model |
-| `document` | EnhancedDocumentStore (JSONL) | Auto-detected for legacy | Lightweight, human-readable files |
+| `document` | DocumentStore (JSONL) | Auto-detected for legacy | Lightweight, human-readable files |
 
 Engine selection priority:
 1. Explicit `engine` parameter in `createDevPlan()`
@@ -701,7 +701,7 @@ console.log(progress);
 | 引擎 | 后端 | 默认 | 特点 |
 |------|------|------|------|
 | `graph` | SocialGraphV2（WAL + 分片） | ✅ 新项目 | 图可视化、实体-关系模型 |
-| `document` | EnhancedDocumentStore（JSONL） | 旧项目自动检测 | 轻量、文件可读 |
+| `document` | DocumentStore（JSONL） | 旧项目自动检测 | 轻量、文件可读 |
 
 引擎选择优先级：
 1. `createDevPlan()` 显式传入 `engine` 参数
@@ -975,7 +975,7 @@ npx aifastdb-devplan-visual --project my-app --base-path .devplan --port 3210
 
 ## Tech Stack / 技术栈
 
-- **Storage Engine / 存储引擎**: [aifastdb](https://github.com/aifastdb/aifastdb) — Dual engine: SocialGraphV2 (graph) + EnhancedDocumentStore (JSONL), built with Rust + N-API
+- **Storage Engine / 存储引擎**: [aifastdb](https://github.com/aifastdb/aifastdb) — Dual engine: SocialGraphV2 (graph) + DocumentStore (JSONL), built with Rust + N-API
 - **Protocol / 通信协议**: [MCP (Model Context Protocol)](https://modelcontextprotocol.io) — Standard protocol for AI assistant tool invocation
 - **Visualization / 可视化**: [vis-network](https://visjs.github.io/vis-network/) — Interactive graph visualization (CDN, zero dependencies)
 - **Runtime / 运行时**: Node.js ≥ 18

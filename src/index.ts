@@ -2,7 +2,7 @@
  * aifastdb-devplan — AI-powered development plan management
  *
  * 使用 aifastdb 作为存储引擎的通用开发计划管理系统。
- * 支持双引擎：SocialGraphV2（图结构，默认）和 EnhancedDocumentStore（文档存储）。
+ * 支持双引擎：SocialGraphV2（图结构，默认）和 DocumentStore（文档存储）。
  *
  * MCP Server 使用方式：
  * ```json

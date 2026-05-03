@@ -57,7 +57,7 @@ aifastdb-devplan/
 ├── src/                                # TypeScript — DevPlan 核心 + MCP + 可视化
 │   ├── types.ts                        # 所有类型定义（463 行 + Autopilot 类型）
 │   ├── dev-plan-interface.ts           # IDevPlanStore 抽象接口（249 行，30+ 方法）
-│   ├── dev-plan-document-store.ts      # Document 引擎实现（EnhancedDocumentStore/JSONL）
+│   ├── dev-plan-document-store.ts      # Document 引擎实现（DocumentStore/JSONL）
 │   ├── dev-plan-graph-store.ts         # Graph 引擎实现（SocialGraphV2）
 │   ├── dev-plan-factory.ts             # 工厂函数 + 引擎选择逻辑
 │   ├── dev-plan-migrate.ts             # 数据迁移工具（document ↔ graph）
@@ -95,7 +95,7 @@ aifastdb-devplan (独立项目)
   │
   ├── [TypeScript] src/
   │   ├── aifastdb (^2.5.1)                 # 底层存储引擎
-  │   │   ├── EnhancedDocumentStore         # Document 引擎的底层依赖
+  │   │   ├── DocumentStore                 # Document 引擎的底层依赖
   │   │   ├── SocialGraphV2                 # Graph 引擎的底层依赖（含 HNSW 向量索引）
   │   │   ├── VibeSynapse                   # 感知引擎（Candle MiniLM Embedding 生成）
   │   │   └── ContentType / DocumentInput   # 类型依赖
@@ -124,7 +124,7 @@ DevPlan 支持两种存储引擎，每个项目独立选择：
 | 引擎 | 底层实现 | 数据格式 | 特点 | 适用场景 |
 |------|---------|---------|------|---------|
 | **graph** (默认) | `SocialGraphV2` | WAL + 分片文件 | 天然的实体-关系模型，支持图导出和可视化 | 新项目（推荐） |
-| **document** | `EnhancedDocumentStore` | JSONL 追加写入 | 轻量、简单、天然跟随 Git 版本 | 旧项目兼容 |
+| **document** | `DocumentStore` | JSONL 追加写入 | 轻量、简单、天然跟随 Git 版本 | 旧项目兼容 |
 
 ### 2.2 引擎选择机制
 
@@ -550,7 +550,7 @@ MainTask ◀──N:M──▶ DevPlanDoc   (通过 task_has_doc 关系双向关
 ## 5. 核心接口 (IDevPlanStore)
 
 `IDevPlanStore` 定义了 DevPlan 的全部存储操作接口（30+ 方法），供两个引擎实现共用：
-- `DevPlanDocumentStore` — 基于 `EnhancedDocumentStore`（JSONL 持久化）
+- `DevPlanDocumentStore` — 基于 `DocumentStore`（JSONL 持久化）
 - `DevPlanGraphStore` — 基于 `SocialGraphV2`（图结构存储 + 可视化）
 
 ### 5.1 文档操作（6 + 5 个方法）
@@ -1025,7 +1025,7 @@ export {
 
 ### 9.3 Append-Only JSONL 时间戳策略（Document 引擎）
 
-Document 引擎底层使用 `EnhancedDocumentStore`（JSONL 格式），其关键特性是 **append-only**：
+Document 引擎底层使用 `DocumentStore`（JSONL 格式），其关键特性是 **append-only**：
 
 - **写入**：`put()` 在 JSONL 文件末尾追加一条新记录
 - **删除**：`delete()` 在内存中标记删除，但 JSONL 文件中的旧记录**仍然保留**
@@ -1069,7 +1069,7 @@ Document 引擎底层使用 `EnhancedDocumentStore`（JSONL 格式），其关�
 
 ```
 ai_db (aifastdb npm 包)                          ← 不受 devplan 影响，无需修改
-├── packages/node/ts/document-store.ts           ← 导出 EnhancedDocumentStore
+├── packages/node/ts/document-store.ts           ← 导出 DocumentStore
 ├── packages/node/ts/social-graph-v2.ts          ← 导出 SocialGraphV2
 ├── packages/node/ts/social-types.ts             ← 导出 Entity, Relation 类型
 ├── packages/node/ts/index.ts                    ← 统一导出入口
@@ -1077,7 +1077,7 @@ ai_db (aifastdb npm 包)                          ← 不受 devplan 影响，�
 
 aifastdb-devplan (独立项目，依赖 aifastdb npm 包)
 ├── [TypeScript] src/
-│   ├── src/dev-plan-document-store.ts           ← import { EnhancedDocumentStore } from 'aifastdb'
+│   ├── src/dev-plan-document-store.ts           ← import { DocumentStore } from 'aifastdb'
 │   ├── src/dev-plan-graph-store.ts              ← import { SocialGraphV2, VibeSynapse } from 'aifastdb'
 │   ├── src/dev-plan-factory.ts                  ← 根据 engine.json 选择上述两个实现之一
 │   ├── src/dev-plan-migrate.ts                  ← 数据迁移工具（document ↔ graph）

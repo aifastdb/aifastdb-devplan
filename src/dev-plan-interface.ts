@@ -2,7 +2,7 @@
  * IDevPlanStore — 通用开发计划存储接口
  *
  * 定义 DevPlan 的全部存储操作，供两个实现共用：
- * - DevPlanDocumentStore（基于 EnhancedDocumentStore，JSONL 持久化）
+ * - DevPlanDocumentStore（基于 DocumentStore，JSONL 持久化）
  * - DevPlanGraphStore（基于 SocialGraphV2，图结构存储 + 可视化）
  */
 

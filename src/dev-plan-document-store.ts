@@ -1,7 +1,7 @@
 /**
- * DevPlanDocumentStore — 基于 EnhancedDocumentStore 的开发计划存储实现
+ * DevPlanDocumentStore — 基于 DocumentStore 的开发计划存储实现
  *
- * 使用 aifastdb 的 EnhancedDocumentStore（JSONL 持久化）作为存储引擎。
+ * 使用 aifastdb 的 DocumentStore（JSONL 持久化）作为存储引擎。
  * 实现 IDevPlanStore 接口，是 DevPlan 系统的两个存储后端之一。
  *
  * 特性：
@@ -11,7 +11,7 @@
  */
 
 import {
-  EnhancedDocumentStore,
+  DocumentStore,
   documentStoreProductionConfig,
   ContentType,
   type DocumentInput,
@@ -74,19 +74,19 @@ function sectionImportance(section: DevPlanSection): number {
 // ============================================================================
 
 /**
- * 基于 EnhancedDocumentStore 的开发计划存储
+ * 基于 DocumentStore 的开发计划存储
  *
- * 管理项目的开发计划文档和任务，使用三个 EnhancedDocumentStore 实例：
+ * 管理项目的开发计划文档和任务，使用三个 DocumentStore 实例：
  * - docStore: 文档片段 (Markdown 内容)
  * - taskStore: 任务 (主任务 + 子任务层级)
  * - moduleStore: 功能模块
  * - promptStore: Prompt 日志
  */
 export class DevPlanDocumentStore implements IDevPlanStore {
-  private docStore: InstanceType<typeof EnhancedDocumentStore>;
-  private taskStore: InstanceType<typeof EnhancedDocumentStore>;
-  private moduleStore: InstanceType<typeof EnhancedDocumentStore>;
-  private promptStore: InstanceType<typeof EnhancedDocumentStore>;
+  private docStore: InstanceType<typeof DocumentStore>;
+  private taskStore: InstanceType<typeof DocumentStore>;
+  private moduleStore: InstanceType<typeof DocumentStore>;
+  private promptStore: InstanceType<typeof DocumentStore>;
   private projectName: string;
   /** Git 操作的工作目录（多项目路由时指向项目根目录） */
   private gitCwd: string | undefined;
@@ -94,19 +94,19 @@ export class DevPlanDocumentStore implements IDevPlanStore {
   constructor(projectName: string, config: DevPlanStoreConfig) {
     this.projectName = projectName;
     this.gitCwd = config.gitCwd;
-    this.docStore = new EnhancedDocumentStore(
+    this.docStore = new DocumentStore(
       config.documentPath,
       documentStoreProductionConfig()
     );
-    this.taskStore = new EnhancedDocumentStore(
+    this.taskStore = new DocumentStore(
       config.taskPath,
       documentStoreProductionConfig()
     );
-    this.moduleStore = new EnhancedDocumentStore(
+    this.moduleStore = new DocumentStore(
       config.modulePath,
       documentStoreProductionConfig()
     );
-    this.promptStore = new EnhancedDocumentStore(
+    this.promptStore = new DocumentStore(
       config.promptPath,
       documentStoreProductionConfig()
     );
@@ -1705,7 +1705,7 @@ export class DevPlanDocumentStore implements IDevPlanStore {
   /**
    * 获取文档的有效 updatedAt 时间戳。
    *
-   * EnhancedDocumentStore 使用 append-only JSONL 存储，修改文档时实际上
+   * DocumentStore 使用 append-only JSONL 存储，修改文档时实际上
    * 是 delete 旧文档 + put 新文档。因此同一逻辑文档可能存在多个物理版本。
    * 必须通过 metadata.updatedAt 来判断哪个是最新的"可用文档"，
    * 其余的都是"历史文档"。
@@ -1719,7 +1719,7 @@ export class DevPlanDocumentStore implements IDevPlanStore {
   /**
    * 确保当前时间戳严格大于参考时间戳。
    *
-   * EnhancedDocumentStore 使用 append-only JSONL 存储，保留所有历史版本。
+   * DocumentStore 使用 append-only JSONL 存储，保留所有历史版本。
    * 版本选择通过 metadata.updatedAt 判定最新文档。
    * 如果 delete+put 发生在同一毫秒内，新旧版本的 updatedAt 相同，
    * 会导致去重时可能选中旧版本（如 pending 状态），造成状态丢失。
@@ -1740,7 +1740,7 @@ export class DevPlanDocumentStore implements IDevPlanStore {
    * 因为版本选择是基于 metadata.updatedAt 进行的。
    */
   private deleteAndEnsureTimestampAdvance(
-    store: InstanceType<typeof EnhancedDocumentStore>,
+    store: InstanceType<typeof DocumentStore>,
     id: string
   ): void {
     const deleted = store.delete(id);
@@ -1752,7 +1752,7 @@ export class DevPlanDocumentStore implements IDevPlanStore {
   }
 
   private deleteManyAndEnsureTimestampAdvance(
-    store: InstanceType<typeof EnhancedDocumentStore>,
+    store: InstanceType<typeof DocumentStore>,
     docs: Array<{ id: string }>
   ): number {
     let deletedCount = 0;
@@ -1789,7 +1789,7 @@ export class DevPlanDocumentStore implements IDevPlanStore {
   /**
    * 对同一 taskId 的多个历史版本做去重，仅保留最新版（metadata.updatedAt 最大）。
    *
-   * 由于 EnhancedDocumentStore 使用 append-only JSONL 存储，
+   * 由于 DocumentStore 使用 append-only JSONL 存储，
    * delete+put 操作会在文件中保留历史版本。重新加载时所有版本都会出现，
    * 因此需要在查询层面进行去重。
    *
@@ -2272,7 +2272,7 @@ export class DevPlanDocumentStore implements IDevPlanStore {
   // ==========================================================================
 
   /**
-   * EnhancedDocumentStore 不支持图谱导出，返回 null。
+   * DocumentStore 不支持图谱导出，返回 null。
    * 如需项目图谱展示，请使用 SocialGraphV2 引擎（DevPlanGraphStore）。
    */
   exportGraph(_options?: {

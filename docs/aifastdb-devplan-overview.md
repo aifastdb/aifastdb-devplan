@@ -50,7 +50,7 @@ v5.0.0  (规划) 多项目路由 + Autopilot 模块 — cursor_auto 融合
 │           IDevPlanStore 抽象接口 (30+ 方法)              │
 ├──────────────────────┬──────────────────────────────────┤
 │  Graph 引擎 (默认)    │  Document 引擎 (兼容)            │
-│  SocialGraphV2       │  EnhancedDocumentStore            │
+│  SocialGraphV2       │  DocumentStore                    │
 │  WAL + 分片文件       │  JSONL 追加写入                   │
 │  实体-关系模型        │  轻量, 跟随 Git                   │
 │  + HNSW 向量索引      │                                  │
@@ -127,7 +127,7 @@ v5.0.0  (规划) 多项目路由 + Autopilot 模块 — cursor_auto 融合
 ```
 aifastdb-devplan
   ├── aifastdb (^2.5.1)                 # 底层存储引擎
-  │   ├── EnhancedDocumentStore         # Document 引擎底层
+  │   ├── DocumentStore                 # Document 引擎底层
   │   ├── SocialGraphV2                 # Graph 引擎底层（含 HNSW）
   │   ├── VibeSynapse                   # Candle MiniLM Embedding
   │   └── ContentType / DocumentInput   # 类型

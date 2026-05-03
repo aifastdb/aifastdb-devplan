@@ -1,7 +1,7 @@
 /**
  * DevPlan 引擎迁移工具
  *
- * 在 document（EnhancedDocumentStore）和 graph（SocialGraphV2）引擎之间迁移数据。
+ * 在 document（DocumentStore）和 graph（SocialGraphV2）引擎之间迁移数据。
  *
  * 迁移流程：
  * 1. 从源引擎读取所有数据（模块 → 文档 → 主任务 → 子任务）

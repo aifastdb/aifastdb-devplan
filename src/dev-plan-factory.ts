@@ -4,7 +4,7 @@
  * 提供 createDevPlan() 工厂函数，根据引擎配置创建对应的存储实例。
  * 支持两种引擎：
  * - 'graph'    — DevPlanGraphStore (SocialGraphV2)，默认引擎
- * - 'document' — DevPlanDocumentStore (EnhancedDocumentStore)
+ * - 'document' — DevPlanDocumentStore (DocumentStore)
  *
  * 引擎选择优先级：
  * 1. createDevPlan() 的显式 engine 参数

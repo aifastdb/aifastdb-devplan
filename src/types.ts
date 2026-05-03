@@ -439,7 +439,7 @@ export interface ProjectProgress {
 // ============================================================================
 
 /**
- * DevPlanStore 配置（EnhancedDocumentStore 模式）
+ * DevPlanStore 配置（DocumentStore 模式）
  */
 export interface DevPlanStoreConfig {
   /** 文档片段存储路径 */
