@@ -213,6 +213,43 @@ export async function handleInitToolCall(
         }
       }
 
+      // Build nextSteps so MCP clients without a Cursor-Rule backstop
+      // (or a fresh AI session that has not loaded the rule yet) can finish
+      // onboarding from the tool return value alone. Each item is conditional
+      // on what the workspace already has, to avoid suggesting redundant work.
+      const nextSteps: string[] = [];
+      if (projectRoot) {
+        const overviewPath = path.join(projectRoot, 'docs', `${args.projectName}-overview.md`);
+        if (!fs.existsSync(overviewPath)) {
+          nextSteps.push(
+            `Write a Layer-1 overview at docs/${args.projectName}-overview.md (project purpose, architecture, key flows, links to detailed docs) and persist it via devplan_save_section({projectName: "${args.projectName}", section: "overview", title: "...", content: "..."}).`
+          );
+        } else {
+          nextSteps.push(
+            `An overview file already exists at docs/${args.projectName}-overview.md. If it is not yet in DevPlan, persist it via devplan_save_section({projectName: "${args.projectName}", section: "overview", title: "...", content: "..."}).`
+          );
+        }
+
+        const gitignorePath = path.join(projectRoot, '.gitignore');
+        let gitignoreCovered = false;
+        if (fs.existsSync(gitignorePath)) {
+          try {
+            const content = fs.readFileSync(gitignorePath, 'utf-8');
+            gitignoreCovered = /^\s*\/?\.devplan\/?\s*$/m.test(content);
+          } catch {
+            // unreadable .gitignore — fall through and recommend the append
+          }
+        }
+        if (!gitignoreCovered) {
+          nextSteps.push(
+            `Append "/.devplan/" to ${fs.existsSync(gitignorePath) ? '.gitignore' : 'a new .gitignore at the project root'} so DevPlan runtime data (graph WAL, prompts, memories) is never committed.`
+          );
+        }
+      }
+      nextSteps.push(
+        `For any future code change to "${args.projectName}", follow the rule generated at .cursor/rules/dev-plan-management.mdc: devplan_create_main_task (new phase, taskId like "phase-N") → devplan_add_sub_task (subtasks like "TN.1") → devplan_complete_task on completion. Save the originating user request via devplan_save_prompt in the same batch.`
+      );
+
       return JSON.stringify({
         success: true,
         projectName: args.projectName,
@@ -226,9 +263,10 @@ export async function handleInitToolCall(
         registeredProjects: Object.keys(readDevPlanConfig(defaultBase)?.projects || {}),
         availableSections: ALL_SECTIONS,
         sectionDescriptions: SECTION_DESCRIPTIONS,
+        nextSteps,
         message: autoRegistered
-          ? `DevPlan initialized for "${args.projectName}" with engine "${engine}". Project auto-registered at ${projectBase}.`
-          : `DevPlan initialized for "${args.projectName}" with engine "${engine}".`,
+          ? `DevPlan initialized for "${args.projectName}" with engine "${engine}". Project auto-registered at ${projectBase}. See "nextSteps" for recommended follow-ups to finish onboarding.`
+          : `DevPlan initialized for "${args.projectName}" with engine "${engine}". See "nextSteps" for recommended follow-ups.`,
       });
     }
 

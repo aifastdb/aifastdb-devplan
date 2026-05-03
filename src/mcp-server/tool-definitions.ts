@@ -351,17 +351,55 @@ const ALL_TOOLS = [
   },
   {
     name: 'devplan_init',
-    description: 'Initialize a development plan for a project. Creates an empty plan structure. Also lists existing plans if no projectName is given. Auto-generates .cursor/rules/dev-plan-management.mdc template if not present, and can refresh the template when explicitly requested.\n初始化项目的开发计划。创建空的计划结构。如果不提供 projectName 则列出已有的计划。自动生成 .cursor/rules/ 模板文件（首次），并可在显式请求时刷新现有模板。',
+    description: `Initialize DevPlan for a project end-to-end (idempotent, safe to re-run). Use this when onboarding a brand-new project, or to refresh an existing project's Cursor Rule template. Omit projectName for a read-only list of existing plans.
+
+SIDE EFFECTS (all automatic, no pre-setup needed):
+1. Registers the project in the global config.json projects map (projectName → rootPath).
+2. Creates <projectRoot>/.devplan/ data directory on first run.
+3. Generates <projectRoot>/.cursor/rules/dev-plan-management.mdc on first run; pass refreshCursorRule=true to overwrite it later.
+4. Resolves the engine (default "graph") and primes the project store cache.
+
+PROJECT ROOT RESOLUTION (you do NOT need to pass a path):
+- Walks up from the MCP server's process.cwd() to the nearest directory containing .git/ or package.json.
+- Then prefers a sibling directory whose basename === projectName.
+- Practical rule: place the new project as a sibling of any git repo already open in the editor workspace and lookup just works. If unresolvable, falls back to the default basePath and logs a warning.
+
+RECOMMENDED FOLLOW-UPS to finish onboarding (also returned as the "nextSteps" array):
+- Write a Layer-1 overview at <projectRoot>/docs/<projectName>-overview.md and persist it via devplan_save_section(section="overview").
+- Append "/.devplan/" to .gitignore so DevPlan runtime data is never committed.
+- For any future code change, follow the generated dev-plan-management.mdc: devplan_create_main_task → devplan_add_sub_task → devplan_complete_task.
+
+RETURNS: { success, projectName, engine, basePath, autoRegistered, cursorRuleGenerated, cursorRuleRefreshed, cursorRulePath, configDefaultProject, registeredProjects, nextSteps, message }.
+
+为项目端到端初始化 DevPlan（幂等，重复调用安全）。新项目接入或刷新已有项目的 Cursor Rule 模板时调用；省略 projectName 则只读返回现有计划列表。
+
+副作用（全部自动完成，无需任何前置准备）：
+1. 把项目注册到全局 config.json 的 projects 表（projectName → rootPath）。
+2. 首次运行时在 <projectRoot>/.devplan/ 创建项目本地数据目录。
+3. 首次运行时生成 <projectRoot>/.cursor/rules/dev-plan-management.mdc；后续如需覆盖请传 refreshCursorRule=true。
+4. 解析引擎（默认 "graph"）并预热项目 store 缓存。
+
+项目根如何定位（无需手动传入路径）：
+- 从 MCP 服务进程的 process.cwd() 沿父目录向上找到最近的 .git/ 或 package.json 目录。
+- 然后优先选择 basename === projectName 的同级目录。
+- 实操规则：把新项目放在编辑器 workspace 中任意一个 git 仓库的同级目录即可命中；若仍无法定位，会回退到默认 basePath 并打印告警。
+
+推荐后续动作（同时也通过返回值的 "nextSteps" 数组传回）：
+- 在 <projectRoot>/docs/<projectName>-overview.md 写一份 Layer-1 概览，并通过 devplan_save_section(section="overview") 入库。
+- 在 .gitignore 追加 "/.devplan/" 防止运行时数据被提交。
+- 后续每次代码改动遵循生成的 dev-plan-management.mdc：devplan_create_main_task → devplan_add_sub_task → devplan_complete_task。
+
+返回值：{ success, projectName, engine, basePath, autoRegistered, cursorRuleGenerated, cursorRuleRefreshed, cursorRulePath, configDefaultProject, registeredProjects, nextSteps, message }。`,
     inputSchema: {
       type: 'object' as const,
       properties: {
         projectName: {
           type: 'string',
-          description: `Project name. Omit to list existing plans. Default: "${DEFAULT_PROJECT_NAME}"\n项目名称。省略则列出已有计划。默认值："${DEFAULT_PROJECT_NAME}"`,
+          description: `Project name. Required to initialize. Omit for a read-only listing of existing plans. Default fallback: "${DEFAULT_PROJECT_NAME}".\n项目名称。初始化时必填；省略则只读返回现有计划列表。默认值："${DEFAULT_PROJECT_NAME}"。`,
         },
         refreshCursorRule: {
           type: 'boolean',
-          description: 'Optional: If true, rewrite .cursor/rules/dev-plan-management.mdc even when it already exists, so older projects can receive the latest template guidance.\n可选：若为 true，即使规则文件已存在也会重写 .cursor/rules/dev-plan-management.mdc，用于让旧项目拿到最新模板说明。',
+          description: 'Optional, default false. When true, rewrites <projectRoot>/.cursor/rules/dev-plan-management.mdc even if it already exists — use this to upgrade older projects to the latest rule template. First-time init does NOT require this flag; the template is generated automatically on creation.\n可选，默认 false。设为 true 时，即使 <projectRoot>/.cursor/rules/dev-plan-management.mdc 已存在也会重写——用于把老项目升级到最新模板。首次初始化无需传此参数（首次创建时模板会自动生成）。',
         },
       },
     },

@@ -395,9 +395,17 @@ export class DevPlanGraphStore implements IDevPlanStore {
       config.embeddingDimension ?? perception?.dimension,
     );
     if (config.enableSemanticSearch) {
+      // m=32: aligns with aifastdb phase-389 (T389.4 H2 PASS, T389.5 C.1+C.2
+      // multi-seed replication PASS). On dense-cluster embeddings (which is
+      // the typical DevPlan memory shape — many memories share the same
+      // project / phase / tag context, so embeddings cluster tightly), m=16
+      // recall@10 mean was 0.83-0.84 (FAIL), m=32 lifts it to 0.99 with no
+      // regression on borderline cells. Throughput cost: ~10ms per
+      // single-point indexEntity, imperceptible at DevPlan write rates.
+      // See ai_db research/program.md "phase-389" section for full audit.
       graphConfig.vectorSearch = {
         dimension,
-        m: 16,
+        m: 32,
         efConstruction: 200,
         efSearch: 50,
         maxElements: 100_000,
