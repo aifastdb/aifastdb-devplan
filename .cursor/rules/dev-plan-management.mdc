@@ -1,307 +1,138 @@
 ---
-description: aifastdb-devplan 项目的 DevPlan 完整配置。包含项目标识、任务创建工作流、Prompt 自动记录、文档层级、开发阶段。
+description: pythontoolbox 项目的 DevPlan 配置。包含项目标识、文档层级、开发阶段。通用的 DevPlan 工作流规则由用户级全局规则提供。
 globs: []
 alwaysApply: true
 mcpServers: aifastdb-devplan
 ---
 
-# aifastdb-devplan 项目 — DevPlan 完整配置
+# pythontoolbox 项目 — DevPlan 配置
 
-> **MCP Server**: `aifastdb-devplan`  
-> **项目定位**: 基于 aifastdb 存储引擎的通用开发计划管理 MCP Server  
-> 通用的 DevPlan 工作流（触发词识别、阶段工作流、完成流程等）由用户级全局 Cursor Rule 提供（`C:\Users\daxue\.cursor\rules\dev-plan-management.mdc`）。
+> **MCP Server**: `aifastdb-devplan`
+> 通用的 DevPlan 工作流（触发词识别、阶段工作流、完成流程等）由用户级全局 Cursor Rule 提供。
 
 ## 项目标识
 
 ```
-projectName = "aifastdb-devplan"
+projectName = "pythontoolbox"
 ```
 
----
+## 文档层级
 
-## 🔴 强制规则 1：修改代码时必须创建/关联 DevPlan 任务
+| 层级 | 文件 | 用途 | 大小 |
+|------|------|------|------|
+| Layer 1 (鸟瞰) | `docs/pythontoolbox-overview.md` | AI 首选阅读，< 500 行 | — |
+| Layer 2 (详细) | （项目完整设计文档） | 分段读取 | — |
+| Layer 3 (实时) | `.devplan/pythontoolbox/` | MCP 工具查询任务状态 | — |
 
-当用户要求对 `aifastdb-devplan` 项目进行**代码修改、功能开发、Bug 修复**时，**必须**执行以下工作流：
+## 快捷操作
 
-### 工作流
+```
+devplan_get_progress(projectName: "pythontoolbox")
+devplan_list_tasks(projectName: "pythontoolbox")
+devplan_list_tasks(projectName: "pythontoolbox", status: "pending")
+devplan_complete_task(projectName: "pythontoolbox", taskId: "T1.1")
+devplan_sync_git(projectName: "pythontoolbox", dryRun: true)
+devplan_list_sections(projectName: "pythontoolbox")
+devplan_get_section(projectName: "pythontoolbox", section: "overview")
+devplan_search_sections(projectName: "pythontoolbox", query: "171e9a18-c7e9-430b-9e3d-fa6d384a0b4e", searchBy: "id")
+devplan_search_sections(projectName: "pythontoolbox", query: "向量存储", searchBy: "title")
+devplan_search_sections(projectName: "pythontoolbox", query: "BM25 中文分词", searchBy: "content")
+devplan_search_sections(projectName: "pythontoolbox", query: "文档搜索", searchBy: "auto", mode: "hybrid")
+devplan_export_markdown(projectName: "pythontoolbox", scope: "tasks")
+devplan_list_modules(projectName: "pythontoolbox")
+```
 
-1. **查看当前任务状态**：先调用 `devplan_list_tasks(projectName: "aifastdb-devplan")` 查看是否有 `in_progress` 阶段
-2. **创建或关联任务**（二选一）：
-   - 如果修改属于已有的 `in_progress` 阶段 → 在该阶段下添加子任务
-   - 如果是独立的修改/功能 → 创建新的主任务（`devplan_create_main_task`）+ 子任务（`devplan_add_sub_task`）
-3. **完成后标记**：代码修改完成 + 编译通过后 → 调用 `devplan_complete_task` 标记子任务完成
+## 文档搜索约定
 
-### 判断是否需要创建新阶段
+- 调用 `devplan_search_sections` 时，默认优先显式传入 `searchBy`，避免把 ID、标题、正文搜索混在一起。
+- 当查询内容形如 UUID（例如 `171e9a18-c7e9-430b-9e3d-fa6d384a0b4e`）时，优先使用 `searchBy: "id"`。
+- 当目标是文档标题时，优先使用 `searchBy: "title"`。
+- 当目标是正文片段或术语时，优先使用 `searchBy: "content"`。
+- 仅在无法提前判断目标字段，或希望保留字面/语义/混合自动搜索行为时，使用 `searchBy: "auto"`；此时可再配合 `mode: "literal" | "semantic" | "hybrid"`。
+
+## 开发阶段概览
+
+| 阶段 | 状态 | 说明 |
+|------|------|------|
+| （使用 devplan_list_tasks 查看最新状态） | | |
+
+## 强制拆分阶段规则（Phase Guardrails）
 
 | 场景 | 操作 |
-|---|---|
-| 用户说"开始 phase-X" | → `devplan_start_phase` 启动已有阶段 |
-| 修改属于已有 in_progress 阶段的范围 | → 在现有阶段下 `devplan_add_sub_task` |
-| 独立的功能增强/Bug 修复 | → `devplan_create_main_task` 新建阶段 + `devplan_add_sub_task` |
-| 当前 phase 子任务数超过 25 | → **必须** `devplan_create_main_task` 新建 phase（禁止继续挂载） |
+|------|------|
+| 当前 phase 子任务数超过 25 | → **必须**新建 phase（`devplan_create_main_task`） |
 | 任务类型与当前 phase 主题不匹配（如依赖升级/运维/文档治理） | → **必须**新建 phase |
 | 仅同一里程碑连续任务或同任务内容更新 | → 允许继续挂当前 phase |
-| 极小的改动（如改一个配置值） | → 可以不创建任务，但仍需保存 Prompt |
 
 ### 任务 ID 命名规范
 
 - 主任务：`phase-{N}` 或 `phase-{N}{Letter}`（如 `phase-14B`）
 - 子任务：`T{N}.{M}`（如 `T14B.1`、`T14B.2`）
 
----
+### 主任务标题格式（强制）
 
-## 🔴 强制规则 2：Prompt 自动记录
+- 使用 `devplan_create_main_task` 新建主任务时，`title` **必须**显式包含对应的 phase 编号前缀，不能只写语义标题。
+- `title` 的推荐格式：`Phase-{N}: <主题>`、`Phase-{N}{Letter}: <主题>`，例如 `Phase-43: DevPlan phase title prefix rule alignment`。
+- 当 `taskId = "phase-43"` 时，`title` 必须写成带 `phase-43`/ `Phase-43` 前缀的形式，禁止只写不带编号的标题。
+- 创建新 phase 时，需要同时保证：
+  - `taskId` 使用 `phase-{N}` 或 `phase-{N}{Letter}`
+  - `title` 复用同一个 phase 编号前缀
 
-> 保存 Prompt 是已授权的自动行为，无需询问用户确认。
-
-### 🟢 自动授权声明
-
-- ✅ 直接调用 `devplan_save_prompt`，与其他 devplan 工具在同一批次中静默执行
-- ❌ 不要问"是否要记录 Prompt？"
-- ❌ 不要问"需要保存这次对话吗？"
-- ❌ 不要在回复中提及"已为您保存 Prompt"（除非用户显式要求保存时需要确认反馈）
-
-### 触发条件
-
-满足以下**任一条件**时，**必须**调用 `devplan_save_prompt`：
-
-| 条件 | 说明 |
-|---|---|
-| A: 首次调用 devplan 工具时 | 在同一批次中同时调用 `devplan_save_prompt`（**推荐**） |
-| B: 完成任务时（安全网） | 如果本轮对话还没保存过 Prompt，在 `devplan_complete_task` 同一批次中补充 |
-| C: 用户显式要求 | 用户说"记录 prompt"、"保存对话"、"记录到 devplan"时立即保存 |
-
-### 项目识别算法（projectName 确定优先级）
-
-1. **用户显式指定**："修改 aifastdb-devplan 项目" → `"aifastdb-devplan"`
-2. **本轮对话上下文**：已调用过 `devplan_*` 工具的 projectName
-3. **Workspace Rules 配置**：本文件定义的 `projectName = "aifastdb-devplan"`
-4. **当前文件路径**：文件在 `D:\Project\git\aifastdb-devplan\` 下 → `"aifastdb-devplan"`
-5. **⚠️ 无法确定时不要猜测**，询问用户
-
-### 保存格式
+示例：
 
 ```
-devplan_save_prompt(
-  projectName: "aifastdb-devplan",
-  content: "<user_query 标签内的原始文本，逐字复制>",
-  aiInterpretation: "<AI 的理解和技术分析>",
-  summary: "<一句话摘要>",
-  relatedTaskId: "phase-X",   // 可选
-  tags: ["feature", "bugfix"] // 可选
+devplan_create_main_task(
+  projectName: "pythontoolbox",
+  taskId: "phase-43",
+  title: "Phase-43: DevPlan phase title prefix rule alignment",
+  priority: "P1"
 )
 ```
-
-- **content**：必须从 `<user_query>` 标签内逐字复制，禁止修改
-- **aiInterpretation**：AI 的技术解读，不是用户原话
-- **一轮对话只保存一次**（用户第一条消息），后续追问不重复保存
-
----
-
-## 🔴 强制规则 3：自动记忆管理（Cursor 长期记忆）
-
-> 记忆的保存和召回是已授权的自动行为，无需询问用户确认。
-
-### 🟢 自动授权声明
-
-- ✅ Cursor 场景默认调用 `devplan_memory_save_cursor_profile`，与其他 devplan 工具在同一批次中静默执行
-- ✅ 非 Cursor/无需会话绑定时调用 `devplan_memory_save`
-- ✅ 直接调用 `devplan_memory_recall` / `devplan_memory_context`，无需告知用户
-- ❌ 不要问"是否要保存这条记忆？"
-- ❌ 不要问"需要召回相关记忆吗？"
-- ❌ 不要在回复中提及"已为您保存记忆"（除非用户显式要求保存时需确认反馈）
-
-### 自动保存触发条件
-
-满足以下**任一条件**时，**必须**保存记忆（Cursor 场景优先 `devplan_memory_save_cursor_profile`）：
-
-| 条件 | memoryType | 说明 |
-|---|---|---|
-| A: 修复了一个 Bug | `bugfix` | 在 `devplan_complete_task` 同一批次中保存：Bug 根因 + 修复方案 |
-| B: 做出了架构/设计决策 | `decision` | 选择了技术方案 A 而非 B 时，保存决策理由 |
-| C: 发现重要技术洞察 | `insight` | 兼容性问题、性能特征、API 陷阱等 |
-| D: 完成一个 Phase | `summary` | 阶段摘要：关键成果 + 修改范围 |
-| E: 用户说"记住"/"remember" | 按内容分类 | 用户显式要求保存 |
-| F: 识别到代码模式/约定 | `pattern` | 首次发现项目中的命名规则、代码结构模式 |
-
-### 自动召回触发条件
-
-满足以下**任一条件**时，**应**调用记忆召回：
-
-| 条件 | 工具 | 说明 |
-|---|---|---|
-| A: 新会话开始 | `devplan_memory_context` | 在首次 devplan 工具调用同一批次中，获取项目上下文 |
-| B: 遇到可能解决过的问题 | `devplan_memory_recall` | 搜索 bugfix/insight 记忆 |
-| C: 讨论架构设计 | `devplan_memory_recall` | 搜索 decision 记忆，避免推翻之前的决策 |
-| D: 需要了解项目约定 | `devplan_memory_recall` | 搜索 preference/pattern 记忆 |
-
-### 保存格式（Cursor 场景默认）
-
-```
-devplan_memory_save_cursor_profile(
-  projectName: "aifastdb-devplan",
-  conversationId: "<会话ID>",
-  userId: "<用户ID>",
-  userContent: "<用户消息>",
-  assistantContent: "<助手消息>",
-  profile: "cursor",
-  contentSessionId: "<cursor content session id>",  // 可选
-  memorySessionId: "<cursor memory session id>",    // 可选
-  hookPhase: "post_response",                       // 可选
-  hookName: "auto_memory_capture",                  // 可选
-  writeScope: "user_role",                          // 可选
-  roleId: "architect-bot"                           // 可选
-)
-```
-
-### 保存格式（通用兼容）
-
-```
-devplan_memory_save(
-  projectName: "aifastdb-devplan",
-  content: "<简洁描述，1~3 句话>",
-  memoryType: "bugfix",         // decision/pattern/bugfix/insight/preference/summary
-  importance: 0.8,              // 0~1, 默认 0.5
-  tags: ["sharding", "fix"],    // 可选分类标签
-  relatedTaskId: "phase-24"     // 可选关联任务
-)
-```
-
-### 召回格式
-
-```
-// 新会话初始化（推荐）
-devplan_memory_context(projectName: "aifastdb-devplan", query: "<当前话题关键词>")
-
-// 精确搜索
-devplan_memory_recall(projectName: "aifastdb-devplan", query: "sharding 路由")
-```
-
-### 注意事项
-
-- **同一轮对话中同类型记忆只保存一次**（避免重复）
-- **content 要精炼**：1~3 句话概括，不要复制大段代码
-- **importance 合理评估**：Bug 修复 0.8~1.0，架构决策 0.7~0.9，模式 0.5~0.7
-
-### 🔴 批量记忆生成（AI 提炼工作流）
-
-> **触发词**：用户说"批量生成记忆" / "全量导入记忆" / "一键导入记忆" / "从文档生成记忆" / "从任务生成记忆" / "batch generate memories"
-
-**工作流（自动循环，不要等用户二次确认）：**
-
-```
-循环 {
-  result = devplan_memory_generate(projectName: "aifastdb-devplan", limit: 5)
-  if (result.candidates.length === 0) → 报告完成 → 结束
-
-  for each candidate:
-    // 阅读 candidate.content → AI 提炼 1~3 句精华
-    // 判断 memoryType（不要盲目用 suggestedMemoryType）
-    // 一个候选项可生成多条记忆
-    // 跳过价值不高的内容（如 changelog、纯列表）
-    devplan_memory_save_cursor_profile(
-      projectName: "aifastdb-devplan",
-      conversationId: "<conversation-id>",
-      userId: "<user-id>",
-      userContent: "<user content>",
-      assistantContent: "<assistant content>",
-      profile: "cursor",
-      contentSessionId: "<content-session-id>",
-      memorySessionId: "<memory-session-id>",
-      hookPhase: "post_response",
-      hookName: "auto_memory_capture"
-    )
-    // 或非 Cursor 场景使用 devplan_memory_save
-    devplan_memory_save(
-      projectName: "aifastdb-devplan",
-      content: "<AI 提炼后的精华>",
-      memoryType: "<AI 判断>",
-      importance: <AI 评估>,
-      tags: candidate.suggestedTags,
-      relatedTaskId: candidate.sourceType === 'task' ? candidate.sourceId : undefined
-    )
-
-  if (result.stats.remaining > 0) → 继续循环
-  else → 报告完成 → 结束
-}
-```
-
----
-
-## 完整工作流示例
-
-用户说："修改 aifastdb-devplan 项目，在 3D 图谱中添加呼吸灯效果"
-
-```
-// 第 1 批工具调用：保存 Prompt + 查看任务状态 + 召回相关记忆
-batch 1: [
-  devplan_save_prompt(projectName: "aifastdb-devplan", content: "...", ...),
-  devplan_list_tasks(projectName: "aifastdb-devplan"),
-  devplan_memory_context(projectName: "aifastdb-devplan", query: "3D 图谱呼吸灯"),
-]
-
-// 第 2 批：创建任务（如果没有合适的 in_progress 阶段）
-batch 2: [
-  devplan_create_main_task(projectName: "aifastdb-devplan", taskId: "phase-14B", title: "...", priority: "P1"),
-  devplan_add_sub_task(projectName: "aifastdb-devplan", taskId: "T14B.1", parentTaskId: "phase-14B", title: "..."),
-  devplan_add_sub_task(projectName: "aifastdb-devplan", taskId: "T14B.2", parentTaskId: "phase-14B", title: "..."),
-]
-
-// ... 执行代码修改 ...
-
-// 完成后：标记任务 + 保存重要记忆（如有 Bug 修复或决策）
-batch N: [
-  devplan_complete_task(projectName: "aifastdb-devplan", taskId: "T14B.1"),
-  devplan_complete_task(projectName: "aifastdb-devplan", taskId: "T14B.2"),
-  devplan_memory_save_cursor_profile(projectName: "aifastdb-devplan", conversationId: "...", userId: "...", userContent: "...", assistantContent: "呼吸灯效果使用 CSS animation 实现...", profile: "cursor", hookPhase: "post_response"),
-]
-```
-
----
-
-## 文档层级
-
-| 层级 | 文件 | 用途 | 大小 |
-|---|---|---|---|
-| Layer 1 (鸟瞰) | [aifastdb-devplan-overview.md](mdc:docs/aifastdb-devplan-overview.md) | AI 首选阅读，< 500 行，一次读完 | ~320 行 |
-| Layer 2 (详细) | [DEVPLAN_ReadMe.md](mdc:DEVPLAN_ReadMe.md) | 完整功能文档，分段读取 | 2100+ 行 |
-| Layer 3 (实时) | `.devplan/aifastdb-devplan/` | MCP 工具查询任务状态 | — |
-
-## 快捷操作
-
-```
-devplan_get_progress(projectName: "aifastdb-devplan")
-devplan_list_tasks(projectName: "aifastdb-devplan")
-devplan_list_tasks(projectName: "aifastdb-devplan", parentTaskId: "phase-1")
-devplan_list_tasks(projectName: "aifastdb-devplan", status: "pending")
-devplan_complete_task(projectName: "aifastdb-devplan", taskId: "T1.1")
-devplan_sync_git(projectName: "aifastdb-devplan", dryRun: true)
-devplan_list_sections(projectName: "aifastdb-devplan")
-devplan_get_section(projectName: "aifastdb-devplan", section: "overview")
-devplan_export_markdown(projectName: "aifastdb-devplan", scope: "tasks")
-devplan_list_modules(projectName: "aifastdb-devplan")
-devplan_save_prompt(projectName: "aifastdb-devplan", content: "用户 Prompt", relatedTaskId: "phase-X")
-devplan_list_prompts(projectName: "aifastdb-devplan")
-devplan_memory_save(projectName: "aifastdb-devplan", content: "...", memoryType: "decision")
-devplan_memory_recall(projectName: "aifastdb-devplan", query: "...")
-devplan_memory_list(projectName: "aifastdb-devplan")
-devplan_memory_context(projectName: "aifastdb-devplan")
-```
-
-## 开发阶段概览
-
-| 阶段 | 状态 | 说明 |
-|---|---|---|
-| 阶段一 | ✅ 已完成 | 多项目路由完善与测试 (5/5) |
-| 阶段二~六 | ✅ 已完成 | Autopilot + Executor (全部完成) |
-| Phase 1B | ✅ 已完成 | WAL Shard 语义化重命名 |
-| Phase 7~13 | ✅ 已完成 | 图谱渲染引擎 + 性能优化 + 3D 可视化 |
-| Phase 14 | 🔄 进行中 | template.ts 拆分重构 |
-| Phase 24 | ✅ 已完成 | Cursor 长期记忆 — DevPlan Memory Layer (5/5) |
 
 ## 注意事项
 
-1. **优先读概览文件**：初次了解项目时，先读 [aifastdb-devplan-overview.md](mdc:docs/aifastdb-devplan-overview.md)（< 500 行），再按需深入 [DEVPLAN_ReadMe.md](mdc:DEVPLAN_ReadMe.md) 的具体章节
-2. **数据存储位置**：本项目的 devplan 数据存储在 `D:\Project\git\aifastdb-devplan\.devplan\aifastdb-devplan\`（非 ai_db 目录下）
-3. **源码即产品**：本项目的 `src/` 目录就是 DevPlan MCP Server 的源码，修改后需 `npm run build` 并重启 Cursor
+1. **优先读概览文件**：初次了解项目时，先读概览文件（< 500 行），再按需深入完整设计文档
+2. **数据存储位置**：本项目的 devplan 数据存储在项目根目录的 `.devplan/pythontoolbox/` 下
+3. **通过 MCP 操作任务**：任务状态管理使用 `devplan_*` 系列 MCP 工具，不要手动编辑数据文件
+4. **完成任务后同步**：完成代码实现后，调用 `devplan_complete_task` 持久化状态（自动锚定 Git commit）
+5. **Git 回滚后检查**：如果执行了 `git reset` 或切换分支，运行 `devplan_sync_git` 检查任务状态一致性
+6. **概览文件需手动更新**：当有重大架构变更、新增阶段或新 API 时，同步更新概览文档
 
+## Cursor 记忆默认工具
+
+- 在 Cursor 场景保存记忆时，默认优先调用 `devplan_memory_save_cursor_profile`（支持双会话 ID + hook 语义）。
+- 非 Cursor 或无需会话绑定时，继续使用 `devplan_memory_save`。
+
+## 批量写操作后必读回验证（防止 MCP 状态丢失）
+
+> **背景**：MCP server 在某些场景下（workspace 路径变化、IDE 重启、网络抖动、进程被回收）可能丢失内存中尚未刷盘的写操作。一次连续多次的 `devplan_upsert_*` / `devplan_update_*` / `devplan_create_*` 调用，靠前的几次最容易被回滚，靠后的反而幸存——这种"部分丢失"比全丢更危险，因为肉眼难发现。
+
+### 必须执行的兜底验证
+
+每次完成连续 ≥ 3 次以下任意写操作之后，**必须**在同一会话内立即执行一次读回验证：
+
+- `devplan_create_main_task`
+- `devplan_add_sub_task`
+- `devplan_upsert_task`
+- `devplan_create_module` / `devplan_update_module`
+- `devplan_complete_task`
+
+读回方式（任选其一，覆盖刚改动的范围即可）：
+
+- `devplan_search_tasks(projectName: "pythontoolbox", query: "<刚改的 phase id>", includeSubTasks: true)`
+- `devplan_get_module(projectName: "pythontoolbox", moduleId: "<刚改的 module id>")`
+- `devplan_list_tasks(projectName: "pythontoolbox", limit: ...)`
+
+### 回滚处置
+
+- 比对写入意图与实际状态，**任何回滚到旧值的项必须立即重做**（重新调用对应的写工具）。
+- 重做后再读回一次确认。
+- 在用户可见的回复中**必须**提及"已读回验证"和最终落盘状态，避免用户基于错误假设继续推进。
+
+### 高风险触发场景（看到这些信号时主动验证）
+
+- workspace 路径大小写或盘符变化（例如 `D:\` → `d:\`）
+- 系统提示 `Workspace folders changed`
+- IDE 重启 / 重新加载窗口
+- 切换 git 分支或刚 pull 远端后
+- 跨多个 MCP server 串联写入
