@@ -322,7 +322,7 @@ function selectRenderer(value) {
 
 // ========== App Theme (deep-black / ink-blue) ==========
 var APP_THEME_KEY = 'devplan_app_theme';
-var APP_THEME_DEFAULT = 'deep-black';
+var APP_THEME_DEFAULT = 'ink-blue';
 
 function getAppTheme() {
   try {

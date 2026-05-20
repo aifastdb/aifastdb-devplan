@@ -545,12 +545,27 @@ export function getHTML(projectName: string): string {
           <div class="settings-section">
             <div class="settings-section-title">🌗 外观主题 <span style="font-size:11px;color:var(--ds-ink-subtle);font-weight:400;margin-left:6px;">侧边栏与内容区配色方案</span></div>
             <div class="settings-option-group app-theme-group">
+              <label class="settings-radio-card app-theme-card" data-value="ink-blue" onclick="setAppTheme('ink-blue')">
+                <input type="radio" name="appTheme" value="ink-blue">
+                <div class="radio-content">
+                  <div class="radio-label">
+                    墨蓝色 (Ink Blue)
+                    <span class="default-badge">默认</span>
+                    <span class="theme-swatch-row">
+                      <span class="theme-swatch" style="background:#0f172a;border-color:#1e293b;" title="sidebar #0f172a"></span>
+                      <span class="theme-swatch" style="background:#111827;border-color:#1e293b;" title="content #111827"></span>
+                      <span class="theme-swatch theme-swatch-accent" style="background:#6366f1;" title="accent #6366f1"></span>
+                    </span>
+                  </div>
+                  <div class="radio-desc">DevPlan 原始的 slate-900 墨蓝调性。侧边栏 #0f172a 配右侧内容区 #111827，蓝灰色调温暖、可读性高，接近传统 dashboard 的视觉气质。</div>
+                </div>
+              </label>
               <label class="settings-radio-card app-theme-card" data-value="deep-black" onclick="setAppTheme('deep-black')">
                 <input type="radio" name="appTheme" value="deep-black">
                 <div class="radio-content">
                   <div class="radio-label">
                     深黑色 (Deep Black)
-                    <span class="default-badge">默认</span>
+                    <span class="default-badge" style="background:#1e293b;color:#94a3b8;">Linear 风</span>
                     <span class="theme-swatch-row">
                       <span class="theme-swatch" style="background:#010102;border-color:#23252a;" title="sidebar #010102"></span>
                       <span class="theme-swatch" style="background:#010102;border-color:#23252a;" title="content #010102"></span>
@@ -558,21 +573,6 @@ export function getHTML(projectName: string): string {
                     </span>
                   </div>
                   <div class="radio-desc">Linear 风格的纯黑画布。侧边栏与右侧内容区都是 #010102，仅靠 1px 薄边线分隔。薰衣草紫作为唯一彩色 accent，整体安静、克制、信息密度高。</div>
-                </div>
-              </label>
-              <label class="settings-radio-card app-theme-card" data-value="ink-blue" onclick="setAppTheme('ink-blue')">
-                <input type="radio" name="appTheme" value="ink-blue">
-                <div class="radio-content">
-                  <div class="radio-label">
-                    墨蓝色 (Ink Blue)
-                    <span class="default-badge" style="background:#1e293b;color:#94a3b8;">原配色</span>
-                    <span class="theme-swatch-row">
-                      <span class="theme-swatch" style="background:#0f172a;border-color:#1e293b;" title="sidebar #0f172a"></span>
-                      <span class="theme-swatch" style="background:#111827;border-color:#1e293b;" title="content #111827"></span>
-                      <span class="theme-swatch theme-swatch-accent" style="background:#6366f1;" title="accent #6366f1"></span>
-                    </span>
-                  </div>
-                  <div class="radio-desc">DevPlan 原始的 slate-900 墨蓝调性。侧边栏 #0f172a 配右侧内容区 #111827，蓝灰色调暖一些，更接近传统 dashboard 的视觉气质。</div>
                 </div>
               </label>
             </div>

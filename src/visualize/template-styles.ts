@@ -14,31 +14,13 @@ export function getStyles(): string {
      * 抽出为 CSS 变量；其它模块未迁移前继续用硬编码值不受影响。
      * ============================================================ */
     :root {
-      /* Brand */
+      /* === Brand (跨主题) === */
       --ds-primary: #5e6ad2;
       --ds-primary-hover: #828fff;
       --ds-primary-focus: #5e69d1;
       --ds-on-primary: #ffffff;
 
-      /* Surface ladder — 从最深到最浅 */
-      --ds-canvas: #010102;
-      --ds-surface-1: #0f1011;
-      --ds-surface-2: #141516;
-      --ds-surface-3: #18191a;
-      --ds-surface-4: #191a1b;
-
-      /* Hairline borders */
-      --ds-hairline: #23252a;
-      --ds-hairline-strong: #34343a;
-      --ds-hairline-tertiary: #3e3e44;
-
-      /* Text */
-      --ds-ink: #f7f8f8;
-      --ds-ink-muted: #d0d6e0;
-      --ds-ink-subtle: #8a8f98;
-      --ds-ink-tertiary: #62666d;
-
-      /* Radius scale */
+      /* === Radius scale === */
       --ds-radius-xs: 4px;
       --ds-radius-sm: 6px;
       --ds-radius-md: 8px;
@@ -46,7 +28,7 @@ export function getStyles(): string {
       --ds-radius-xl: 16px;
       --ds-radius-pill: 9999px;
 
-      /* Spacing — 4px base */
+      /* === Spacing — 4px base === */
       --ds-space-xxs: 4px;
       --ds-space-xs: 8px;
       --ds-space-sm: 12px;
@@ -54,37 +36,40 @@ export function getStyles(): string {
       --ds-space-lg: 24px;
       --ds-space-xl: 32px;
 
-      /* Sidebar geometry */
+      /* === Sidebar geometry === */
       --ds-sidebar-w-collapsed: 56px;
       --ds-sidebar-w-expanded: 224px;
       --ds-sidebar-header-h: 52px;
       --ds-sidebar-item-h: 36px;
 
-      /* Theme-aware surfaces — 不同主题在下面 [data-theme] 覆盖 */
-      --ds-sidebar-bg: var(--ds-canvas);
-      --ds-sidebar-border: var(--ds-hairline);
-      --ds-app-bg: var(--ds-canvas);
-      --ds-app-bg-elevated: var(--ds-surface-1);
-      --ds-app-border: var(--ds-hairline);
+      /* === Theme tokens (默认 = ink-blue 墨蓝色) === */
+      /* Surface ladder */
+      --ds-canvas: #0f172a;
+      --ds-surface-1: #1f2937;
+      --ds-surface-2: #1e293b;
+      --ds-surface-3: #334155;
+      --ds-surface-4: #475569;
+      /* Hairline */
+      --ds-hairline: #1e293b;
+      --ds-hairline-strong: #374151;
+      --ds-hairline-tertiary: #4b5563;
+      /* Text */
+      --ds-ink: #f3f4f6;
+      --ds-ink-muted: #d1d5db;
+      --ds-ink-subtle: #9ca3af;
+      --ds-ink-tertiary: #6b7280;
+      /* Chrome / App surfaces */
+      --ds-sidebar-bg: #0f172a;
+      --ds-sidebar-border: #1e293b;
+      --ds-app-bg: #111827;
+      --ds-app-bg-elevated: #1f2937;
+      --ds-app-border: #374151;
     }
 
     /* ============================================================
-     * Theme: deep-black (默认) — Linear-inspired 全画布黑
-     * sidebar #010102 · right content #010102 · 仅靠 1px hairline 分割
-     * ============================================================ */
-    :root,
-    :root[data-theme="deep-black"] {
-      --ds-sidebar-bg: #010102;
-      --ds-sidebar-border: #23252a;
-      --ds-app-bg: #010102;
-      --ds-app-bg-elevated: #0f1011;
-      --ds-app-border: #23252a;
-    }
-
-    /* ============================================================
-     * Theme: ink-blue (原 DevPlan 墨蓝色) — slate-900 调性
+     * Theme: ink-blue (默认) — 原 DevPlan 墨蓝色 / slate-900 调性
      * sidebar #0f172a · right content #111827 · 暖灰边线 #1e293b
-     * 仅覆盖少量 token，nav-item / brand / typography 继承
+     * (与 bare :root 同值，仅为了显式选择的语义可读性保留)
      * ============================================================ */
     :root[data-theme="ink-blue"] {
       --ds-canvas: #0f172a;
@@ -107,6 +92,33 @@ export function getStyles(): string {
       --ds-app-bg: #111827;
       --ds-app-bg-elevated: #1f2937;
       --ds-app-border: #374151;
+    }
+
+    /* ============================================================
+     * Theme: deep-black — Linear-inspired 全画布黑
+     * sidebar #010102 · right content #010102 · 仅靠 1px hairline 分割
+     * ============================================================ */
+    :root[data-theme="deep-black"] {
+      --ds-canvas: #010102;
+      --ds-surface-1: #0f1011;
+      --ds-surface-2: #141516;
+      --ds-surface-3: #18191a;
+      --ds-surface-4: #191a1b;
+
+      --ds-hairline: #23252a;
+      --ds-hairline-strong: #34343a;
+      --ds-hairline-tertiary: #3e3e44;
+
+      --ds-ink: #f7f8f8;
+      --ds-ink-muted: #d0d6e0;
+      --ds-ink-subtle: #8a8f98;
+      --ds-ink-tertiary: #62666d;
+
+      --ds-sidebar-bg: #010102;
+      --ds-sidebar-border: #23252a;
+      --ds-app-bg: #010102;
+      --ds-app-bg-elevated: #0f1011;
+      --ds-app-border: #23252a;
     }
 
     * { margin: 0; padding: 0; box-sizing: border-box; }

@@ -6,21 +6,21 @@ description: "DevPlan 可视化前端的设计宪法。基线参考 awesome-desi
 tokens:
   source: "src/visualize/template-styles.ts → getStyles() 顶部 :root 块"
   themes:
-    - id: "deep-black"
-      label: "深黑色 (Linear-inspired)"
-      default: true
-      sidebar-bg: "#010102"
-      sidebar-border: "#23252a"
-      app-bg: "#010102"
-      app-bg-elevated: "#0f1011"
-      accent: "#5e6ad2"
     - id: "ink-blue"
       label: "墨蓝色 (原 DevPlan)"
+      default: true
       sidebar-bg: "#0f172a"
       sidebar-border: "#1e293b"
       app-bg: "#111827"
       app-bg-elevated: "#1f2937"
       accent: "#6366f1"
+    - id: "deep-black"
+      label: "深黑色 (Linear-inspired)"
+      sidebar-bg: "#010102"
+      sidebar-border: "#23252a"
+      app-bg: "#010102"
+      app-bg-elevated: "#0f1011"
+      accent: "#5e6ad2"
   theme-toggle:
     storage-key: "devplan_app_theme"
     early-init: "template.ts <head> 内联脚本读 localStorage 并 setAttribute('data-theme', ...) 避免闪烁"
