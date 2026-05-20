@@ -63,7 +63,14 @@ export function getHTML(projectName: string): string {
       </div>
       -->
       <div class="nav-item" data-page="memory" onclick="navTo('memory')">
-        <span class="nav-item-icon">🧠</span>
+        <span class="nav-item-icon">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+            <path d="M9 5.5a3 3 0 0 0-3 3v0a2.5 2.5 0 0 0-1.5 4.5A2.5 2.5 0 0 0 6 17.5v.3a2.7 2.7 0 0 0 4.6 1.9 1.6 1.6 0 0 0 .4-1.1V6.5A1 1 0 0 0 10 5.5z"></path>
+            <path d="M15 5.5a3 3 0 0 1 3 3v0a2.5 2.5 0 0 1 1.5 4.5A2.5 2.5 0 0 1 18 17.5v.3a2.7 2.7 0 0 1-4.6 1.9 1.6 1.6 0 0 1-.4-1.1V6.5a1 1 0 0 1 1-1z"></path>
+            <path d="M9 10.5h-1.5"></path>
+            <path d="M16.5 10.5H15"></path>
+          </svg>
+        </span>
         <span class="nav-item-text">记忆</span>
         <span class="nav-tooltip">长期记忆</span>
       </div>
@@ -534,6 +541,43 @@ export function getHTML(projectName: string): string {
         <p class="settings-subtitle">配置 ${projectName} 项目的可视化与交互选项</p>
 
         <div class="settings-grid">
+          <!-- 外观主题 (Deep Black / Ink Blue) -->
+          <div class="settings-section">
+            <div class="settings-section-title">🌗 外观主题 <span style="font-size:11px;color:var(--ds-ink-subtle);font-weight:400;margin-left:6px;">侧边栏与内容区配色方案</span></div>
+            <div class="settings-option-group app-theme-group">
+              <label class="settings-radio-card app-theme-card" data-value="deep-black" onclick="setAppTheme('deep-black')">
+                <input type="radio" name="appTheme" value="deep-black">
+                <div class="radio-content">
+                  <div class="radio-label">
+                    深黑色 (Deep Black)
+                    <span class="default-badge">默认</span>
+                    <span class="theme-swatch-row">
+                      <span class="theme-swatch" style="background:#010102;border-color:#23252a;" title="sidebar #010102"></span>
+                      <span class="theme-swatch" style="background:#010102;border-color:#23252a;" title="content #010102"></span>
+                      <span class="theme-swatch theme-swatch-accent" style="background:#5e6ad2;" title="accent #5e6ad2"></span>
+                    </span>
+                  </div>
+                  <div class="radio-desc">Linear 风格的纯黑画布。侧边栏与右侧内容区都是 #010102，仅靠 1px 薄边线分隔。薰衣草紫作为唯一彩色 accent，整体安静、克制、信息密度高。</div>
+                </div>
+              </label>
+              <label class="settings-radio-card app-theme-card" data-value="ink-blue" onclick="setAppTheme('ink-blue')">
+                <input type="radio" name="appTheme" value="ink-blue">
+                <div class="radio-content">
+                  <div class="radio-label">
+                    墨蓝色 (Ink Blue)
+                    <span class="default-badge" style="background:#1e293b;color:#94a3b8;">原配色</span>
+                    <span class="theme-swatch-row">
+                      <span class="theme-swatch" style="background:#0f172a;border-color:#1e293b;" title="sidebar #0f172a"></span>
+                      <span class="theme-swatch" style="background:#111827;border-color:#1e293b;" title="content #111827"></span>
+                      <span class="theme-swatch theme-swatch-accent" style="background:#6366f1;" title="accent #6366f1"></span>
+                    </span>
+                  </div>
+                  <div class="radio-desc">DevPlan 原始的 slate-900 墨蓝调性。侧边栏 #0f172a 配右侧内容区 #111827，蓝灰色调暖一些，更接近传统 dashboard 的视觉气质。</div>
+                </div>
+              </label>
+            </div>
+          </div>
+
           <!-- 左列: 节点颜色 -->
           <div class="settings-section">
             <div class="settings-section-title">🎨 节点颜色 <span style="font-size:11px;color:#94a3b8;font-weight:400;margin-left:6px;">适用于所有渲染引擎</span></div>

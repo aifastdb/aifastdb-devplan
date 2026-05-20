@@ -10,7 +10,7 @@ export function getMdViewerStyles(): string {
   return `
     /* ========== MD Viewer Page ========== */
     .mdv-page { display: flex; flex-direction: column; flex: 1; min-height: 0; overflow: hidden; }
-    .mdv-toolbar { display: flex; align-items: center; justify-content: space-between; gap: 12px; padding: 10px 20px; background: #0f172a; border-bottom: 1px solid #1e293b; flex-shrink: 0; z-index: 10; }
+    .mdv-toolbar { display: flex; align-items: center; justify-content: space-between; gap: 12px; padding: 10px 20px; background: var(--ds-sidebar-bg); border-bottom: 1px solid var(--ds-sidebar-border); flex-shrink: 0; z-index: 10; transition: background-color 0.18s ease, border-color 0.18s ease; }
     .mdv-toolbar-left { display: flex; align-items: center; gap: 12px; min-width: 0; flex: 1; }
     .mdv-toolbar-right { display: flex; align-items: center; gap: 8px; flex-shrink: 0; }
     .mdv-logo { font-size: 15px; font-weight: 700; color: #e2e8f0; white-space: nowrap; }
@@ -31,7 +31,7 @@ export function getMdViewerStyles(): string {
     .mdv-search-box svg { position: absolute; left: 9px; top: 50%; transform: translateY(-50%); width: 13px; height: 13px; color: #6b7280; pointer-events: none; }
 
     .mdv-content-wrap { display: flex; flex: 1; min-height: 0; overflow: hidden; }
-    .mdv-toc-panel { width: 260px; flex-shrink: 0; background: #0f172a; border-left: 1px solid #1e293b; overflow-y: auto; padding: 16px 0; }
+    .mdv-toc-panel { width: 260px; flex-shrink: 0; background: var(--ds-sidebar-bg); border-left: 1px solid var(--ds-sidebar-border); overflow-y: auto; padding: 16px 0; transition: background-color 0.18s ease, border-color 0.18s ease; }
     .mdv-toc-title { padding: 0 16px 12px; font-size: 11px; font-weight: 600; text-transform: uppercase; letter-spacing: 0.5px; color: #6b7280; }
     .mdv-toc-list { list-style: none; padding: 0; margin: 0; }
     .mdv-toc-list li a { display: block; padding: 5px 16px; font-size: 12px; color: #9ca3af; text-decoration: none; border-left: 2px solid transparent; transition: all 0.15s; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }

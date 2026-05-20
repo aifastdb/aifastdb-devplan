@@ -320,6 +320,73 @@ function selectRenderer(value) {
   setTimeout(function() { location.reload(); }, 1200);
 }
 
+// ========== App Theme (deep-black / ink-blue) ==========
+var APP_THEME_KEY = 'devplan_app_theme';
+var APP_THEME_DEFAULT = 'deep-black';
+
+function getAppTheme() {
+  try {
+    var saved = localStorage.getItem(APP_THEME_KEY);
+    if (saved === 'deep-black' || saved === 'ink-blue') return saved;
+  } catch (e) {}
+  return APP_THEME_DEFAULT;
+}
+
+function setAppTheme(theme) {
+  if (theme !== 'deep-black' && theme !== 'ink-blue') return;
+  var current = getAppTheme();
+  document.documentElement.setAttribute('data-theme', theme);
+  try { localStorage.setItem(APP_THEME_KEY, theme); } catch (e) {}
+  syncAppThemeUI(theme);
+  // 同步 3D 渲染引擎背景色（WebGL 不归 CSS 管）
+  syncGraphBgToTheme();
+  if (current !== theme) {
+    var label = theme === 'deep-black' ? '深黑色 (Deep Black)' : '墨蓝色 (Ink Blue)';
+    showSettingsToast('✅ 已切换主题：' + label);
+  }
+}
+
+/** 切换主题或初始化时，把当前 3D 实例的背景色刷成 getCurrent3DBgColor() */
+function syncGraphBgToTheme() {
+  var bg = getCurrent3DBgColor();
+  // 1. 同步运行中的 3D Force Graph 实例
+  try {
+    if (typeof window !== 'undefined' && window._3dGraph && typeof window._3dGraph.backgroundColor === 'function') {
+      window._3dGraph.backgroundColor(bg);
+    }
+  } catch (e) {}
+  // 2. 同步 Settings 页的颜色选择器 UI
+  var bgEl = document.getElementById('s3dBgColor');
+  var bgHexEl = document.getElementById('s3dBgColorHex');
+  if (bgEl) bgEl.value = bg;
+  if (bgHexEl) bgHexEl.textContent = bg;
+}
+
+function syncAppThemeUI(theme) {
+  var cards = document.querySelectorAll('.app-theme-card');
+  for (var i = 0; i < cards.length; i++) {
+    var c = cards[i];
+    var matched = c.getAttribute('data-value') === theme;
+    if (matched) c.classList.add('selected');
+    else c.classList.remove('selected');
+    var radio = c.querySelector('input[type="radio"]');
+    if (radio) radio.checked = matched;
+  }
+}
+
+// Init: 应用保存的主题并同步 UI（早期脚本只设置 attribute，未同步 radio 状态）
+(function() {
+  var saved = getAppTheme();
+  if (document.documentElement.getAttribute('data-theme') !== saved) {
+    document.documentElement.setAttribute('data-theme', saved);
+  }
+  if (document.readyState === 'loading') {
+    document.addEventListener('DOMContentLoaded', function() { syncAppThemeUI(saved); });
+  } else {
+    syncAppThemeUI(saved);
+  }
+})();
+
 function showSettingsToast(message) {
   var toast = document.getElementById('settingsSavedToast');
   if (!toast) return;
@@ -578,9 +645,34 @@ var S3D_DEFAULTS = {
   arrows: false,
   nodeOpacity: 0.90,
   linkOpacity: 0.25,
-  bgColor: '#0a0e1a'
+  bgColor: '' // 默认空 = 跟随主题（见 S3D_THEME_BG_DEFAULTS）；用户手动选色后填入具体值
 };
 var S3D_KEY = 'devplan_3d_settings';
+
+// 每个主题的 3D 场景默认背景色（仅当 settings.bgColor 未被用户自定义时生效）
+var S3D_THEME_BG_DEFAULTS = {
+  'deep-black': '#010102',
+  'ink-blue':   '#0a0e1a'
+};
+
+/** 计算当前应该用的 3D 背景色：用户自定义优先，否则跟随当前主题 */
+function getCurrent3DBgColor() {
+  var theme = (typeof getAppTheme === 'function') ? getAppTheme() : 'deep-black';
+  // 收集所有主题的默认色：任何一个等于这些默认色之一的存储值，都视为"未自定义"
+  var themeDefaultSet = {};
+  for (var k in S3D_THEME_BG_DEFAULTS) themeDefaultSet[S3D_THEME_BG_DEFAULTS[k]] = true;
+  try {
+    var raw = localStorage.getItem(S3D_KEY);
+    if (raw) {
+      var parsed = JSON.parse(raw);
+      if (parsed && typeof parsed.bgColor === 'string' && parsed.bgColor && !themeDefaultSet[parsed.bgColor]) {
+        // 真正自定义的颜色（不在任何主题默认集合里），跨主题保持
+        return parsed.bgColor;
+      }
+    }
+  } catch(e) {}
+  return S3D_THEME_BG_DEFAULTS[theme] || S3D_THEME_BG_DEFAULTS['deep-black'];
+}
 
 function get3DSettings() {
   var settings = {};
@@ -714,11 +806,12 @@ function init3DSettingsUI() {
     if (valEl) valEl.textContent = cfg.fmt > 0 ? parseFloat(v).toFixed(cfg.fmt) : Math.round(v);
   }
 
-  // Background color (3D only)
+  // Background color (3D only) — 跟随主题，除非用户已自定义
   var bgEl = document.getElementById('s3dBgColor');
   var bgHexEl = document.getElementById('s3dBgColorHex');
-  if (bgEl) bgEl.value = s.bgColor || '#0a0e1a';
-  if (bgHexEl) bgHexEl.textContent = s.bgColor || '#0a0e1a';
+  var effectiveBg = getCurrent3DBgColor();
+  if (bgEl) bgEl.value = effectiveBg;
+  if (bgHexEl) bgHexEl.textContent = effectiveBg;
 
   // Toggles
   var toggleMap = { 's3dParticles': 'particles', 's3dArrows': 'arrows', 's3dShowOrbits': 'showOrbits', 's3dTypeSeparation': 'typeSeparation', 's3dShowLabels': 'showLabels' };

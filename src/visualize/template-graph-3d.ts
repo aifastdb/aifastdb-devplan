@@ -397,10 +397,11 @@ function render3DGraph(container, visibleNodes, visibleEdges) {
   var rect = container.getBoundingClientRect();
 
   // 创建 3D 图实例
+  // bgColor 走 getCurrent3DBgColor() — 跟随当前主题（deep-black / ink-blue），用户自定义可覆盖
   var graph3d = ForceGraph3D({ controlType: 'orbit' })(container)
     .width(rect.width)
     .height(rect.height)
-    .backgroundColor(_s3d.bgColor)
+    .backgroundColor((typeof getCurrent3DBgColor === 'function') ? getCurrent3DBgColor() : (_s3d.bgColor || '#010102'))
     .showNavInfo(false)
     // ── 节点样式 ──
     .nodeLabel(function(n) {
@@ -696,6 +697,9 @@ function render3DGraph(container, visibleNodes, visibleEdges) {
       refresh3DStyles();
       closePanel();
     });
+
+  // 暴露到 window，供主题切换时实时刷新背景色（见 template-core.ts → syncGraphBgToTheme）
+  try { window._3dGraph = graph3d; } catch(e) {}
 
   /** 刷新连线视觉样式（节点不变，仅刷新边的颜色/宽度/粒子） */
   function refresh3DStyles() {

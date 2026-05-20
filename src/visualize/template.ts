@@ -35,6 +35,17 @@ export function getVisualizationHTML(projectName: string): string {
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <title>DevPlan - ${projectName}</title>
+  <script>
+    // 早期主题应用 — 必须在 <style> 之后、<body> 之前执行，避免主题切换时闪烁
+    (function() {
+      try {
+        var t = localStorage.getItem('devplan_app_theme');
+        if (t === 'ink-blue' || t === 'deep-black') {
+          document.documentElement.setAttribute('data-theme', t);
+        }
+      } catch (e) {}
+    })();
+  </script>
   <style>
 ${getStyles()}
 ${getMdViewerStyles()}
