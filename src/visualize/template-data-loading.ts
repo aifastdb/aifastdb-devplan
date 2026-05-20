@@ -789,11 +789,12 @@ function renderStats(progress, graph) {
     }
   }
   var promptCount = progress.promptCount || 0;
+  // Phase-6: 在每项前加上与视图节点/图例同形同色的图标，并把数字颜色对齐节点颜色。
   bar.innerHTML =
-    '<div class="stat clickable" onclick="showStatsModal(\\x27module\\x27)" title="查看所有模块"><span class="num amber">' + moduleCount + '</span> 模块</div>' +
-    '<div class="stat clickable" onclick="showStatsModal(\\x27main-task\\x27)" title="查看所有主任务"><span class="num blue">' + progress.mainTaskCount + '</span> 主任务</div>' +
-    '<div class="stat clickable" onclick="showStatsModal(\\x27sub-task\\x27)" title="查看所有子任务"><span class="num purple">' + progress.subTaskCount + '</span> 子任务</div>' +
-    '<div class="stat clickable" onclick="showStatsModal(\\x27document\\x27)" title="查看所有文档"><span class="num" style="color:#3b82f6;">📄 ' + docCount + '</span> 文档</div>' +
+    '<div class="stat clickable" onclick="showStatsModal(\\x27module\\x27)" title="查看所有模块"><span class="stat-icon diamond"></span><span class="num orange">' + moduleCount + '</span> 模块</div>' +
+    '<div class="stat clickable" onclick="showStatsModal(\\x27main-task\\x27)" title="查看所有主任务"><span class="stat-icon circle"></span><span class="num green-bright">' + progress.mainTaskCount + '</span> 主任务</div>' +
+    '<div class="stat clickable" onclick="showStatsModal(\\x27sub-task\\x27)" title="查看所有子任务"><span class="stat-icon dot"></span><span class="num green-deep">' + progress.subTaskCount + '</span> 子任务</div>' +
+    '<div class="stat clickable" onclick="showStatsModal(\\x27document\\x27)" title="查看所有文档"><span class="stat-icon square"></span><span class="num blue">' + docCount + '</span> 文档</div>' +
     '<div class="stat clickable" onclick="showPromptModal()" title="查看所有 Prompt"><span class="num" style="color:#ec4899;">💬 ' + promptCount + '</span> Prompt</div>' +
     '<div class="stat"><span class="num green">' + progress.completedSubTasks + '/' + progress.subTaskCount + '</span> 已完成</div>' +
     '<div class="stat"><div class="progress-bar"><div class="progress-fill" style="width:' + pct + '%"></div></div><span>' + pct + '%</span></div>';

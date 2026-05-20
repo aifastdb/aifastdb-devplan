@@ -61,6 +61,17 @@ export function getStyles(): string {
     .stat .num.blue { color: #3b82f6; }
     .stat .num.purple { color: #8b5cf6; }
     .stat .num.amber { color: #f59e0b; }
+    /* Phase-6: stats-bar 数字颜色与视图节点/图例对齐 */
+    .stat .num.orange { color: #ff6600; }
+    .stat .num.green-bright { color: #22c55e; }
+    .stat .num.green-deep { color: #047857; }
+    /* Phase-6: stats-bar 形状图标（复用 legend-icon 形状，尺寸略大以匹配 16px 数字） */
+    .stat-icon { width: 14px; height: 14px; flex-shrink: 0; display: inline-block; }
+    .stat-icon.diamond { background: #ff6600; clip-path: polygon(50% 0%, 100% 50%, 50% 100%, 0% 50%); }
+    .stat-icon.circle { background: #22c55e; border-radius: 50%; }
+    .stat-icon.dot { background: #047857; border-radius: 50%; width: 10px; height: 10px; }
+    .stat-icon.square { background: #3b82f6; border-radius: 2px; width: 12px; height: 12px; }
+    .stat-icon.hexagon { background: #e879f9; clip-path: polygon(25% 0%, 75% 0%, 100% 50%, 75% 100%, 25% 100%, 0% 50%); }
     .stat.clickable { cursor: pointer; border-radius: 6px; padding: 2px 8px; margin: -2px -8px; transition: background 0.15s; }
     .stat.clickable:hover { background: rgba(99,102,241,0.12); }
     .progress-bar { width: 120px; height: 8px; background: #374151; border-radius: 4px; overflow: hidden; }
