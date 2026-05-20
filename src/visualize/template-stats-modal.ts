@@ -361,7 +361,17 @@ function globalDocSelect(docKey) {
   });
 }
 
-/** 显示 Prompt 列表弹层（异步从 /api/prompts 加载） */
+// ========== Prompt 弹层分页（方案 A） ==========
+// 首屏只拉 PROMPT_PAGE_SIZE 条，滚动到底部用 IntersectionObserver 自动加载下一页。
+var PROMPT_PAGE_SIZE = 100;
+var promptModalData = [];
+var promptModalHasMore = false;
+var promptModalTotal = 0;
+var promptModalLoadingMore = false;
+var promptModalRequestSeq = 0;
+var promptModalObserver = null;
+
+/** 显示 Prompt 列表弹层（异步从 /api/prompts 加载，支持分页） */
 function showPromptModal() {
   document.getElementById('statsModalTitle').textContent = '💬 Prompt 日志';
   document.getElementById('statsModalCount').textContent = '(加载中...)';
@@ -369,124 +379,211 @@ function showPromptModal() {
   updateStatsModalPosition();
   document.getElementById('statsModalOverlay').classList.add('active');
 
-  fetch('/api/prompts').then(function(r) { return r.json(); }).then(function(data) {
+  promptModalData = [];
+  promptModalHasMore = false;
+  promptModalTotal = 0;
+  promptModalLoadingMore = false;
+  promptModalRequestSeq += 1;
+  if (promptModalObserver) { try { promptModalObserver.disconnect(); } catch(e) {} promptModalObserver = null; }
+
+  fetchPromptPage(true);
+}
+
+function fetchPromptPage(reset) {
+  if (promptModalLoadingMore) return;
+  promptModalLoadingMore = true;
+  var seq = ++promptModalRequestSeq;
+  var offset = reset ? 0 : promptModalData.length;
+  // 列表用 lite 投影 — content/aiInterpretation 截断，展开时按 id 单独拉详情
+  var url = '/api/prompts?lite=1&offset=' + offset + '&limit=' + PROMPT_PAGE_SIZE;
+
+  fetch(url).then(function(r) { return r.json(); }).then(function(data) {
+    if (seq !== promptModalRequestSeq) return;
     var prompts = data.prompts || [];
-    document.getElementById('statsModalCount').textContent = '(' + prompts.length + ')';
-
-    if (prompts.length === 0) {
-      document.getElementById('statsModalBody').innerHTML = '<div style="text-align:center;padding:40px;color:#6b7280;">暂无 Prompt 记录</div>';
-      return;
+    if (reset) {
+      promptModalData = prompts;
+    } else {
+      promptModalData = promptModalData.concat(prompts);
     }
-
-    // 按日期分组（最新在前）
-    var grouped = {};
-    var dateOrder = [];
-    for (var i = 0; i < prompts.length; i++) {
-      var p = prompts[i];
-      var date = p.createdAt ? new Date(p.createdAt).toISOString().slice(0, 10) : 'unknown';
-      if (!grouped[date]) { grouped[date] = []; dateOrder.push(date); }
-      grouped[date].push(p);
-    }
-
-    var html = '';
-    for (var di = 0; di < dateOrder.length; di++) {
-      var date = dateOrder[di];
-      var items = grouped[date];
-      html += '<div style="margin-bottom:4px;">';
-      html += '<div style="padding:8px 20px;font-size:11px;font-weight:700;color:#9ca3af;text-transform:uppercase;letter-spacing:0.05em;display:flex;align-items:center;gap:6px;">';
-      html += '<span>📅 ' + escHtml(date) + '</span>';
-      html += '<span style="margin-left:auto;font-size:10px;color:#4b5563;">' + items.length + '</span>';
-      html += '</div>';
-
-      for (var ii = 0; ii < items.length; ii++) {
-        var p = items[ii];
-        var timeStr = p.createdAt ? new Date(p.createdAt).toLocaleTimeString() : '';
-        var tagHtml = '';
-        if (p.tags && p.tags.length > 0) {
-          for (var ti = 0; ti < Math.min(p.tags.length, 3); ti++) {
-            tagHtml += '<span style="font-size:10px;padding:1px 5px;border-radius:3px;background:rgba(139,92,246,0.15);color:#a78bfa;border:1px solid rgba(139,92,246,0.25);white-space:nowrap;">' + escHtml(p.tags[ti]) + '</span>';
-          }
-          if (p.tags.length > 3) tagHtml += '<span style="font-size:10px;color:#6b7280;">+' + (p.tags.length - 3) + '</span>';
-        }
-
-        // 用户原始输入（截取预览）
-        var rawContent = (p.content || '').trim();
-        var contentPreview = rawContent.length > 120 ? rawContent.substring(0, 117) + '...' : rawContent;
-        // AI 理解
-        var aiText = (p.aiInterpretation || '').trim();
-        var aiPreview = aiText.length > 120 ? aiText.substring(0, 117) + '...' : aiText;
-        // 摘要
-        var summaryText = (p.summary || '').trim();
-
-        // 唯一展开 ID
-        var expandId = 'prompt-expand-' + date + '-' + ii;
-        var chevronId = 'prompt-chevron-' + date + '-' + ii;
-        // 用于复制的数据 ID
-        var rawDataId = 'prompt-raw-' + date + '-' + ii;
-        var aiDataId = 'prompt-ai-' + date + '-' + ii;
-
-        html += '<div class="stats-modal-item" style="flex-direction:column;align-items:flex-start;gap:4px;padding:0;cursor:default;">';
-
-        // 可点击的头部区域（点击 toggle 折叠/展开）
-        html += '<div class="prompt-item-header" style="display:flex;flex-direction:column;gap:4px;width:100%;padding:10px 20px;cursor:pointer;" onclick="togglePromptExpand(\\'' + expandId + '\\',\\'' + chevronId + '\\')">';
-
-        // 第一行：序号 + 摘要/预览 + 时间 + 折叠指示器
-        html += '<div style="display:flex;align-items:center;gap:8px;width:100%;">';
-        html += '<span style="font-size:12px;font-weight:700;color:#ec4899;flex-shrink:0;">#' + (p.promptIndex || (ii + 1)) + '</span>';
-        html += '<span class="stats-modal-item-name" title="' + escHtml(summaryText || contentPreview) + '" style="font-size:13px;">' + escHtml(summaryText || contentPreview) + '</span>';
-        html += '<span style="font-size:10px;color:#6b7280;flex-shrink:0;margin-left:auto;white-space:nowrap;">' + timeStr + '</span>';
-        html += '<span id="' + chevronId + '" style="font-size:10px;color:#6b7280;flex-shrink:0;transition:transform 0.2s;display:inline-block;">▶</span>';
-        html += '</div>';
-
-        // 标签行
-        if (p.relatedTaskId || tagHtml) {
-          html += '<div style="display:flex;align-items:center;gap:6px;padding-left:28px;flex-wrap:wrap;">';
-          if (p.relatedTaskId) {
-            html += '<span style="font-size:10px;padding:1px 5px;border-radius:3px;background:rgba(16,185,129,0.15);color:#34d399;border:1px solid rgba(16,185,129,0.25);white-space:nowrap;">📌 ' + escHtml(p.relatedTaskId) + '</span>';
-          }
-          html += tagHtml;
-          html += '</div>';
-        }
-
-        html += '</div>'; // end header
-
-        // 展开区域（默认隐藏）— 用户原始输入 + AI 理解（点击内容区域不折叠）
-        html += '<div id="' + expandId + '" style="display:none;width:100%;padding:6px 20px 10px;border-top:1px solid rgba(75,85,99,0.3);">';
-
-        // 用户原始输入
-        html += '<div style="margin-bottom:8px;">';
-        html += '<div style="font-size:10px;font-weight:600;color:#9ca3af;margin-bottom:3px;display:flex;align-items:center;gap:4px;">💬 用户原始输入';
-        html += '<button class="prompt-copy-btn" onclick="event.stopPropagation();copyPromptText(\\'' + rawDataId + '\\')" title="复制原始输入" style="margin-left:auto;background:none;border:1px solid rgba(107,114,128,0.4);border-radius:4px;padding:1px 6px;cursor:pointer;color:#9ca3af;font-size:10px;display:flex;align-items:center;gap:3px;transition:all 0.15s;"><span style="font-size:11px;">📋</span> 复制</button>';
-        html += '</div>';
-        html += '<div id="' + rawDataId + '" style="font-size:12px;color:#d1d5db;background:rgba(31,41,55,0.5);padding:8px 10px;border-radius:6px;border:1px solid rgba(75,85,99,0.3);white-space:pre-wrap;word-break:break-word;max-height:200px;overflow-y:auto;line-height:1.5;">' + escHtml(rawContent || '(未记录)') + '</div>';
-        html += '</div>';
-
-        // AI 理解
-        if (aiText) {
-          html += '<div style="margin-bottom:4px;">';
-          html += '<div style="font-size:10px;font-weight:600;color:#9ca3af;margin-bottom:3px;display:flex;align-items:center;gap:4px;">🤖 AI 理解';
-          html += '<button class="prompt-copy-btn" onclick="event.stopPropagation();copyPromptText(\\'' + aiDataId + '\\')" title="复制 AI 理解" style="margin-left:auto;background:none;border:1px solid rgba(107,114,128,0.4);border-radius:4px;padding:1px 6px;cursor:pointer;color:#9ca3af;font-size:10px;display:flex;align-items:center;gap:3px;transition:all 0.15s;"><span style="font-size:11px;">📋</span> 复制</button>';
-          html += '</div>';
-          html += '<div id="' + aiDataId + '" style="font-size:12px;color:#a5b4fc;background:rgba(67,56,202,0.12);padding:8px 10px;border-radius:6px;border:1px solid rgba(99,102,241,0.2);white-space:pre-wrap;word-break:break-word;max-height:200px;overflow-y:auto;line-height:1.5;">' + escHtml(aiText) + '</div>';
-          html += '</div>';
-        }
-
-        html += '</div>'; // end expand
-        html += '</div>'; // end item
-      }
-      html += '</div>';
-    }
-    document.getElementById('statsModalBody').innerHTML = html;
+    promptModalHasMore = !!data.hasMore;
+    promptModalTotal = typeof data.total === 'number' ? data.total : promptModalData.length;
+    promptModalLoadingMore = false;
+    renderPromptModalList();
+    setupPromptModalInfiniteScroll();
   }).catch(function(err) {
-    document.getElementById('statsModalBody').innerHTML = '<div style="text-align:center;padding:40px;color:#f87171;">加载失败: ' + escHtml(err.message) + '</div>';
+    if (seq !== promptModalRequestSeq) return;
+    promptModalLoadingMore = false;
+    if (reset) {
+      document.getElementById('statsModalBody').innerHTML = '<div style="text-align:center;padding:40px;color:#f87171;">加载失败: ' + escHtml((err && err.message) || String(err)) + '</div>';
+    }
   });
 }
 
-/** 切换 Prompt 展开/折叠（带 chevron 旋转指示） */
-function togglePromptExpand(expandId, chevronId) {
+function setupPromptModalInfiniteScroll() {
+  if (promptModalObserver) { try { promptModalObserver.disconnect(); } catch(e) {} promptModalObserver = null; }
+  if (!promptModalHasMore) return;
+  var sentinel = document.getElementById('promptModalSentinel');
+  if (!sentinel || typeof IntersectionObserver === 'undefined') return;
+  var root = document.getElementById('statsModalBody') || null;
+  promptModalObserver = new IntersectionObserver(function(entries) {
+    for (var i = 0; i < entries.length; i++) {
+      if (entries[i].isIntersecting && promptModalHasMore && !promptModalLoadingMore) {
+        fetchPromptPage(false);
+        return;
+      }
+    }
+  }, { root: root, rootMargin: '200px 0px' });
+  promptModalObserver.observe(sentinel);
+}
+
+function renderPromptModalList() {
+  var prompts = promptModalData;
+  document.getElementById('statsModalCount').textContent = '(' + prompts.length + ' / ' + promptModalTotal + ')';
+
+  if (prompts.length === 0) {
+    document.getElementById('statsModalBody').innerHTML = '<div style="text-align:center;padding:40px;color:#6b7280;">暂无 Prompt 记录</div>';
+    return;
+  }
+
+  // 按日期分组（最新在前）— 用 promptIndex / createdAt 唯一定位卡片，避免分页 append 后 id 冲突
+  var grouped = {};
+  var dateOrder = [];
+  for (var i = 0; i < prompts.length; i++) {
+    var p = prompts[i];
+    var date = p.createdAt ? new Date(p.createdAt).toISOString().slice(0, 10) : 'unknown';
+    if (!grouped[date]) { grouped[date] = []; dateOrder.push(date); }
+    grouped[date].push(p);
+  }
+
+  var html = '';
+  for (var di = 0; di < dateOrder.length; di++) {
+    var date = dateOrder[di];
+    var items = grouped[date];
+    html += '<div style="margin-bottom:4px;">';
+    html += '<div style="padding:8px 20px;font-size:11px;font-weight:700;color:#9ca3af;text-transform:uppercase;letter-spacing:0.05em;display:flex;align-items:center;gap:6px;">';
+    html += '<span>📅 ' + escHtml(date) + '</span>';
+    html += '<span style="margin-left:auto;font-size:10px;color:#4b5563;">' + items.length + '</span>';
+    html += '</div>';
+
+    for (var ii = 0; ii < items.length; ii++) {
+      var p = items[ii];
+      var timeStr = p.createdAt ? new Date(p.createdAt).toLocaleTimeString() : '';
+      var tagHtml = '';
+      if (p.tags && p.tags.length > 0) {
+        for (var ti = 0; ti < Math.min(p.tags.length, 3); ti++) {
+          tagHtml += '<span style="font-size:10px;padding:1px 5px;border-radius:3px;background:rgba(139,92,246,0.15);color:#a78bfa;border:1px solid rgba(139,92,246,0.25);white-space:nowrap;">' + escHtml(p.tags[ti]) + '</span>';
+        }
+        if (p.tags.length > 3) tagHtml += '<span style="font-size:10px;color:#6b7280;">+' + (p.tags.length - 3) + '</span>';
+      }
+
+      // lite 模式：用 contentPreview/aiInterpretationPreview；非 lite 兼容旧字段
+      var rawContent = ((p.contentPreview != null ? p.contentPreview : p.content) || '').trim();
+      var contentPreview = rawContent.length > 120 ? rawContent.substring(0, 117) + '...' : rawContent;
+      var aiText = ((p.aiInterpretationPreview != null ? p.aiInterpretationPreview : p.aiInterpretation) || '').trim();
+      var summaryText = (p.summary || '').trim();
+      var needsDetail = !!p._lite; // 完整内容需 fetch 详情
+
+      // 用 promptIndex + createdAt 生成唯一 id（避免 append 后跨页冲突）
+      var uniq = (p.promptIndex || 0) + '-' + (p.createdAt || 0);
+      var expandId = 'prompt-expand-' + uniq;
+      var chevronId = 'prompt-chevron-' + uniq;
+      var rawDataId = 'prompt-raw-' + uniq;
+      var aiDataId = 'prompt-ai-' + uniq;
+      var promptDomId = String(p.id || '');
+
+      html += '<div class="stats-modal-item" style="flex-direction:column;align-items:flex-start;gap:4px;padding:0;cursor:default;" data-prompt-id="' + escHtml(promptDomId) + '" data-prompt-needs-detail="' + (needsDetail ? '1' : '0') + '">';
+      html += '<div class="prompt-item-header" style="display:flex;flex-direction:column;gap:4px;width:100%;padding:10px 20px;cursor:pointer;" onclick="togglePromptExpand(\\'' + expandId + '\\',\\'' + chevronId + '\\',\\'' + escHtml(promptDomId) + '\\')">';
+      html += '<div style="display:flex;align-items:center;gap:8px;width:100%;">';
+      html += '<span style="font-size:12px;font-weight:700;color:#ec4899;flex-shrink:0;">#' + (p.promptIndex || (ii + 1)) + '</span>';
+      html += '<span class="stats-modal-item-name" title="' + escHtml(summaryText || contentPreview) + '" style="font-size:13px;">' + escHtml(summaryText || contentPreview) + '</span>';
+      html += '<span style="font-size:10px;color:#6b7280;flex-shrink:0;margin-left:auto;white-space:nowrap;">' + timeStr + '</span>';
+      html += '<span id="' + chevronId + '" style="font-size:10px;color:#6b7280;flex-shrink:0;transition:transform 0.2s;display:inline-block;">▶</span>';
+      html += '</div>';
+
+      if (p.relatedTaskId || tagHtml) {
+        html += '<div style="display:flex;align-items:center;gap:6px;padding-left:28px;flex-wrap:wrap;">';
+        if (p.relatedTaskId) {
+          html += '<span style="font-size:10px;padding:1px 5px;border-radius:3px;background:rgba(16,185,129,0.15);color:#34d399;border:1px solid rgba(16,185,129,0.25);white-space:nowrap;">📌 ' + escHtml(p.relatedTaskId) + '</span>';
+        }
+        html += tagHtml;
+        html += '</div>';
+      }
+      html += '</div>';
+
+      html += '<div id="' + expandId + '" style="display:none;width:100%;padding:6px 20px 10px;border-top:1px solid rgba(75,85,99,0.3);">';
+      html += '<div style="margin-bottom:8px;">';
+      html += '<div style="font-size:10px;font-weight:600;color:#9ca3af;margin-bottom:3px;display:flex;align-items:center;gap:4px;">💬 用户原始输入';
+      html += '<button class="prompt-copy-btn" onclick="event.stopPropagation();copyPromptText(\\'' + rawDataId + '\\')" title="复制原始输入" style="margin-left:auto;background:none;border:1px solid rgba(107,114,128,0.4);border-radius:4px;padding:1px 6px;cursor:pointer;color:#9ca3af;font-size:10px;display:flex;align-items:center;gap:3px;transition:all 0.15s;"><span style="font-size:11px;">📋</span> 复制</button>';
+      html += '</div>';
+      html += '<div id="' + rawDataId + '" style="font-size:12px;color:#d1d5db;background:rgba(31,41,55,0.5);padding:8px 10px;border-radius:6px;border:1px solid rgba(75,85,99,0.3);white-space:pre-wrap;word-break:break-word;max-height:200px;overflow-y:auto;line-height:1.5;">' + escHtml(rawContent || '(未记录)') + '</div>';
+      html += '</div>';
+
+      if (aiText) {
+        html += '<div style="margin-bottom:4px;">';
+        html += '<div style="font-size:10px;font-weight:600;color:#9ca3af;margin-bottom:3px;display:flex;align-items:center;gap:4px;">🤖 AI 理解';
+        html += '<button class="prompt-copy-btn" onclick="event.stopPropagation();copyPromptText(\\'' + aiDataId + '\\')" title="复制 AI 理解" style="margin-left:auto;background:none;border:1px solid rgba(107,114,128,0.4);border-radius:4px;padding:1px 6px;cursor:pointer;color:#9ca3af;font-size:10px;display:flex;align-items:center;gap:3px;transition:all 0.15s;"><span style="font-size:11px;">📋</span> 复制</button>';
+        html += '</div>';
+        html += '<div id="' + aiDataId + '" style="font-size:12px;color:#a5b4fc;background:rgba(67,56,202,0.12);padding:8px 10px;border-radius:6px;border:1px solid rgba(99,102,241,0.2);white-space:pre-wrap;word-break:break-word;max-height:200px;overflow-y:auto;line-height:1.5;">' + escHtml(aiText) + '</div>';
+        html += '</div>';
+      }
+
+      html += '</div>';
+      html += '</div>';
+    }
+    html += '</div>';
+  }
+
+  // 列表底部 sentinel — IntersectionObserver 监听到此自动加载下一页
+  if (promptModalHasMore) {
+    html += '<div id="promptModalSentinel" style="text-align:center;padding:16px;color:#6b7280;font-size:11px;">'
+      + '<div class="spinner" style="margin:0 auto 6px;width:18px;height:18px;border:2px solid #374151;border-top-color:#818cf8;border-radius:50%;animation:spin 0.6s linear infinite;"></div>'
+      + '加载更多... (' + prompts.length + ' / ' + promptModalTotal + ')'
+      + '</div>';
+  } else if (prompts.length > 0) {
+    html += '<div style="text-align:center;padding:16px;color:#4b5563;font-size:11px;">已加载全部 ' + promptModalTotal + ' 条 Prompt</div>';
+  }
+
+  document.getElementById('statsModalBody').innerHTML = html;
+}
+
+/** Prompt 详情懒加载缓存：避免同一 prompt 重复 fetch */
+var promptDetailCache = {};
+
+/**
+ * 切换 Prompt 展开/折叠（带 chevron 旋转指示）
+ *
+ * lite 模式下，列表返回的 content / aiInterpretation 是截断版。
+ * 第一次展开时若 data-prompt-needs-detail=1，则按 id 拉一次 /api/prompt/detail
+ * 拿到完整内容后填入 DOM，然后再正常 toggle。
+ */
+function togglePromptExpand(expandId, chevronId, promptId) {
   var el = document.getElementById(expandId);
   if (!el) return;
   var chevron = chevronId ? document.getElementById(chevronId) : null;
+
+  // 找到外层 item 节点，看是不是 lite 截断版需要拉详情
+  var itemEl = el.parentNode;
+  var needsDetail = itemEl && itemEl.getAttribute && itemEl.getAttribute('data-prompt-needs-detail') === '1';
+
+  // 只在首次展开时拉详情，拿到后清掉标记
+  if (needsDetail && promptId && !promptDetailCache[promptId] && el.style.display === 'none') {
+    promptDetailCache[promptId] = 'loading';
+    fetch('/api/prompt/detail?id=' + encodeURIComponent(promptId))
+      .then(function(r) { return r.ok ? r.json() : null; })
+      .then(function(j) {
+        if (!j || !j.prompt) return;
+        promptDetailCache[promptId] = j.prompt;
+        // 用 promptIndex + createdAt 与 render 时的 uniq 对齐
+        var uniq = (j.prompt.promptIndex || 0) + '-' + (j.prompt.createdAt || 0);
+        var rawEl = document.getElementById('prompt-raw-' + uniq);
+        var aiEl = document.getElementById('prompt-ai-' + uniq);
+        if (rawEl && j.prompt.content) rawEl.textContent = j.prompt.content;
+        if (aiEl && j.prompt.aiInterpretation) aiEl.textContent = j.prompt.aiInterpretation;
+        if (itemEl && itemEl.setAttribute) itemEl.setAttribute('data-prompt-needs-detail', '0');
+      })
+      .catch(function() { promptDetailCache[promptId] = null; });
+  }
+
   if (el.style.display === 'none') {
     el.style.display = 'block';
     if (chevron) chevron.style.transform = 'rotate(90deg)';

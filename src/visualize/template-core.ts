@@ -674,8 +674,8 @@ function init3DSettingsUI() {
   // Show/hide 3D section based on engine
   var sec = document.getElementById('settings3dSection');
   if (sec) {
-    var engine = 'vis';
-    try { engine = localStorage.getItem('devplan_renderer_engine') || 'vis'; } catch(e) {}
+    var engine = '3d';
+    try { engine = localStorage.getItem('devplan_renderer_engine') || '3d'; } catch(e) {}
     if (engine === 'graphcanvas') engine = '3d';
     sec.style.display = (engine === '3d') ? 'block' : 'none';
   }
@@ -748,6 +748,71 @@ function log(msg, ok) {
   console.log('[DevPlan]', msg);
   dbg.innerHTML = (ok ? '<span class="ok">✓</span> ' : '<span class="err">✗</span> ') + msg;
 }
+
+// ========== Loading Progress ==========
+//
+// 启动期可视进度条。所有加载阶段统一通过 setLoadingProgress(pct, status) 推进；
+// 完成时调 finishLoadingProgress() 触发 100% + fade out。
+//
+// 设计点：
+//  1. 单调递增：传入 pct 小于当前值时忽略，避免回退闪烁
+//  2. cache HIT 快路径（~13ms 完成所有阶段）由 finishLoadingProgress
+//     直接从当前值平滑过渡到 100%，CSS transition 自然衔接
+//  3. 进度条 width transition 280ms，刚好掩盖几乎所有 sub-100ms 的阶段跳变
+var _LOADING_PCT = 0;
+var _LOADING_FINISHED = false;
+function setLoadingProgress(pct, status) {
+  if (_LOADING_FINISHED) return;
+  if (typeof pct !== 'number' || isNaN(pct)) return;
+  if (pct < _LOADING_PCT) pct = _LOADING_PCT;
+  if (pct > 99) pct = 99; // 100% 走 finishLoadingProgress
+  _LOADING_PCT = pct;
+  var fill = document.getElementById('loadingBarFill');
+  var pctEl = document.getElementById('loadingPercent');
+  var stEl = document.getElementById('loadingStatus');
+  if (fill) { fill.classList.remove('indeterminate'); fill.style.width = pct + '%'; }
+  if (pctEl) pctEl.textContent = Math.round(pct) + '%';
+  if (stEl && typeof status === 'string' && status.length > 0) stEl.textContent = status;
+}
+
+/** 子任务进度不可知时，把进度条切到不确定（indeterminate）滚动条样式 */
+function setLoadingIndeterminate(status) {
+  if (_LOADING_FINISHED) return;
+  var fill = document.getElementById('loadingBarFill');
+  var stEl = document.getElementById('loadingStatus');
+  if (fill) fill.classList.add('indeterminate');
+  if (stEl && typeof status === 'string' && status.length > 0) stEl.textContent = status;
+}
+
+function finishLoadingProgress() {
+  if (_LOADING_FINISHED) return;
+  _LOADING_FINISHED = true;
+  var fill = document.getElementById('loadingBarFill');
+  var pctEl = document.getElementById('loadingPercent');
+  var stEl = document.getElementById('loadingStatus');
+  if (fill) { fill.classList.remove('indeterminate'); fill.style.width = '100%'; }
+  if (pctEl) pctEl.textContent = '100%';
+  if (stEl) stEl.textContent = '完成';
+  // 200ms 让用户看到 100%，再 220ms transition fade out（CSS .loading.hide）
+  setTimeout(function() {
+    var el = document.getElementById('loading');
+    if (!el) return;
+    el.classList.add('hide');
+    setTimeout(function() {
+      if (el && el.parentNode) el.style.display = 'none';
+    }, 240);
+  }, 200);
+}
+
+/** 出错路径：把 loading 区切到错误视图，并停止进度条更新 */
+function showLoadingError(html) {
+  _LOADING_FINISHED = true;
+  var el = document.getElementById('loading');
+  if (el) el.innerHTML = html;
+}
+
+// 初始：进度条立刻有反应（避免一开始的"死寂"）
+setLoadingProgress(5, '初始化界面…');
 
 var ASSET_LOAD_MODE = 'local-first';
 var ASSET_LOAD_TIMEOUT_MS = 3500;
@@ -832,9 +897,15 @@ function loadScriptWithFallbacks(options, callback) {
   tryLoad(0);
 }
 
-// ========== 渲染引擎选择: vis-network (默认) vs 3D Force Graph ==========
-// 优先级: URL 参数 > localStorage (项目设置页) > 默认值 (vis)
-var RENDERER_ENGINE = 'vis'; // 'vis' (默认) | '3d' (3D 球体可视化)
+// ========== 渲染引擎选择: 3D Force Graph (默认) vs vis-network ==========
+// 优先级: URL 参数 > localStorage (项目设置页) > 默认值 (3d)
+//
+// 默认改为 3d 的原因：3D Force Graph 在大数据集（>1000 节点）上的视觉表现与
+// 交互体验显著优于 vis-network；同时 3D 引擎加载失败时会自动回退到 vis-network
+// （见 loadThreeJS / loadForceGraph3D 的 fallback 路径），不会因 WebGL 不可用
+// 而把图弄空。老用户在项目设置里已经显式选过 'vis' 的会保留选择（localStorage
+// 优先级高于默认值）。
+var RENDERER_ENGINE = '3d'; // '3d' (默认, 3D 球体可视化) | 'vis' (vis-network 兼容回退)
 (function() {
   // 1. 先从 localStorage 读取用户在项目设置页的选择
   try {
@@ -933,12 +1004,14 @@ SimpleDataSet.prototype.remove = function(idOrArray) {
 function loadRenderEngine() {
   if (RENDERER_ENGINE === '3d') {
     log('正在加载 3D Force Graph 引擎 (Three.js + d3-force-3d)...', true);
+    setLoadingProgress(10, '加载 3D 渲染引擎…');
     load3DForceGraph();
     return;
   }
 
   // 默认: 使用 vis-network 渲染器（成熟稳定、形状丰富）
   log('使用 vis-network 渲染器 (默认)', true);
+  setLoadingProgress(10, '加载 vis-network 渲染引擎…');
   loadVisNetwork();
 }
 
@@ -973,6 +1046,7 @@ function loadThreeJS() {
   }, function(ok, source) {
     if (ok) {
       log('Three.js 加载成功 ✓ (' + (source && source.source ? source.source : 'existing') + ', r' + (THREE.REVISION || '?') + ')', true);
+      setLoadingProgress(20, 'Three.js 就绪，加载 3D Force Graph…');
       // Step 2: 加载 3d-force-graph
       log('Step 2/2: 加载 3D Force Graph（本地优先）...', true);
       loadForceGraph3D();
@@ -980,6 +1054,7 @@ function loadThreeJS() {
       log('Three.js 资源加载失败，回退到 vis-network', false);
       RENDERER_ENGINE = 'vis';
       syncEngineUI('vis');
+      setLoadingProgress(15, 'Three.js 不可用，切换 vis-network…');
       loadVisNetwork();
     }
   });
@@ -994,12 +1069,14 @@ function loadForceGraph3D() {
   }, function(ok, source) {
     if (ok) {
       log('3D Force Graph 引擎加载成功 ✓ (' + (source && source.source ? source.source : 'existing') + ', Three.js WebGL)', true);
+      setLoadingProgress(30, '渲染引擎就绪，请求图谱数据…');
       USE_3D = true;
       startApp();
     } else {
       log('3D Force Graph 资源加载失败，回退到 vis-network', false);
       RENDERER_ENGINE = 'vis';
       syncEngineUI('vis');
+      setLoadingProgress(20, '3D 引擎不可用，切换 vis-network…');
       loadVisNetwork();
     }
   });
@@ -1017,11 +1094,12 @@ function loadVisNetwork() {
   }, function(ok, source) {
     if (ok) {
       log('vis-network 加载成功 ✓ (' + (source && source.source ? source.source : 'existing') + ')', true);
+      setLoadingProgress(30, '渲染引擎就绪，请求图谱数据…');
       USE_3D = false;
       startApp();
     } else {
       log('vis-network 资源加载失败', false);
-      document.getElementById('loading').innerHTML = '<div style="text-align:center"><div style="font-size:48px;margin-bottom:16px;">⚠️</div><p style="color:#f87171;">渲染引擎加载失败</p><p style="color:#9ca3af;margin-top:8px;font-size:13px;">本地与 CDN 的 vis-network 资源均不可用</p><button class="refresh-btn" onclick="location.reload()" style="margin-top:12px;">刷新页面</button></div>';
+      showLoadingError('<div style="text-align:center"><div style="font-size:48px;margin-bottom:16px;">⚠️</div><p style="color:#f87171;">渲染引擎加载失败</p><p style="color:#9ca3af;margin-top:8px;font-size:13px;">本地与 CDN 的 vis-network 资源均不可用</p><button class="refresh-btn" onclick="location.reload()" style="margin-top:12px;">刷新页面</button></div>');
     }
   });
 }

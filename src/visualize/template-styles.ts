@@ -86,7 +86,18 @@ export function getStyles(): string {
     .graph-container { position: relative; flex: 1; background: #111827; min-height: 0; }
     #graph { width: 100%; height: 100%; }
 
-    .loading { position: absolute; inset: 0; display: flex; align-items: center; justify-content: center; background: rgba(17,24,39,0.9); z-index: 20; }
+    .loading { position: absolute; inset: 0; display: flex; align-items: center; justify-content: center; background: rgba(17,24,39,0.9); z-index: 20; transition: opacity 220ms ease-out; }
+    .loading.hide { opacity: 0; pointer-events: none; }
+    .loading-card { min-width: 320px; max-width: 80%; padding: 22px 26px 20px; background: rgba(31,41,55,0.55); border: 1px solid rgba(99,102,241,0.18); border-radius: 14px; box-shadow: 0 20px 40px rgba(0,0,0,0.35); backdrop-filter: blur(6px); }
+    .loading-title { color: #e5e7eb; font-size: 14px; font-weight: 600; letter-spacing: 0.3px; margin-bottom: 14px; }
+    .loading-bar-track { position: relative; width: 100%; height: 6px; background: rgba(75,85,99,0.6); border-radius: 999px; overflow: hidden; }
+    .loading-bar-fill { position: absolute; inset: 0 auto 0 0; width: 0%; background: linear-gradient(90deg, #6366f1 0%, #818cf8 60%, #c084fc 100%); border-radius: 999px; transition: width 280ms cubic-bezier(.4,.0,.2,1); box-shadow: 0 0 8px rgba(129,140,248,0.55); }
+    .loading-bar-fill.indeterminate { width: 100% !important; background: linear-gradient(90deg, transparent 0%, #818cf8 50%, transparent 100%); background-size: 40% 100%; background-repeat: no-repeat; animation: loading-indeterminate 1.1s ease-in-out infinite; box-shadow: none; }
+    @keyframes loading-indeterminate { 0% { background-position: -40% 0; } 100% { background-position: 140% 0; } }
+    .loading-meta { margin-top: 10px; display: flex; justify-content: space-between; align-items: center; font-size: 11px; color: #9ca3af; font-variant-numeric: tabular-nums; }
+    .loading-status { max-width: 78%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+    .loading-percent { color: #a5b4fc; font-weight: 500; }
+    /* spinner 保留：被列表/弹层等子模块复用（详见 template-pages.ts、template-stats-modal.ts） */
     .spinner { width: 40px; height: 40px; border: 4px solid #4f46e5; border-top-color: transparent; border-radius: 50%; animation: spin 0.8s linear infinite; }
     @keyframes spin { to { transform: rotate(360deg); } }
 

@@ -747,16 +747,20 @@ function renderGraph() {
 
     // Phase-10 T10.4: When physics is disabled (large graph), immediately show result
     if (!physicsConfig.enabled) {
-      document.getElementById('loading').style.display = 'none';
+      if (typeof finishLoadingProgress === 'function') finishLoadingProgress();
+      else document.getElementById('loading').style.display = 'none';
       log('图谱渲染完成 (无物理引擎)! ' + visibleNodes.length + ' 节点, ' + visibleEdges.length + ' 边', true);
       network.fit({ animation: { duration: 500, easingFunction: 'easeInOutQuad' } });
     } else {
-    log('Network 实例已创建, 等待物理稳定化...', true);
+      // 物理稳定化阶段进度未知 — 切到 indeterminate 滚动条
+      if (typeof setLoadingIndeterminate === 'function') setLoadingIndeterminate('物理引擎稳定化…');
+      log('Network 实例已创建, 等待物理稳定化...', true);
     }
 
     network.on('stabilizationIterationsDone', function() {
       network.setOptions({ physics: { enabled: false } });
-      document.getElementById('loading').style.display = 'none';
+      if (typeof finishLoadingProgress === 'function') finishLoadingProgress();
+      else document.getElementById('loading').style.display = 'none';
       log('图谱渲染完成! ' + visibleNodes.length + ' 节点, ' + visibleEdges.length + ' 边', true);
       // 稳定后将父文档-子文档按思维导图方式整齐排列
       arrangeAllDocMindMaps();
@@ -960,8 +964,10 @@ function renderGraph() {
 
     // 超时回退
     setTimeout(function() {
-      if (document.getElementById('loading').style.display !== 'none') {
-        document.getElementById('loading').style.display = 'none';
+      var el = document.getElementById('loading');
+      if (el && el.style.display !== 'none' && !el.classList.contains('hide')) {
+        if (typeof finishLoadingProgress === 'function') finishLoadingProgress();
+        else el.style.display = 'none';
         log('稳定化超时, 强制显示图谱', true);
         if (network) network.fit({ animation: { duration: 500, easingFunction: 'easeInOutQuad' } });
       }
@@ -970,7 +976,9 @@ function renderGraph() {
   } catch (err) {
     log('渲染错误: ' + err.message, false);
     console.error('[DevPlan] renderGraph error:', err);
-    document.getElementById('loading').innerHTML = '<div style="text-align:center"><div style="font-size:48px;margin-bottom:16px;">⚠️</div><p style="color:#f87171;">渲染失败: ' + err.message + '</p><button class="refresh-btn" onclick="loadData()" style="margin-top:12px;">重试</button></div>';
+    var html = '<div style="text-align:center"><div style="font-size:48px;margin-bottom:16px;">⚠️</div><p style="color:#f87171;">渲染失败: ' + err.message + '</p><button class="refresh-btn" onclick="loadData()" style="margin-top:12px;">重试</button></div>';
+    if (typeof showLoadingError === 'function') showLoadingError(html);
+    else document.getElementById('loading').innerHTML = html;
   }
 }
 

@@ -1,0 +1,15 @@
+ts	commit	label	encoding	repeats	nodes	edges	payload_bytes	cold_ms	ready_ms_p50	ready_ms_p95	parse_ms_p50	status	desc
+2026-05-20T01:54:16.193Z	096eb72+dirty	baseline-json	identity	7	31	30	11231	4.6	2.1	2.9	0.1	keep	baseline small (pythontoolbox 31 nodes) too tiny to show E1/E2 effects
+2026-05-20T01:55:27.257Z	096eb72+dirty	baseline-json-big	identity	7	1212	1213	461652	327.5	307.3	578.4	2	keep	baseline medium (aifastdb-devplan 1212 nodes)
+2026-05-20T01:57:33.225Z	096eb72+dirty	E2-identity-resmoke	identity	5	1212	1213	461652	318.4	318.5	593.2	2	keep	control: writeJsonMaybeCompressed helper does not regress identity
+2026-05-20T01:57:43.579Z	096eb72+dirty	E2-gzip	gzip	5	1212	1213	461652	315.5	347.1	590.5	2.2	discard	pre-fix bench tool payload_bytes is decoded size; see next row
+2026-05-20T01:58:37.131Z	096eb72+dirty	E2-gzip	gzip	5	1212	1213	114357	336.8	537.3	564.3	1.7	discard	medium dataset E2 gzip wire 4.0x smaller but ready_ms p50 worse +217ms
+2026-05-20T01:59:41.839Z	096eb72+dirty	E1-binary	identity	5	1979	2455	217555	165.7	166.4	415.6	0.2	defer	medium E1 binary returns DIFFERENT entity set than JSON; semantic gap
+2026-05-20T02:00:39.554Z	096eb72+dirty	baseline-json-big-warm	identity	7	1212	1213	461652	594.8	320.1	461.3	2.4	keep	medium baseline warm-primed 320ms confirms server-side bottleneck
+2026-05-20T02:00:51.244Z	096eb72+dirty	E2-gzip-warm	gzip	7	1212	1213	114375	337.4	392.4	538.2	1.8	discard	medium E2 gzip warm ready_ms 320 to 392ms gzip net negative on localhost
+2026-05-20T02:11:29.382Z	096eb72+dirty	baseline-aidb	identity	5	2643	2651	1020841	16835.3	26757.3	35768.4	5.6	keep	BASELINE BIG ai_db 2643 nodes 1MB ready_ms 17-36s anchor
+2026-05-20T02:13:35.569Z	096eb72+dirty	E2-gzip-aidb	gzip	3	2643	2651	248638	16898.1	26531.7	36652.4	5.2	discard	ai_db E2 gzip wire 1020->249KB (4.1x) ready_ms unchanged 27s server-side dominates
+2026-05-20T02:15:13.701Z	096eb72+dirty	E1-binary-aidb	identity	3	6961	8751	706679	33268.8	16908	24641.3	0.4	defer	ai_db E1 binary p50 17s vs baseline 27s (-37%) BUT returns 6961 entities vs 2643 semantic gap
+2026-05-20T02:24:30.054Z	096eb72+dirty	E3E7-aidb	identity	5	2643	2651	1020841	16721.3	18670.4	37496.4	5.8	pending	E3+E7: store TTL 60s + WAL mtime invalidation + graph payload cache
+2026-05-20T03:03:12.934Z	096eb72+dirty	E3-cache-postfix	identity	5	2643	2651	1020841	3432.9	1750	4986.7	4.5	discard	after ensureProjectEntity fix but progress not cached: /api/progress still 1.7s dominates
+2026-05-20T03:07:12.580Z	096eb72+dirty	E3-progress-cache	identity	5	2643	2651	1020841	1667.4	12.9	17.8	4.3	keep	FINAL: ensureProjectEntity idempotent + graph payload cache + progress cache; warm 12.9ms vs baseline 18705ms (-99.93%); cold 1667ms vs 28864ms (-94%)

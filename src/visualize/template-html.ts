@@ -120,7 +120,16 @@ export function getHTML(projectName: string): string {
 
       <!-- Graph -->
       <div class="graph-container">
-        <div class="loading" id="loading"><div><div class="spinner"></div><p style="margin-top:12px;color:#9ca3af;">加载图谱数据...</p></div></div>
+        <div class="loading" id="loading">
+          <div class="loading-card">
+            <div class="loading-title">加载图谱数据</div>
+            <div class="loading-bar-track"><div class="loading-bar-fill" id="loadingBarFill"></div></div>
+            <div class="loading-meta">
+              <span class="loading-status" id="loadingStatus">准备中…</span>
+              <span class="loading-percent" id="loadingPercent">0%</span>
+            </div>
+          </div>
+        </div>
         <div id="graph"></div>
         <div class="panel" id="panel">
           <div class="panel-resize-handle" id="panelResizeHandle"></div>
@@ -143,7 +152,7 @@ export function getHTML(projectName: string): string {
       <div class="legend">
         <!-- 加载引擎标识 -->
         <div class="legend-engine-badge" id="engineBadge" onclick="navTo('settings')" title="点击前往项目设置切换加载引擎">
-          ⚡ 加载引擎: <span class="engine-name" id="engineNameLabel">vis-network</span>
+          ⚡ 加载引擎: <span class="engine-name" id="engineNameLabel">3D Force Graph</span>
         </div>
         <div class="legend-divider"></div>
         <!-- 刷新按钮 -->
@@ -567,18 +576,18 @@ export function getHTML(projectName: string): string {
           <div class="settings-section">
             <div class="settings-section-title">🖥️ 加载引擎</div>
             <div class="settings-option-group" id="rendererOptions">
-              <label class="settings-radio-card selected" data-value="vis" onclick="selectRenderer('vis')">
-                <input type="radio" name="renderer" value="vis" checked>
+              <label class="settings-radio-card selected" data-value="3d" onclick="selectRenderer('3d')">
+                <input type="radio" name="renderer" value="3d" checked>
                 <div class="radio-content">
-                  <div class="radio-label">vis-network <span class="default-badge">默认</span></div>
-                  <div class="radio-desc">基于 vis.js 的成熟图可视化库。使用 Canvas 2D 渲染，内置物理引擎力导向布局，支持节点拖拽、缩放、选中高亮等完整交互。适合中小规模图谱（< 2000 节点），生态成熟、兼容性好。</div>
+                  <div class="radio-label">3D Force Graph <span class="default-badge">默认</span> <span style="font-size:10px;padding:1px 6px;border-radius:4px;background:linear-gradient(135deg,#7c3aed,#3b82f6);color:#e0e7ff;font-weight:500;">Three.js</span></div>
+                  <div class="radio-desc">基于 Three.js + d3-force-3d 的 3D 球体可视化引擎。节点在三维空间中浮动、旋转、缩放，整体呈球形分布。支持 WebGL 硬件加速渲染、轨道控制器旋转视角、节点拖拽固定、流动粒子特效。适合沉浸式图谱探索。WebGL 不可用时自动回退到 vis-network。</div>
                 </div>
               </label>
-              <label class="settings-radio-card" data-value="3d" onclick="selectRenderer('3d')">
-                <input type="radio" name="renderer" value="3d">
+              <label class="settings-radio-card" data-value="vis" onclick="selectRenderer('vis')">
+                <input type="radio" name="renderer" value="vis">
                 <div class="radio-content">
-                  <div class="radio-label">3D Force Graph <span style="font-size:10px;padding:1px 6px;border-radius:4px;background:linear-gradient(135deg,#7c3aed,#3b82f6);color:#e0e7ff;font-weight:500;">Three.js</span></div>
-                  <div class="radio-desc">基于 Three.js + d3-force-3d 的 3D 球体可视化引擎。节点在三维空间中浮动、旋转、缩放，整体呈球形分布。支持 WebGL 硬件加速渲染、轨道控制器旋转视角、节点拖拽固定、流动粒子特效。适合沉浸式图谱探索。</div>
+                  <div class="radio-label">vis-network</div>
+                  <div class="radio-desc">基于 vis.js 的成熟图可视化库。使用 Canvas 2D 渲染，内置物理引擎力导向布局，支持节点拖拽、缩放、选中高亮等完整交互。适合中小规模图谱（&lt; 2000 节点），生态成熟、兼容性好。</div>
                 </div>
               </label>
             </div>

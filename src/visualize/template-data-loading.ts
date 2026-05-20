@@ -14,6 +14,18 @@ var CHUNK_THRESHOLD = 3000;  // use chunked loading if total > this
 function loadData() {
   document.getElementById('loading').style.display = 'flex';
   log('正在获取图谱数据...', true);
+  if (typeof setLoadingProgress === 'function') setLoadingProgress(35, '请求图谱与进度数据…');
+  // 35% 之后到拿到 response 头之前可能很长（首次冷启动 ~1-30s 取决于数据集与 WAL 体积），
+  // 客户端拿不到 server 内部进度 → 切到不确定动画，给"还在工作"的视觉反馈
+  if (typeof setLoadingIndeterminate === 'function') {
+    setTimeout(function() {
+      // setLoadingProgress 之后只有 fetch 头返回才会推进到 60%，
+      // 这里延迟 300ms 再切 indeterminate，避免快路径上闪动画
+      if (typeof _LOADING_PCT !== 'undefined' && _LOADING_PCT < 60) {
+        setLoadingIndeterminate('等待服务端响应…');
+      }
+    }, 300);
+  }
   loadDataFull();
 }
 
@@ -95,6 +107,7 @@ function incremental3DRemoveNodes(removeNodeIds) {
  */
 function loadDataTiered() {
   log('分层加载: 首屏仅加载核心节点 (project/module/main-task)...', true);
+  if (typeof setLoadingProgress === 'function') setLoadingProgress(40, '分层请求首屏核心节点…');
   tieredLoadState = { l0l1Loaded: false, l2Loaded: false, l3Loaded: false, memoryLoaded: false, expandedPhases: {}, totalNodes: 0 };
   networkReusable = false;
 
@@ -103,10 +116,18 @@ function loadDataTiered() {
     '&entityTypes=' + TIER_L0L1_TYPES.join(',') +
     '&includeDocuments=false&includeModules=true';
 
+  function fetchWithProgress(url) {
+    return fetch(url).then(function(r) {
+      if (typeof setLoadingProgress === 'function') setLoadingProgress(60, '接收首屏数据…');
+      return r.json();
+    });
+  }
+
   Promise.all([
-    fetch(pagedUrl).then(function(r) { return r.json(); }),
+    fetchWithProgress(pagedUrl),
     fetch('/api/progress').then(function(r) { return r.json(); })
   ]).then(function(results) {
+    if (typeof setLoadingProgress === 'function') setLoadingProgress(80, '解析数据…');
     var graphRes = results[0];
     var progressRes = results[1];
     var normalized = normalizeGraphPayload(graphRes, 'tiered-load');
@@ -116,6 +137,7 @@ function loadDataTiered() {
     tieredLoadState.totalNodes = graphRes.total || allNodes.length;
 
     log('首屏数据: ' + allNodes.length + ' 核心节点, ' + allEdges.length + ' 边 (总计 ' + tieredLoadState.totalNodes + ')', true);
+    if (typeof setLoadingProgress === 'function') setLoadingProgress(92, '构建首屏 ' + allNodes.length + ' / ' + tieredLoadState.totalNodes + ' 节点…');
     renderStats(progressRes, graphRes);
     renderGraph();
     updateTieredIndicator();
@@ -136,10 +158,20 @@ function loadDataFull() {
   var graphApiUrl = '/api/graph?includeNodeDegree=' + (INCLUDE_NODE_DEGREE ? 'true' : 'false') +
     '&enableBackendDegreeFallback=' + (ENABLE_BACKEND_DEGREE_FALLBACK ? 'true' : 'false') +
     '&includeMemories=false';
+
+  // 进度条阶段：fetch 头返回 → 60%，body 完整下载完 → 80%
+  function fetchWithProgress(url) {
+    return fetch(url).then(function(r) {
+      if (typeof setLoadingProgress === 'function') setLoadingProgress(60, '接收图谱数据…');
+      return r.json();
+    });
+  }
+
   Promise.all([
-    fetch(graphApiUrl).then(function(r) { return r.json(); }),
+    fetchWithProgress(graphApiUrl),
     fetch('/api/progress').then(function(r) { return r.json(); })
   ]).then(function(results) {
+    if (typeof setLoadingProgress === 'function') setLoadingProgress(80, '解析数据…');
     var graphRes = results[0];
     var progressRes = results[1];
     var normalized = normalizeGraphPayload(graphRes, 'full-load');
@@ -157,6 +189,7 @@ function loadDataFull() {
     clearUnloadedTypeLegends();
     syncLegendToggleState();
     log('全量数据: ' + allNodes.length + ' 节点, ' + allEdges.length + ' 边', true);
+    if (typeof setLoadingProgress === 'function') setLoadingProgress(92, '构建图谱 ' + allNodes.length + ' 节点 / ' + allEdges.length + ' 边…');
     renderStats(progressRes, graphRes);
     renderGraph();
     updateTieredIndicator();
@@ -164,7 +197,9 @@ function loadDataFull() {
     if (typeof loadDocsData === 'function') setTimeout(function() { loadDocsData(); }, 100);
   }).catch(function(err) {
     log('数据获取失败: ' + err.message, false);
-    document.getElementById('loading').innerHTML = '<div style="text-align:center"><div style="font-size:48px;margin-bottom:16px;">⚠️</div><p style="color:#f87171;">数据加载失败: ' + err.message + '</p><button class="refresh-btn" onclick="loadData()" style="margin-top:12px;">重试</button></div>';
+    var html = '<div style="text-align:center"><div style="font-size:48px;margin-bottom:16px;">⚠️</div><p style="color:#f87171;">数据加载失败: ' + err.message + '</p><button class="refresh-btn" onclick="loadData()" style="margin-top:12px;">重试</button></div>';
+    if (typeof showLoadingError === 'function') showLoadingError(html);
+    else document.getElementById('loading').innerHTML = html;
   });
 }
 
@@ -637,8 +672,9 @@ function renderGraphChunked() {
 
     network = new DevPlanGraph(container, { nodes: visibleNodes, edges: visibleEdges }, networkOptions);
 
-    // Show loading indicator with progress
-    document.getElementById('loading').style.display = 'none';
+    // 首批渲染完成 → 进度条收尾（后台分块加载不再阻塞首屏可视）
+    if (typeof finishLoadingProgress === 'function') finishLoadingProgress();
+    else document.getElementById('loading').style.display = 'none';
     log('首批数据已渲染，后台加载剩余 ' + (sortedNodes.length - CHUNK_SIZE) + ' 节点...', true);
 
     // ── Progressive background loading ──

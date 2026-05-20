@@ -1451,8 +1451,9 @@ function render3DGraph(container, visibleNodes, visibleEdges) {
 
   networkReusable = true; // Phase-75: 3D 模式支持增量更新 (via _addData)
 
-  // 隐藏加载指示器
-  document.getElementById('loading').style.display = 'none';
+  // 隐藏加载指示器（带 100% + fade out 收尾）
+  if (typeof finishLoadingProgress === 'function') finishLoadingProgress();
+  else document.getElementById('loading').style.display = 'none';
   log('3D 图谱渲染完成! ' + nodes3d.length + ' 节点, ' + links3d.length + ' 边 (Three.js WebGL)', true);
 
   // 自动聚焦视图

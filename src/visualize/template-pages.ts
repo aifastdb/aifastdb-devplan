@@ -3757,9 +3757,17 @@ function phaseItem(task, status, icon) {
 }
 
 // ========== Memory Browser ==========
+// 方案 A 分页改造：首屏只拉 MEMORY_PAGE_SIZE 条，滚动到底部用 IntersectionObserver 自动加载下一页。
+// memoryData 始终保存"当前 filter 已加载的数据"，filterType 切换时重置 + 重新从服务端拉。
+var MEMORY_PAGE_SIZE = 100;
 var memoryLoaded = false;
 var memoryData = [];
 var memoryFilterType = 'all';
+var memoryHasMore = false;
+var memoryTotal = 0;
+var memoryLoadingMore = false;
+var memoryRequestSeq = 0; // 标记当前最新请求，过滤已过期的回调
+var memoryObserver = null;
 
 var MEMORY_TYPE_ICONS = {
   decision: '🏗️',
@@ -3780,31 +3788,80 @@ var MEMORY_TYPE_LABELS = {
 };
 
 function loadMemoryPage() {
+  // 重置状态后拉取第一页
+  memoryData = [];
+  memoryLoaded = false;
+  memoryHasMore = false;
+  memoryTotal = 0;
+  memoryLoadingMore = false;
+  memoryRequestSeq += 1;
+  if (memoryObserver) { try { memoryObserver.disconnect(); } catch(e) {} memoryObserver = null; }
   var list = document.getElementById('memoryList');
-  if (memoryLoaded && memoryData.length > 0) {
-    renderMemoryList(memoryData);
-    return;
-  }
   if (list) list.innerHTML = '<div style="text-align:center;padding:60px;color:#6b7280;font-size:12px;"><div class="spinner" style="margin:0 auto 12px;width:24px;height:24px;border-width:3px;"></div>加载记忆数据...</div>';
+  fetchMemoryPage(true);
+}
 
-  fetch('/api/memories').then(function(r) { return r.json(); }).then(function(data) {
-    memoryData = data.memories || [];
+function fetchMemoryPage(reset) {
+  if (memoryLoadingMore) return;
+  memoryLoadingMore = true;
+  var seq = ++memoryRequestSeq;
+  var offset = reset ? 0 : memoryData.length;
+  var typeParam = memoryFilterType !== 'all' ? '&memoryType=' + encodeURIComponent(memoryFilterType) : '';
+  var url = '/api/memories?lite=1&offset=' + offset + '&limit=' + MEMORY_PAGE_SIZE + typeParam;
+
+  fetch(url).then(function(r) { return r.json(); }).then(function(data) {
+    if (seq !== memoryRequestSeq) return; // 已被新的请求取代
+    var newMemories = data.memories || [];
+    if (reset) {
+      memoryData = newMemories;
+    } else {
+      memoryData = memoryData.concat(newMemories);
+    }
     memoryLoaded = true;
+    memoryHasMore = !!data.hasMore;
+    memoryTotal = typeof data.total === 'number' ? data.total : memoryData.length;
+    memoryLoadingMore = false;
     renderMemoryList(memoryData);
+    setupMemoryInfiniteScroll();
   }).catch(function(err) {
-    if (list) list.innerHTML = '<div style="text-align:center;padding:60px;color:#f87171;font-size:12px;">加载失败: ' + (err.message || err) + '<br><span style="cursor:pointer;color:#818cf8;text-decoration:underline;" onclick="memoryLoaded=false;loadMemoryPage();">重试</span></div>';
+    if (seq !== memoryRequestSeq) return;
+    memoryLoadingMore = false;
+    if (reset) {
+      var list = document.getElementById('memoryList');
+      if (list) list.innerHTML = '<div style="text-align:center;padding:60px;color:#f87171;font-size:12px;">加载失败: ' + (err.message || err) + '<br><span style="cursor:pointer;color:#818cf8;text-decoration:underline;" onclick="loadMemoryPage();">重试</span></div>';
+    }
   });
 }
 
+function setupMemoryInfiniteScroll() {
+  if (memoryObserver) { try { memoryObserver.disconnect(); } catch(e) {} memoryObserver = null; }
+  if (!memoryHasMore) return;
+  var sentinel = document.getElementById('memorySentinel');
+  if (!sentinel || typeof IntersectionObserver === 'undefined') return;
+  memoryObserver = new IntersectionObserver(function(entries) {
+    for (var i = 0; i < entries.length; i++) {
+      if (entries[i].isIntersecting && memoryHasMore && !memoryLoadingMore) {
+        fetchMemoryPage(false);
+        return;
+      }
+    }
+  }, { rootMargin: '200px 0px' });
+  memoryObserver.observe(sentinel);
+}
+
 function filterMemories(type) {
-  memoryFilterType = type;
-  // update button active states
+  if (memoryFilterType === type && memoryLoaded) {
+    // 同 filter 重复点击 — 仅刷新按钮高亮即可（避免无谓重新拉取）
+  } else {
+    memoryFilterType = type;
+  }
   var btns = document.querySelectorAll('.memory-filter-btn');
   for (var i = 0; i < btns.length; i++) {
     btns[i].classList.remove('active');
     if (btns[i].getAttribute('data-type') === type) btns[i].classList.add('active');
   }
-  renderMemoryList(memoryData);
+  // 切换 filter → 重置 + 重新从服务端按类型拉第一页
+  loadMemoryPage();
 }
 
 function renderMemoryList(data) {
@@ -3812,27 +3869,26 @@ function renderMemoryList(data) {
   var countEl = document.getElementById('memoryCount');
   if (!list) return;
 
-  // filter
+  // 数据已经在服务端按 memoryFilterType 过滤，client 不再二次过滤
   var filtered = data;
-  if (memoryFilterType !== 'all') {
-    filtered = [];
-    for (var i = 0; i < data.length; i++) {
-      if (data[i].memoryType === memoryFilterType) filtered.push(data[i]);
-    }
-  }
 
   if (countEl) {
-    countEl.textContent = filtered.length + ' / ' + data.length + ' 条记忆';
+    countEl.textContent = filtered.length + ' / ' + memoryTotal + ' 条记忆';
   }
 
   if (filtered.length === 0) {
     list.innerHTML = '<div class="memory-empty"><div class="memory-empty-icon">🧠</div>' +
-      (data.length === 0 ? '还没有保存任何记忆<br><span style="color:#4b5563;font-size:11px;margin-top:8px;display:block;">Cursor 在开发过程中会自动积累决策、Bug 修复、代码模式等知识</span>' : '没有 "' + (MEMORY_TYPE_LABELS[memoryFilterType] || memoryFilterType) + '" 类型的记忆') +
-      '</div>';
+      (memoryTotal === 0
+        ? (memoryFilterType === 'all'
+            ? '还没有保存任何记忆<br><span style="color:#4b5563;font-size:11px;margin-top:8px;display:block;">Cursor 在开发过程中会自动积累决策、Bug 修复、代码模式等知识</span>'
+            : '没有 "' + (MEMORY_TYPE_LABELS[memoryFilterType] || memoryFilterType) + '" 类型的记忆')
+        : '加载中...')
+      + '</div>';
     return;
   }
 
-  // sort by importance desc, then by createdAt desc
+  // sort by importance desc, then by createdAt desc — 仅排序"当前已加载"的部分，
+  // 服务端按 updatedAt 分批返回，append 后此处保证视觉一致
   filtered.sort(function(a, b) {
     var ia = (a.importance || 0.5);
     var ib = (b.importance || 0.5);
@@ -3862,8 +3918,10 @@ function renderMemoryList(data) {
     h += '</span>';
     h += '</div>';
 
-    // content
-    h += '<div class="memory-card-content">' + escHtml(mem.content || '') + '</div>';
+    // content — Phase-58 之后记忆分层存储：content 存 L2 摘要，contentL3 存完整内容
+    // 部分保存路径下 content 可能为空，回退到 contentL3 保证卡片不空白
+    var displayContent = mem.content || mem.contentL3 || '';
+    h += '<div class="memory-card-content">' + escHtml(displayContent) + '</div>';
 
     // footer: tags + meta + Phase-78 verify button
     h += '<div class="memory-card-footer">';
@@ -3887,6 +3945,16 @@ function renderMemoryList(data) {
     h += '<div id="memVerify_' + mem.id + '"></div>';
 
     h += '</div>';
+  }
+
+  // 方案 A 分页：列表底部 sentinel — 滚动到此自动加载下一页
+  if (memoryHasMore) {
+    h += '<div id="memorySentinel" style="text-align:center;padding:16px;color:#6b7280;font-size:11px;">'
+      + '<div class="spinner" style="margin:0 auto 6px;width:18px;height:18px;border-width:2px;"></div>'
+      + '加载更多... (' + filtered.length + ' / ' + memoryTotal + ')'
+      + '</div>';
+  } else if (filtered.length > 0 && memoryTotal > 0) {
+    h += '<div style="text-align:center;padding:16px;color:#4b5563;font-size:11px;">已加载全部 ' + memoryTotal + ' 条记忆</div>';
   }
 
   list.innerHTML = h;

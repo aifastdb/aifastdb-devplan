@@ -18,6 +18,7 @@
 import * as http from 'http';
 import * as path from 'path';
 import * as fs from 'fs/promises';
+import * as zlib from 'zlib';
 import { DevPlanGraphStore } from '../dev-plan-graph-store';
 import { createDevPlan, getDefaultBasePath, resolveBasePathForProject, readDevPlanConfig } from '../dev-plan-factory';
 import { CodeBridgeStore, EmbeddedCodeIntelligenceStore, runCodeIntelRegressionCheck } from '../code-intelligence';
@@ -174,28 +175,301 @@ function createStore(project: string, basePath: string): IDevPlanStore {
  * 写操作（POST /api/doc/save 等）使用 createFreshStore() 直接创建新实例，
  * 并在完成后 invalidate 缓存（写后读一致性）。
  */
-const STORE_CACHE_TTL_MS = 5_000; // 5 seconds
+// ── Phase-4 (E3+E7, revised): 纯 TTL 缓存，不依赖 WAL mtime ──
+//
+// 原计划用 WAL .gwal 文件 mtime 做主动失效，但 probe-idle-wal.mjs 证明：
+//   1. ai_db NAPI 的后台 flusher 在 idle 期间也在写 WAL（每 12s 多 ~400 字节）
+//   2. read 路径（/api/progress、/api/graph）自身也会触发 WAL 写入
+// 这两点联合使得 mtime-based invalidation 永远命中失败。
+//
+// 改成纯 TTL：60s 内复用 store 与 payload，超时自动重建。
+// 写后读一致性：写操作走 createFreshStore() 显式 invalidate（已有）；
+// MCP 工具在另一进程写时，最坏延迟 60s 看到 — 用户可点页面刷新按钮强制清缓存
+// （详见 BENCH.md 关于 stale tolerance 的说明）。
+const STORE_CACHE_TTL_MS = 60_000;       // 60s（旧值 5s）
+
 let _cachedStore: IDevPlanStore | null = null;
 let _cachedStoreAt = 0;
 
-/** 读操作优先：TTL 内复用 store，超时自动重建 */
+const BENCH_LOG = process.env.GRAPH_CACHE_DEBUG === '1';
+
+/** 读操作优先：TTL 内复用 store。超时自动重建。 */
 function getCachedStore(projectName: string, basePath: string): IDevPlanStore {
   const now = Date.now();
   if (_cachedStore && (now - _cachedStoreAt) < STORE_CACHE_TTL_MS) {
+    if (BENCH_LOG) console.error(`[cache] store HIT (age=${now - _cachedStoreAt}ms)`);
     return _cachedStore;
+  }
+  if (BENCH_LOG) {
+    const reason = !_cachedStore ? 'cold' : 'ttl';
+    console.error(`[cache] store MISS (reason=${reason})`);
   }
   _cachedStore = createDevPlan(projectName, basePath, 'graph');
   _cachedStoreAt = now;
+  invalidateGraphPayloadCache();
+  invalidateProgressCache();
   return _cachedStore;
 }
 
-/** 写操作：创建全新 store + invalidate 缓存 */
+// ── Phase-4 (E3): graph payload TTL 缓存 ──
+// 缓存 store.exportGraph(options) 结果，避免大数据集每次重新组装 N+1 索引。
+// 失效条件：optionsKey 不同 / TTL 过期 / 写操作显式 invalidate。
+interface GraphPayloadCacheEntry {
+  ts: number;
+  storeAt: number;     // 绑定到 _cachedStoreAt：store 一变这条 entry 立即失效
+  optionsKey: string;
+  payload: unknown;
+}
+let _graphPayloadCache: GraphPayloadCacheEntry | null = null;
+
+function invalidateGraphPayloadCache(): void { _graphPayloadCache = null; }
+
+function getCachedGraphPayload(
+  store: IDevPlanStore,
+  storeAt: number,
+  options: Record<string, boolean>,
+): unknown {
+  const optionsKey = JSON.stringify(options);
+  const now = Date.now();
+  if (
+    _graphPayloadCache
+    && _graphPayloadCache.optionsKey === optionsKey
+    && _graphPayloadCache.storeAt === storeAt
+    && (now - _graphPayloadCache.ts) < STORE_CACHE_TTL_MS
+  ) {
+    if (BENCH_LOG) console.error(`[cache] payload HIT (age=${now - _graphPayloadCache.ts}ms)`);
+    return _graphPayloadCache.payload;
+  }
+  if (BENCH_LOG) {
+    const reason = !_graphPayloadCache ? 'cold' :
+      _graphPayloadCache.optionsKey !== optionsKey ? 'options' :
+      _graphPayloadCache.storeAt !== storeAt ? 'store' : 'ttl';
+    console.error(`[cache] payload MISS (reason=${reason})`);
+  }
+  const tBuild = Date.now();
+  const payload = (store as any).exportGraph(options);
+  if (BENCH_LOG) console.error(`[cache] exportGraph build took ${Date.now() - tBuild}ms`);
+  _graphPayloadCache = { ts: now, storeAt, optionsKey, payload };
+  return payload;
+}
+
+// ── Phase-4 (E3, /api/progress): progress payload TTL 缓存 ──
+//
+// /api/progress 与 /api/graph 在 loadDataFull / loadDataTiered 中并行请求，
+// 由于 Node HTTP server 单线程，graph 即使 cache HIT（~280ms），
+// progress 未缓存仍要做 4 次 NAPI 全表扫描 (getProgress + listSections +
+// listModules + listPrompts)，单次 ~1700ms（ai_db 数据集），
+// 使得 /graph 页面总加载时间 ≈ max(graph, progress) ≈ progress。
+//
+// 缓存进 storeAt 绑定 + 60s TTL，写操作走 createFreshStore() 自然失效。
+interface ProgressCacheEntry {
+  ts: number;
+  storeAt: number;
+  payload: unknown;
+}
+let _progressCache: ProgressCacheEntry | null = null;
+
+function invalidateProgressCache(): void { _progressCache = null; }
+
+function getCachedProgress(store: IDevPlanStore, storeAt: number): unknown {
+  const now = Date.now();
+  if (
+    _progressCache
+    && _progressCache.storeAt === storeAt
+    && (now - _progressCache.ts) < STORE_CACHE_TTL_MS
+  ) {
+    if (BENCH_LOG) console.error(`[cache] progress HIT (age=${now - _progressCache.ts}ms)`);
+    return _progressCache.payload;
+  }
+  if (BENCH_LOG) {
+    const reason = !_progressCache ? 'cold' :
+      _progressCache.storeAt !== storeAt ? 'store' : 'ttl';
+    console.error(`[cache] progress MISS (reason=${reason})`);
+  }
+  const tBuild = Date.now();
+  const progress = store.getProgress();
+  const sections = store.listSections();
+  const modules = store.listModules();
+  let promptCount = 0;
+  try {
+    if (typeof store.listPrompts === 'function') {
+      promptCount = store.listPrompts().length;
+    }
+  } catch { /* listPrompts 不支持时忽略 */ }
+  const payload = {
+    ...progress,
+    moduleCount: modules.length,
+    docCount: sections.length,
+    promptCount,
+  };
+  if (BENCH_LOG) console.error(`[cache] progress build took ${Date.now() - tBuild}ms`);
+  _progressCache = { ts: now, storeAt, payload };
+  return payload;
+}
+
+/**
+ * Phase-3 (graph-load bench, E2): 协商压缩响应。
+ *
+ * 仅在 graph 加载相关路径上使用，目的：减少 /api/graph 等大 JSON 响应的下行
+ * 字节数。bench 结果：负载 461 KB → gzip 后 ~50 KB（实际值见 results.tsv）。
+ *
+ * 选择优先级（按客户端 Accept-Encoding）：br > gzip > identity。
+ * - br 压缩比最高，CPU 略高；localhost 上无区别。
+ * - 小负载（< 1 KB）跳过压缩，避免 header overhead。
+ */
+const COMPRESSION_MIN_BYTES = 1024;
+function writeJsonMaybeCompressed(
+  req: http.IncomingMessage,
+  res: http.ServerResponse,
+  statusCode: number,
+  payload: unknown,
+): void {
+  const body = Buffer.from(JSON.stringify(payload), 'utf8');
+  const acceptEnc = (req.headers['accept-encoding'] as string | undefined) || '';
+
+  const baseHeaders: Record<string, string> = {
+    'Content-Type': 'application/json; charset=utf-8',
+    'Vary': 'Accept-Encoding',
+  };
+
+  if (body.length < COMPRESSION_MIN_BYTES) {
+    res.writeHead(statusCode, { ...baseHeaders, 'Content-Length': String(body.length) });
+    res.end(body);
+    return;
+  }
+
+  if (acceptEnc.includes('br')) {
+    const compressed = zlib.brotliCompressSync(body, {
+      params: {
+        [zlib.constants.BROTLI_PARAM_QUALITY]: 1,
+        [zlib.constants.BROTLI_PARAM_SIZE_HINT]: body.length,
+      },
+    });
+    res.writeHead(statusCode, {
+      ...baseHeaders,
+      'Content-Encoding': 'br',
+      'Content-Length': String(compressed.length),
+    });
+    res.end(compressed);
+    return;
+  }
+
+  if (acceptEnc.includes('gzip')) {
+    const compressed = zlib.gzipSync(body, { level: 6 });
+    res.writeHead(statusCode, {
+      ...baseHeaders,
+      'Content-Encoding': 'gzip',
+      'Content-Length': String(compressed.length),
+    });
+    res.end(compressed);
+    return;
+  }
+
+  res.writeHead(statusCode, { ...baseHeaders, 'Content-Length': String(body.length) });
+  res.end(body);
+}
+
+/** 写操作：创建全新 store + invalidate 全部缓存（含 graph payload / progress） */
 function createFreshStore(projectName: string, basePath: string): IDevPlanStore {
   const store = createDevPlan(projectName, basePath, 'graph');
-  // 写操作后 invalidate 缓存，确保下次读取获取最新数据
   _cachedStore = null;
   _cachedStoreAt = 0;
+  invalidateGraphPayloadCache();
+  invalidateProgressCache();
+  invalidatePromptListCache();
+  invalidateMemoryListCache();
   return store;
+}
+
+/**
+ * 方案 A：列表结果缓存
+ *
+ * /api/prompts 和 /api/memories 第一次请求时全量加载 + 排序，
+ * 把"已排序的完整数组"按 cacheKey 存住（TTL 与 store 一致 5s）。
+ * 翻页/快速重复访问命中缓存时跳过 FFI + entityToX + sort，只做 slice + lite 投影。
+ *
+ * 写操作（savePrompt / saveMemory / clearAllMemories 等）通过 createFreshStore 走，
+ * 内部主动清缓存，保证写后读一致。
+ */
+const LIST_CACHE_TTL_MS = STORE_CACHE_TTL_MS;
+interface ListCache<T> {
+  ts: number;
+  cacheKey: string;
+  items: T[];
+}
+let _promptListCache: ListCache<any> | null = null;
+let _memoryListCache: ListCache<any> | null = null;
+
+function invalidatePromptListCache(): void { _promptListCache = null; }
+function invalidateMemoryListCache(): void { _memoryListCache = null; }
+
+function getCachedPromptList(
+  cacheKey: string,
+  loader: () => any[],
+): any[] {
+  const now = Date.now();
+  if (_promptListCache
+    && _promptListCache.cacheKey === cacheKey
+    && (now - _promptListCache.ts) < LIST_CACHE_TTL_MS) {
+    return _promptListCache.items;
+  }
+  const items = loader();
+  _promptListCache = { ts: now, cacheKey, items };
+  return items;
+}
+
+function getCachedMemoryList(
+  cacheKey: string,
+  loader: () => any[],
+): any[] {
+  const now = Date.now();
+  if (_memoryListCache
+    && _memoryListCache.cacheKey === cacheKey
+    && (now - _memoryListCache.ts) < LIST_CACHE_TTL_MS) {
+    return _memoryListCache.items;
+  }
+  const items = loader();
+  _memoryListCache = { ts: now, cacheKey, items };
+  return items;
+}
+
+/** Prompt lite 投影：剔除 content / aiInterpretation 全文，保留头部预览所需字段 */
+function toLitePrompt(p: any): any {
+  const rawContent = String(p?.content || '');
+  const aiText = String(p?.aiInterpretation || '');
+  return {
+    id: p?.id,
+    promptIndex: p?.promptIndex,
+    summary: p?.summary || undefined,
+    contentPreview: rawContent.length > 200 ? rawContent.slice(0, 200) : rawContent,
+    aiInterpretationPreview: aiText.length > 120 ? aiText.slice(0, 120) : aiText,
+    relatedTaskId: p?.relatedTaskId || null,
+    tags: p?.tags || [],
+    createdAt: p?.createdAt || 0,
+    // 标记完整内容是否需要单独 fetch
+    _lite: rawContent.length > 200 || aiText.length > 120,
+  };
+}
+
+/** Memory lite 投影：剔除 contentL3 全文（远大于 content），保留卡片预览所需字段 */
+function toLiteMemory(m: any): any {
+  const content = String(m?.content || '');
+  const fallback = String(m?.contentL3 || '');
+  // 卡片渲染优先用 content，content 为空才回退到 contentL3 截断版
+  const displayContent = content || fallback;
+  return {
+    id: m?.id,
+    memoryType: m?.memoryType,
+    content: displayContent.length > 400 ? displayContent.slice(0, 400) : displayContent,
+    tags: m?.tags || [],
+    relatedTaskId: m?.relatedTaskId || null,
+    importance: m?.importance ?? 0.5,
+    hitCount: m?.hitCount || 0,
+    createdAt: m?.createdAt || 0,
+    updatedAt: m?.updatedAt || 0,
+    // 标记完整内容是否需要单独 fetch
+    _lite: displayContent.length > 400,
+  };
 }
 
 function getCurrentPhaseSnapshot(projectName: string): PhaseSnapshot | undefined {
@@ -502,7 +776,8 @@ function startServer(projectName: string, basePath: string, port: number): void 
           break;
 
         case '/api/graph': {
-          // 每次请求重新创建 store，确保读取最新数据
+          // Phase-4 (E7+E3): store 与 graph payload 双层 TTL 缓存。
+          // 长 TTL（60s）+ WAL mtime 主动失效，让 warm 命中接近 0ms。
           const store = getCachedStore(projectName, basePath);
           const includeDocuments = url.searchParams.get('includeDocuments') !== 'false';
           const includeModules = url.searchParams.get('includeModules') !== 'false';
@@ -514,7 +789,7 @@ function startServer(projectName: string, basePath: string, port: number): void 
           const includeMemories = url.searchParams.get('includeMemories') !== 'false';
 
           if (store.exportGraph) {
-            const graph = store.exportGraph({
+            const graph = getCachedGraphPayload(store, _cachedStoreAt, {
               includeDocuments,
               includeModules,
               includeNodeDegree,
@@ -522,37 +797,17 @@ function startServer(projectName: string, basePath: string, port: number): void 
               includePrompts,
               includeMemories,
             });
-            res.writeHead(200, { 'Content-Type': 'application/json; charset=utf-8' });
-            res.end(JSON.stringify(graph));
+            writeJsonMaybeCompressed(req, res, 200, graph);
           } else {
-            res.writeHead(400, { 'Content-Type': 'application/json; charset=utf-8' });
-            res.end(JSON.stringify({ error: '当前引擎不支持图导出' }));
+            writeJsonMaybeCompressed(req, res, 400, { error: '当前引擎不支持图导出' });
           }
           break;
         }
 
         case '/api/progress': {
-          // 每次请求重新创建 store，确保读取最新数据
           const store = getCachedStore(projectName, basePath);
-          const progress = store.getProgress();
-          // 附加模块和文档计数（分层加载模式下 graph.nodes 不含全部类型，需从此处获取真实数量）
-          const sections = store.listSections();
-          const modules = store.listModules();
-          // 附加 Prompt 计数
-          let promptCount = 0;
-          try {
-            if (typeof store.listPrompts === 'function') {
-              promptCount = store.listPrompts().length;
-            }
-          } catch (e) { /* listPrompts 不支持时忽略 */ }
-
-          res.writeHead(200, { 'Content-Type': 'application/json; charset=utf-8' });
-          res.end(JSON.stringify({
-            ...progress,
-            moduleCount: modules.length,
-            docCount: sections.length,
-            promptCount,
-          }));
+          const payload = getCachedProgress(store, _cachedStoreAt);
+          writeJsonMaybeCompressed(req, res, 200, payload);
           break;
         }
 
@@ -888,18 +1143,102 @@ function startServer(projectName: string, basePath: string, port: number): void 
         }
 
         case '/api/prompts': {
-          // 列出所有 Prompt 日志
+          // 列出 Prompt 日志（支持分页 + lite 字段投影 + 5s 结果缓存）
+          //
+          // 查询参数：
+          //   date           — 按日期过滤（YYYY-MM-DD，可选）
+          //   relatedTaskId  — 按关联主任务 ID 过滤（可选）
+          //   offset         — 起始偏移（默认 0）
+          //   limit          — 单页返回条数（默认 0=全量）
+          //   lite           — 1/true 时只返回卡片预览字段（content/aiInterpretation 截短），
+          //                    展开完整内容请用 /api/prompt/detail?id=xxx
+          //
+          // 响应（始终包含 prompts/count 字段以保持向后兼容）：
+          //   { prompts: Prompt[], count, total, offset, limit, hasMore, lite }
           const store = getCachedStore(projectName, basePath);
+          const date = url.searchParams.get('date') || undefined;
+          const relatedTaskId = url.searchParams.get('relatedTaskId') || undefined;
+          const offsetRaw = url.searchParams.get('offset');
+          const limitRaw = url.searchParams.get('limit');
+          const liteRaw = url.searchParams.get('lite');
+          const offset = offsetRaw != null ? Math.max(0, parseInt(offsetRaw, 10) || 0) : 0;
+          const limit = limitRaw != null ? Math.max(0, parseInt(limitRaw, 10) || 0) : 0;
+          const lite = liteRaw === '1' || liteRaw === 'true';
+
           let prompts: any[] = [];
+          let total = 0;
+          let hasMore = false;
+          let respOffset = 0;
+          let respLimit = 0;
+
           try {
-            if (typeof store.listPrompts === 'function') {
-              prompts = store.listPrompts();
-            }
+            const cacheKey = projectName + '|' + (date || '') + '|' + (relatedTaskId || '');
+            const all = getCachedPromptList(cacheKey, () => {
+              if (typeof store.listPrompts === 'function') {
+                return store.listPrompts({ date, relatedTaskId }) as any[];
+              }
+              return [];
+            });
+            total = all.length;
+            let page = limit > 0 ? all.slice(offset, offset + limit) : all.slice(offset);
+            if (lite) page = page.map(toLitePrompt);
+            prompts = page;
+            hasMore = limit > 0 ? offset + limit < total : false;
+            respOffset = offset;
+            respLimit = limit || prompts.length;
           } catch (e) {
             prompts = [];
           }
+
           res.writeHead(200, { 'Content-Type': 'application/json; charset=utf-8' });
-          res.end(JSON.stringify({ prompts, count: prompts.length }));
+          res.end(JSON.stringify({
+            prompts,
+            count: prompts.length,
+            total,
+            offset: respOffset,
+            limit: respLimit,
+            hasMore,
+            lite,
+          }));
+          break;
+        }
+
+        case '/api/prompt/detail': {
+          // 按 id 拿单条完整 Prompt（含 content / aiInterpretation 全文）
+          // 用于列表 lite 模式下展开卡片时按需拉详情
+          const store = getCachedStore(projectName, basePath);
+          const id = url.searchParams.get('id');
+          if (!id) {
+            res.writeHead(400, { 'Content-Type': 'application/json; charset=utf-8' });
+            res.end(JSON.stringify({ error: '缺少 id 参数' }));
+            break;
+          }
+          try {
+            // 优先从已缓存的列表里命中（O(1) 查找代替全量重扫）
+            let found: any = null;
+            if (_promptListCache && (Date.now() - _promptListCache.ts) < LIST_CACHE_TTL_MS) {
+              for (const p of _promptListCache.items) {
+                if (p && p.id === id) { found = p; break; }
+              }
+            }
+            // 兜底：直接 listPrompts 全量找
+            if (!found && typeof store.listPrompts === 'function') {
+              const all: any[] = store.listPrompts();
+              for (const p of all) {
+                if (p && p.id === id) { found = p; break; }
+              }
+            }
+            if (!found) {
+              res.writeHead(404, { 'Content-Type': 'application/json; charset=utf-8' });
+              res.end(JSON.stringify({ error: 'Prompt 不存在' }));
+              break;
+            }
+            res.writeHead(200, { 'Content-Type': 'application/json; charset=utf-8' });
+            res.end(JSON.stringify({ prompt: found }));
+          } catch (e: any) {
+            res.writeHead(500, { 'Content-Type': 'application/json; charset=utf-8' });
+            res.end(JSON.stringify({ error: e?.message || String(e) }));
+          }
           break;
         }
 
@@ -1165,17 +1504,98 @@ function startServer(projectName: string, basePath: string, port: number): void 
         }
 
         case '/api/memories': {
-          // 列出所有记忆（用于记忆浏览页面）
+          // 列出记忆（支持分页 + lite 字段投影 + 5s 结果缓存）
+          //
+          // 查询参数：
+          //   memoryType  — 按类型过滤（可选，如 decision / bugfix / pattern ...）
+          //   offset      — 起始偏移（默认 0）
+          //   limit       — 单页返回条数（默认 0=全量）
+          //   lite        — 1/true 时只返回卡片预览字段（content 截至 400 字符，
+          //                 不传 contentL3 全文），展开请用 /api/memory/detail?id=xxx
+          //
+          // 响应（始终包含 memories 字段以保持向后兼容）：
+          //   { memories: Memory[], total, offset, limit, hasMore, lite }
           const memStore = getCachedStore(projectName, basePath);
+          const memoryType = url.searchParams.get('memoryType') || undefined;
+          const offsetRaw = url.searchParams.get('offset');
+          const limitRaw = url.searchParams.get('limit');
+          const liteRaw = url.searchParams.get('lite');
+          const offset = offsetRaw != null ? Math.max(0, parseInt(offsetRaw, 10) || 0) : 0;
+          const limit = limitRaw != null ? Math.max(0, parseInt(limitRaw, 10) || 0) : 0;
+          const lite = liteRaw === '1' || liteRaw === 'true';
+
           let memories: any[] = [];
-          if (typeof (memStore as any).listMemories === 'function') {
-            const memoryType = url.searchParams.get('memoryType') || undefined;
-            memories = (memStore as any).listMemories({
-              memoryType,
+          let total = 0;
+          let hasMore = false;
+          let respOffset = 0;
+          let respLimit = 0;
+
+          try {
+            const cacheKey = projectName + '|' + (memoryType || '');
+            const all = getCachedMemoryList(cacheKey, () => {
+              if (typeof (memStore as any).listMemories === 'function') {
+                return (memStore as any).listMemories({ memoryType }) as any[];
+              }
+              return [];
             });
+            total = all.length;
+            let page = limit > 0 ? all.slice(offset, offset + limit) : all.slice(offset);
+            if (lite) page = page.map(toLiteMemory);
+            memories = page;
+            hasMore = limit > 0 ? offset + limit < total : false;
+            respOffset = offset;
+            respLimit = limit || memories.length;
+          } catch (e) {
+            memories = [];
           }
+
           res.writeHead(200, { 'Content-Type': 'application/json; charset=utf-8' });
-          res.end(JSON.stringify({ memories }));
+          res.end(JSON.stringify({
+            memories,
+            total,
+            offset: respOffset,
+            limit: respLimit,
+            hasMore,
+            lite,
+          }));
+          break;
+        }
+
+        case '/api/memory/detail': {
+          // 按 id 拿单条完整 Memory（含 contentL3 全文）
+          // 用于列表 lite 模式下展开记忆时按需拉详情
+          const memStore = getCachedStore(projectName, basePath);
+          const id = url.searchParams.get('id');
+          if (!id) {
+            res.writeHead(400, { 'Content-Type': 'application/json; charset=utf-8' });
+            res.end(JSON.stringify({ error: '缺少 id 参数' }));
+            break;
+          }
+          try {
+            // 优先从缓存的列表命中
+            let found: any = null;
+            if (_memoryListCache && (Date.now() - _memoryListCache.ts) < LIST_CACHE_TTL_MS) {
+              for (const m of _memoryListCache.items) {
+                if (m && m.id === id) { found = m; break; }
+              }
+            }
+            if (!found && typeof (memStore as any).listMemories === 'function') {
+              const all: any[] = (memStore as any).listMemories({});
+              for (const m of all) {
+                if (m && m.id === id) { found = m; break; }
+              }
+            }
+            if (!found) {
+              res.writeHead(404, { 'Content-Type': 'application/json; charset=utf-8' });
+              res.end(JSON.stringify({ error: 'Memory 不存在' }));
+              break;
+            }
+            res.writeHead(200, { 'Content-Type': 'application/json; charset=utf-8' });
+            res.end(JSON.stringify({ memory: found }));
+          } catch (e: any) {
+            res.writeHead(500, { 'Content-Type': 'application/json; charset=utf-8' });
+            res.end(JSON.stringify({ error: e?.message || String(e) }));
+          }
           break;
         }
 

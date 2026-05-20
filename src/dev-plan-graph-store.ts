@@ -803,15 +803,40 @@ export class DevPlanGraphStore implements IDevPlanStore {
   // Project Entity
   // ==========================================================================
 
+  /**
+   * 确保项目根实体存在 — 必须 idempotent。
+   *
+   * **历史 bug（修复于 2026-05-20）**：旧版本无条件调用 `upsertEntityByProp` +
+   * `flush()`，而 ai_db 的 `upsert_entity_by_prop`（federation.rs:77）即使
+   * entity 已存在也会强制 `entity.updated_at = chrono_now(); put_entity()`，
+   * 每次调用都追加一条 PutEntity WAL entry。
+   *
+   * 影响面：`DevPlanGraphStore` 在 visualize / MCP server 中被 TTL 缓存
+   * （5–60 秒）反复重建，每次构造都进这个函数；
+   * 结果是 **read-only 工作负载也在每 10 秒往 .gwal 追加 ~400 字节**，
+   * 让 visualize server 基于 WAL mtime 的缓存失效策略彻底失效，
+   * 也错误地把 `createdAt` 刷成"上次启动时间"。
+   *
+   * 修复：先 `findProjectEntity()`；存在就只缓存 id 并直接返回，
+   * 不再调 upsert / flush。只有真的不存在时才创建一次。
+   *
+   * 验证证据：见 benches/graph-load/probe-idle-wal.mjs 与
+   * benches/graph-load/probe-side-effects.mjs。
+   */
   private ensureProjectEntity(): void {
+    const existing = this.findProjectEntity();
+    if (existing) {
+      this.projectEntityId = existing.id;
+      return;
+    }
     const entity = this.graph.upsertEntityByProp(
       ET.PROJECT, 'projectName', this.projectName, this.projectName, {
         projectName: this.projectName,
         createdAt: Date.now(),
       }
     );
-      this.projectEntityId = entity.id;
-      this.graph.flush();
+    this.projectEntityId = entity.id;
+    this.graph.flush();
   }
 
   private findProjectEntity(): Entity | null {
@@ -1672,6 +1697,37 @@ export class DevPlanGraphStore implements IDevPlanStore {
     limit?: number;
   }): Prompt[] {
     return listPromptsImpl(this.promptStoreBindings, filter);
+  }
+
+  /**
+   * 列出 Prompt（带分页）— 返回 { items, total, offset, limit, hasMore }
+   *
+   * 内部走和 listPrompts 一致的 listEntitiesByType + 全局 createdAt 降序排序，
+   * 排序后按 offset/limit 切片，前端可分批加载。
+   */
+  listPromptsPaginated(filter?: {
+    date?: string;
+    relatedTaskId?: string;
+    offset?: number;
+    limit?: number;
+  }): { items: Prompt[]; total: number; offset: number; limit: number; hasMore: boolean } {
+    const offset = Math.max(0, filter?.offset || 0);
+    const limit = Math.max(0, filter?.limit || 0);
+
+    const all = listPromptsImpl(this.promptStoreBindings, {
+      date: filter?.date,
+      relatedTaskId: filter?.relatedTaskId,
+    });
+
+    const total = all.length;
+    const page = limit > 0 ? all.slice(offset, offset + limit) : all.slice(offset);
+    return {
+      items: page,
+      total,
+      offset,
+      limit: limit || page.length,
+      hasMore: limit > 0 ? offset + limit < total : false,
+    };
   }
 
   /**
@@ -2755,6 +2811,58 @@ export class DevPlanGraphStore implements IDevPlanStore {
     }
 
     return memories;
+  }
+
+  /**
+   * 列出记忆（带分页）— 返回 { items, total, offset, limit, hasMore }
+   *
+   * 用于前端首屏快速加载 + 滚动按需加载更多场景。
+   * 内部仍走索引层加载 + 全局 updatedAt 降序排序，确保分页结果稳定一致。
+   * 排序后按 offset/limit 切片，避免一次性序列化全部 memory 节点到前端。
+   */
+  listMemoriesPaginated(filter?: {
+    memoryType?: MemoryType;
+    relatedTaskId?: string;
+    offset?: number;
+    limit?: number;
+  }): { items: Memory[]; total: number; offset: number; limit: number; hasMore: boolean } {
+    const offset = Math.max(0, filter?.offset || 0);
+    const limit = Math.max(0, filter?.limit || 0);
+
+    if (filter?.relatedTaskId) {
+      const all = this.getTaskRelatedMemories(filter.relatedTaskId, { memoryType: filter.memoryType });
+      const total = all.length;
+      const page = limit > 0 ? all.slice(offset, offset + limit) : all.slice(offset);
+      return {
+        items: page,
+        total,
+        offset,
+        limit: limit || page.length,
+        hasMore: limit > 0 ? offset + limit < total : false,
+      };
+    }
+
+    const entities = this.findEntitiesByType(ET.MEMORY);
+    const filtered = entities
+      .filter((e) => {
+        const p = e.properties as any;
+        if (p.projectName !== this.projectName) return false;
+        if (filter?.memoryType && p.memoryType !== filter.memoryType) return false;
+        return true;
+      })
+      .map((e) => this.entityToMemory(e));
+
+    filtered.sort((a, b) => b.updatedAt - a.updatedAt);
+
+    const total = filtered.length;
+    const page = limit > 0 ? filtered.slice(offset, offset + limit) : filtered.slice(offset);
+    return {
+      items: page,
+      total,
+      offset,
+      limit: limit || page.length,
+      hasMore: limit > 0 ? offset + limit < total : false,
+    };
   }
 
   /**
