@@ -44,6 +44,10 @@ function toggleMainTaskMoreMenu(btn, taskId, nodeId, status) {
   if (CANCELABLE_MAIN_TASK_STATUSES[status]) {
     menuHtml += '<button class="stats-modal-more-item" onclick="event.stopPropagation();markMainTaskStatus(\\x27' + safeNodeId + '\\x27,\\x27' + safeTaskId + '\\x27,\\x27cancelled\\x27,event)">🚫 标记为废弃</button>';
   }
+  if (status === 'completed') {
+    // 已完成任务支持手动撤销（恢复代码后等效于 syncWithGit 自动撤销）
+    menuHtml += '<button class="stats-modal-more-item" onclick="event.stopPropagation();markMainTaskStatus(\\x27' + safeNodeId + '\\x27,\\x27' + safeTaskId + '\\x27,\\x27revoked\\x27,event)">↩️ 撤销</button>';
+  }
   if (status === 'cancelled') {
     menuHtml += '<button class="stats-modal-more-item stats-modal-more-item--danger" onclick="event.stopPropagation();deleteMainTask(\\x27' + safeNodeId + '\\x27,\\x27' + safeTaskId + '\\x27,event)">🗑️ 删除任务</button>';
   }
@@ -114,7 +118,11 @@ function refreshSingleMainTask(nodeId, taskId, e) {
 function markMainTaskStatus(nodeId, taskId, status, e) {
   if (e) e.stopPropagation();
   closeMainTaskMoreMenu();
-  if (!taskId || (status !== 'completed' && status !== 'cancelled')) return;
+  if (!taskId || (status !== 'completed' && status !== 'cancelled' && status !== 'revoked')) return;
+  // 撤销操作显式二次确认，避免误点导致已完成任务被回退
+  if (status === 'revoked' && !confirm('确定要撤销已完成的任务 "' + taskId + '" 吗？\\n撤销后状态会变为「已撤销」。')) {
+    return;
+  }
   fetch('/api/main-task/status', {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
@@ -200,8 +208,8 @@ function showStatsModal(nodeType) {
   for (var i = 0; i < allNodes.length; i++) {
     if (allNodes[i].type === nodeType) items.push(allNodes[i]);
   }
-  // 排序：进行中 > 待开始 > 已完成 > 已取消
-  var statusOrder = { in_progress: 0, pending: 1, completed: 2, cancelled: 3, active: 1 };
+  // 排序：进行中 > 待开始 > 已完成 > 已撤销 > 已取消
+  var statusOrder = { in_progress: 0, pending: 1, completed: 2, revoked: 3, cancelled: 4, active: 1 };
   items.sort(function(a, b) {
     var sa = (a.properties || {}).status || 'pending';
     var sb = (b.properties || {}).status || 'pending';

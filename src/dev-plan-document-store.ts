@@ -451,9 +451,10 @@ export class DevPlanDocumentStore implements IDevPlanStore {
     // 已存在 — 决定最终状态
     let finalStatus = targetStatus;
     if (preserveStatus) {
-      // 状态优先级: completed > in_progress > pending > cancelled
+      // 状态优先级: completed > in_progress > pending > cancelled / revoked
       const statusPriority: Record<TaskStatus, number> = {
         cancelled: 0,
+        revoked: 0,
         pending: 1,
         in_progress: 2,
         completed: 3,
@@ -871,6 +872,7 @@ export class DevPlanDocumentStore implements IDevPlanStore {
     if (preserveStatus) {
       const statusPriority: Record<TaskStatus, number> = {
         cancelled: 0,
+        revoked: 0,
         pending: 1,
         in_progress: 2,
         completed: 3,
@@ -1269,7 +1271,8 @@ export class DevPlanDocumentStore implements IDevPlanStore {
     for (const taskProg of progress.tasks) {
       const statusIcon = taskProg.status === 'completed' ? '✅'
         : taskProg.status === 'in_progress' ? '🔄'
-        : taskProg.status === 'cancelled' ? '❌' : '⬜';
+        : taskProg.status === 'cancelled' ? '❌'
+        : taskProg.status === 'revoked' ? '↩️' : '⬜';
       md += `### ${statusIcon} ${taskProg.title} (${taskProg.completed}/${taskProg.total})\n\n`;
 
       const subs = this.listSubTasks(taskProg.taskId);
@@ -1279,7 +1282,8 @@ export class DevPlanDocumentStore implements IDevPlanStore {
         for (const sub of subs) {
           const subIcon = sub.status === 'completed' ? '✅ 已完成'
             : sub.status === 'in_progress' ? '🔄 进行中'
-            : sub.status === 'cancelled' ? '❌ 已取消' : '⬜ 待开始';
+            : sub.status === 'cancelled' ? '❌ 已取消'
+            : sub.status === 'revoked' ? '↩️ 已撤销' : '⬜ 待开始';
           const date = sub.completedAt
             ? new Date(sub.completedAt).toISOString().split('T')[0]
             : '-';

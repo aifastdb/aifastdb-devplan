@@ -105,8 +105,10 @@ export function getAutopilotStatus(store: IDevPlanStore): AutopilotStatus {
   // 找到 in_progress 状态的主任务（活跃阶段）
   const activePhaseProgress = tasks.find(t => t.status === 'in_progress');
 
-  // 剩余未完成阶段（pending + in_progress）
-  const remainingPhases = tasks.filter(t => t.status !== 'completed' && t.status !== 'cancelled').length;
+  // 剩余未完成阶段（pending + in_progress）— cancelled 与 revoked 都视为非活动
+  const remainingPhases = tasks.filter(
+    t => t.status !== 'completed' && t.status !== 'cancelled' && t.status !== 'revoked'
+  ).length;
 
   const result: AutopilotStatus = {
     hasActivePhase: !!activePhaseProgress,

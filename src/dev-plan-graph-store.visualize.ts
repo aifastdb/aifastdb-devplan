@@ -61,7 +61,8 @@ export function exportToMarkdown(store: VisualizeStoreBindings): string {
   for (const taskProg of progress.tasks) {
     const statusIcon = taskProg.status === 'completed' ? '✅'
       : taskProg.status === 'in_progress' ? '🔄'
-      : taskProg.status === 'cancelled' ? '❌' : '⬜';
+      : taskProg.status === 'cancelled' ? '❌'
+      : taskProg.status === 'revoked' ? '↩️' : '⬜';
     md += `### ${statusIcon} ${taskProg.title} (${taskProg.completed}/${taskProg.total})\n\n`;
 
     const subs = store.listSubTasks(taskProg.taskId);
@@ -71,7 +72,8 @@ export function exportToMarkdown(store: VisualizeStoreBindings): string {
       for (const sub of subs) {
         const subIcon = sub.status === 'completed' ? '✅ 已完成'
           : sub.status === 'in_progress' ? '🔄 进行中'
-          : sub.status === 'cancelled' ? '❌ 已取消' : '⬜ 待开始';
+          : sub.status === 'cancelled' ? '❌ 已取消'
+          : sub.status === 'revoked' ? '↩️ 已撤销' : '⬜ 待开始';
         const date = sub.completedAt
           ? new Date(sub.completedAt).toISOString().split('T')[0]
           : '-';
@@ -125,15 +127,123 @@ export function exportGraph(
   const nodes: DevPlanGraphNode[] = [];
   const edges: DevPlanGraphEdge[] = [];
   const projectId = store.getProjectId();
+  const projectName = store.projectName;
 
+  // 用于按 (entityId, label) 索引原生边的 key，避免逐条 getOutRelations / getInRelations 调用
+  const outKey = (id: string, label: string) => `o|${id}|${label}`;
+  const inKey = (id: string, label: string) => `i|${id}|${label}`;
+
+  // ── 1. 一次性批量加载所有需要的数据 ──
+  const mainTasks = store.listMainTasks();
+
+  // 主任务的 entity-id 索引（用于 memory.relatedTaskId 反查 taskEntity.id，替代 N 次 findEntityByProp）
+  const mainTaskEntityIdByTaskId = new Map<string, string>();
+  for (const mt of mainTasks) {
+    if (mt.taskId) mainTaskEntityIdByTaskId.set(mt.taskId, mt.id);
+  }
+
+  // 批量获取所有子任务（一次 findEntitiesByType 代替 M 次 listSubTasks 全表扫描）
+  const allSubTaskEntities = store.findEntitiesByType(ET.SUB_TASK).filter(
+    (e) => (e.properties as any).projectName === projectName,
+  );
+  const subTasksByParent = new Map<string, Array<{
+    entityId: string;
+    title: string;
+    taskId: string;
+    parentTaskId: string;
+    status: string;
+    completedAt: number | null;
+    order: number | undefined;
+    createdAt: number;
+  }>>();
+  for (const e of allSubTaskEntities) {
+    const p = e.properties as any;
+    const parentTaskId: string = p.parentTaskId || '';
+    if (!parentTaskId) continue;
+    const arr = subTasksByParent.get(parentTaskId);
+    const item = {
+      entityId: e.id,
+      title: p.title || (e as any).name || '',
+      taskId: p.taskId || '',
+      parentTaskId,
+      status: p.status || 'pending',
+      completedAt: p.completedAt || null,
+      order: p.order != null ? p.order : undefined,
+      createdAt: p.createdAt || (e as any).created_at || 0,
+    };
+    if (arr) {
+      arr.push(item);
+    } else {
+      subTasksByParent.set(parentTaskId, [item]);
+    }
+  }
+  // 与 listSubTasks 等价的排序（按 order/createdAt 升序）
+  for (const arr of subTasksByParent.values()) {
+    arr.sort((a, b) => {
+      const ao = a.order != null ? a.order : Number.MAX_SAFE_INTEGER;
+      const bo = b.order != null ? b.order : Number.MAX_SAFE_INTEGER;
+      if (ao !== bo) return ao - bo;
+      return a.createdAt - b.createdAt;
+    });
+  }
+
+  // 一次原生 exportGraph 拿到 degree + 全部边，替代后续的 getOutRelations/getInRelations N+1 循环
+  let nativeNodes: any[] = [];
+  let nativeEdges: any[] = [];
+  try {
+    // 估算上限：节点 = 主任务 + 子任务 + 项目/模块/文档/Prompt/记忆 缓冲
+    const estimatedNodes = Math.max(2000, (mainTasks.length + allSubTaskEntities.length) * 2 + 4000);
+    const nativeGraph = store.graph.exportGraph({
+      includeNodeDegree,
+      includeEdgeMeta: false,
+      maxNodes: estimatedNodes,
+      maxEdges: estimatedNodes * 4,
+    } as any) as any;
+    nativeNodes = Array.isArray(nativeGraph?.nodes) ? nativeGraph.nodes : [];
+    nativeEdges = Array.isArray(nativeGraph?.edges) ? nativeGraph.edges : [];
+  } catch {
+    // noop
+  }
+
+  const nativeDegreeMap: Record<string, number> = {};
+  for (const n of nativeNodes) {
+    if (typeof n?.id !== 'string') continue;
+    if (typeof n?.degree === 'number' && Number.isFinite(n.degree)) {
+      nativeDegreeMap[n.id] = n.degree;
+    }
+  }
+
+  // (fromId|label) -> toId[]，(toId|label) -> fromId[]，再附带可选 weight
+  type EdgeMeta = { otherId: string; weight?: number };
+  const outIndex = new Map<string, EdgeMeta[]>();
+  const inIndex = new Map<string, EdgeMeta[]>();
+  for (const e of nativeEdges) {
+    const from = typeof e?.from === 'string' ? e.from : '';
+    const to = typeof e?.to === 'string' ? e.to : '';
+    const label = (typeof e?.label === 'string' && e.label)
+      || (typeof e?.relation_type === 'string' && e.relation_type)
+      || '';
+    if (!from || !to || !label) continue;
+    const weight = typeof e?.weight === 'number' ? e.weight : undefined;
+    const oArr = outIndex.get(outKey(from, label));
+    if (oArr) oArr.push({ otherId: to, weight });
+    else outIndex.set(outKey(from, label), [{ otherId: to, weight }]);
+    const iArr = inIndex.get(inKey(to, label));
+    if (iArr) iArr.push({ otherId: from, weight });
+    else inIndex.set(inKey(to, label), [{ otherId: from, weight }]);
+  }
+  const getOutTargets = (id: string, label: string): EdgeMeta[] => outIndex.get(outKey(id, label)) || [];
+  const getInSources = (id: string, label: string): EdgeMeta[] => inIndex.get(inKey(id, label)) || [];
+
+  // ── 2. 项目根节点 ──
   nodes.push({
     id: projectId,
-    label: store.projectName,
+    label: projectName,
     type: 'project',
     properties: { entityType: ET.PROJECT },
   });
 
-  const mainTasks = store.listMainTasks();
+  // ── 3. 主任务 + 子任务 + task→doc / task→prompt 边 ──
   for (const mt of mainTasks) {
     nodes.push({
       id: mt.id,
@@ -148,53 +258,39 @@ export function exportGraph(
         completedAt: mt.completedAt || null,
       },
     });
-    edges.push({
-      from: projectId,
-      to: mt.id,
-      label: RT.HAS_MAIN_TASK,
-    });
+    edges.push({ from: projectId, to: mt.id, label: RT.HAS_MAIN_TASK });
 
-    const subTasks = store.listSubTasks(mt.taskId);
-    for (const st of subTasks) {
-      nodes.push({
-        id: st.id,
-        label: st.title,
-        type: 'sub-task',
-        properties: {
-          taskId: st.taskId,
-          parentTaskId: st.parentTaskId,
-          status: st.status,
-          completedAt: st.completedAt || null,
-        },
-      });
-      edges.push({
-        from: mt.id,
-        to: st.id,
-        label: RT.HAS_SUB_TASK,
-      });
+    const subs = subTasksByParent.get(mt.taskId);
+    if (subs) {
+      for (const st of subs) {
+        nodes.push({
+          id: st.entityId,
+          label: st.title,
+          type: 'sub-task',
+          properties: {
+            taskId: st.taskId,
+            parentTaskId: st.parentTaskId,
+            status: st.status,
+            completedAt: st.completedAt,
+          },
+        });
+        edges.push({ from: mt.id, to: st.entityId, label: RT.HAS_SUB_TASK });
+      }
     }
 
-    const taskDocRels = store.getOutRelations(mt.id, RT.TASK_HAS_DOC);
-    for (const rel of taskDocRels) {
-      edges.push({
-        from: mt.id,
-        to: rel.target,
-        label: RT.TASK_HAS_DOC,
-      });
+    // task → doc 边（来自原生 edges 索引，避免 N+1）
+    for (const meta of getOutTargets(mt.id, RT.TASK_HAS_DOC)) {
+      edges.push({ from: mt.id, to: meta.otherId, label: RT.TASK_HAS_DOC });
     }
 
     if (includePrompts) {
-      const taskPromptRels = store.getOutRelations(mt.id, RT.TASK_HAS_PROMPT);
-      for (const rel of taskPromptRels) {
-        edges.push({
-          from: mt.id,
-          to: rel.target,
-          label: RT.TASK_HAS_PROMPT,
-        });
+      for (const meta of getOutTargets(mt.id, RT.TASK_HAS_PROMPT)) {
+        edges.push({ from: mt.id, to: meta.otherId, label: RT.TASK_HAS_PROMPT });
       }
     }
   }
 
+  // ── 4. Prompts ──
   if (includePrompts) {
     const prompts = store.listPrompts();
     for (const prompt of prompts) {
@@ -209,81 +305,11 @@ export function exportGraph(
           createdAt: prompt.createdAt,
         },
       });
-      edges.push({
-        from: projectId,
-        to: prompt.id,
-        label: RT.HAS_PROMPT,
-      });
+      edges.push({ from: projectId, to: prompt.id, label: RT.HAS_PROMPT });
     }
   }
 
-  if (includeMemories) {
-    const memories = store.listMemories ? store.listMemories() : [];
-    const memoryIdSet = new Set<string>();
-    for (const mem of memories) {
-      memoryIdSet.add(mem.id);
-      const label = `${mem.memoryType}: ${mem.content.slice(0, 30)}...`;
-      nodes.push({
-        id: mem.id,
-        label,
-        type: 'memory',
-        properties: {
-          memoryType: mem.memoryType,
-          importance: mem.importance,
-          hitCount: mem.hitCount,
-          tags: mem.tags || [],
-          createdAt: mem.createdAt,
-        },
-      });
-      edges.push({
-        from: projectId,
-        to: mem.id,
-        label: RT.HAS_MEMORY,
-      });
-      if (mem.relatedTaskId) {
-        const taskEntity = store.findEntityByProp(ET.MAIN_TASK, 'taskId', mem.relatedTaskId);
-        if (taskEntity) {
-          edges.push({
-            from: mem.id,
-            to: taskEntity.id,
-            label: RT.MEMORY_FROM_TASK,
-          });
-        }
-      }
-    }
-
-    const memoryRelTypes = [RT.MEMORY_RELATES, RT.MEMORY_FROM_DOC, RT.MODULE_MEMORY, RT.MEMORY_SUPERSEDES, RT.MEMORY_CONFLICTS];
-    const edgeDedup = new Set<string>();
-    for (const memId of memoryIdSet) {
-      for (const relType of memoryRelTypes) {
-        const rels = store.getOutRelations(memId, relType);
-        for (const rel of rels) {
-          const key = `${rel.source}-${rel.target}-${relType}`;
-          if (edgeDedup.has(key)) continue;
-          edgeDedup.add(key);
-          edges.push({
-            from: rel.source,
-            to: rel.target,
-            label: relType,
-            properties: rel.weight != null ? { weight: rel.weight } : undefined,
-          });
-        }
-        const inRels = store.getInRelations(memId, relType);
-        for (const rel of inRels) {
-          const key = `${rel.source}-${rel.target}-${relType}`;
-          if (edgeDedup.has(key)) continue;
-          edgeDedup.add(key);
-          edges.push({
-            from: rel.source,
-            to: rel.target,
-            label: relType,
-            properties: rel.weight != null ? { weight: rel.weight } : undefined,
-          });
-        }
-      }
-    }
-  }
-
+  // ── 5. Documents（doc→child 边来自原生 edges 索引，不再 findDocEntityBySection + getOutRelations）──
   if (includeDocuments) {
     const docs = store.listSections();
     for (const doc of docs) {
@@ -301,31 +327,29 @@ export function exportGraph(
       });
 
       if (!doc.parentDoc) {
-        edges.push({
-          from: projectId,
-          to: doc.id,
-          label: RT.HAS_DOCUMENT,
-        });
+        edges.push({ from: projectId, to: doc.id, label: RT.HAS_DOCUMENT });
       }
 
       if (doc.childDocs?.length) {
-        const docEntity = store.findDocEntityBySection(doc.section, doc.subSection);
-        if (docEntity) {
-          const childRels = store.getOutRelations(docEntity.id, RT.DOC_HAS_CHILD);
-          for (const rel of childRels) {
-            edges.push({
-              from: doc.id,
-              to: rel.target,
-              label: RT.DOC_HAS_CHILD,
-            });
-          }
+        for (const meta of getOutTargets(doc.id, RT.DOC_HAS_CHILD)) {
+          edges.push({ from: doc.id, to: meta.otherId, label: RT.DOC_HAS_CHILD });
         }
       }
     }
   }
 
+  // ── 6. Modules（按 moduleId 分组主任务，避免 listMainTasks({moduleId}) × Mod）──
   if (includeModules) {
     const modules = store.listModules();
+    const tasksByModuleId = new Map<string, MainTask[]>();
+    for (const mt of mainTasks) {
+      const modId = (mt as any).moduleId as string | undefined;
+      if (!modId) continue;
+      const arr = tasksByModuleId.get(modId);
+      if (arr) arr.push(mt);
+      else tasksByModuleId.set(modId, [mt]);
+    }
+
     for (const mod of modules) {
       nodes.push({
         id: mod.id,
@@ -337,132 +361,95 @@ export function exportGraph(
           mainTaskCount: mod.mainTaskCount,
         },
       });
+      edges.push({ from: projectId, to: mod.id, label: RT.HAS_MODULE });
 
-      edges.push({
-        from: projectId,
-        to: mod.id,
-        label: RT.HAS_MODULE,
-      });
-
-      const moduleTasks = store.listMainTasks({ moduleId: mod.moduleId });
+      const moduleTasks = tasksByModuleId.get(mod.moduleId) || [];
       for (const mt of moduleTasks) {
-        edges.push({
-          from: mod.id,
-          to: mt.id,
-          label: RT.MODULE_HAS_TASK,
-        });
+        edges.push({ from: mod.id, to: mt.id, label: RT.MODULE_HAS_TASK });
       }
     }
   }
 
-  const allMemoryEntities = store.findEntitiesByType(ET.MEMORY)
-    .filter((e) => (e.properties as any).projectName === store.projectName);
+  // ── 7. Memories（单次扫描，所有 memory 关系都从原生 edges 索引获取）──
+  // 修复原实现 bug：第二段 memory 扫描原本不受 includeMemories 守门，会导致默认情况下 memory 节点被 push 两次
+  if (includeMemories) {
+    const memoryEntities = store.findEntitiesByType(ET.MEMORY).filter(
+      (e) => (e.properties as any).projectName === projectName,
+    );
 
-  for (const memEntity of allMemoryEntities) {
-    const mem = store.entityToMemory(memEntity);
-    nodes.push({
-      id: mem.id,
-      label: `${mem.memoryType}: ${mem.content.slice(0, 30)}...`,
-      type: 'memory',
-      properties: {
-        memoryType: mem.memoryType,
-        content: mem.content.length > 120 ? mem.content.slice(0, 120) + '...' : mem.content,
-        importance: mem.importance,
-        hitCount: mem.hitCount,
-        tags: mem.tags,
-        relatedTaskId: mem.relatedTaskId || null,
-        sourceRef: mem.sourceRef || null,
-        provenance: mem.provenance || null,
-      },
-    });
-
-    edges.push({
-      from: projectId,
-      to: mem.id,
-      label: RT.HAS_MEMORY,
-    });
-
-    if (mem.relatedTaskId) {
-      const taskEntity = store.findEntityByProp(ET.MAIN_TASK, 'taskId', mem.relatedTaskId);
-      if (taskEntity) {
-        edges.push({
-          from: mem.id,
-          to: taskEntity.id,
-          label: RT.MEMORY_FROM_TASK,
-        });
-      }
-    }
-
-    const memRelates = store.getOutRelations(mem.id, RT.MEMORY_RELATES);
-    for (const rel of memRelates) {
-      if (mem.id < rel.target) {
-        edges.push({
-          from: mem.id,
-          to: rel.target,
-          label: RT.MEMORY_RELATES,
-          properties: rel.weight != null ? { weight: rel.weight } : undefined,
-        });
-      }
-    }
-
-    const fromDocRels = store.getInRelations(mem.id, RT.MEMORY_FROM_DOC);
-    for (const rel of fromDocRels) {
+    const memEdgeDedup = new Set<string>();
+    const dedupPushEdge = (
+      from: string,
+      to: string,
+      label: string,
+      weight?: number,
+    ): void => {
+      const k = `${from}-${to}-${label}`;
+      if (memEdgeDedup.has(k)) return;
+      memEdgeDedup.add(k);
       edges.push({
-        from: rel.source,
-        to: mem.id,
-        label: RT.MEMORY_FROM_DOC,
+        from,
+        to,
+        label,
+        properties: weight != null ? { weight } : undefined,
       });
-    }
+    };
 
-    const moduleMemRels = store.getInRelations(mem.id, RT.MODULE_MEMORY);
-    for (const rel of moduleMemRels) {
-      edges.push({
-        from: rel.source,
-        to: mem.id,
-        label: RT.MODULE_MEMORY,
+    for (const memEntity of memoryEntities) {
+      const mem = store.entityToMemory(memEntity);
+      const content = mem.content || '';
+      nodes.push({
+        id: mem.id,
+        label: `${mem.memoryType}: ${content.slice(0, 30)}...`,
+        type: 'memory',
+        properties: {
+          memoryType: mem.memoryType,
+          content: content.length > 120 ? content.slice(0, 120) + '...' : content,
+          importance: mem.importance,
+          hitCount: mem.hitCount,
+          tags: mem.tags || [],
+          relatedTaskId: mem.relatedTaskId || null,
+          sourceRef: mem.sourceRef || null,
+          provenance: mem.provenance || null,
+          createdAt: mem.createdAt,
+        },
       });
-    }
+      edges.push({ from: projectId, to: mem.id, label: RT.HAS_MEMORY });
 
-    const supersedesRels = store.getOutRelations(mem.id, RT.MEMORY_SUPERSEDES);
-    for (const rel of supersedesRels) {
-      edges.push({
-        from: mem.id,
-        to: rel.target,
-        label: RT.MEMORY_SUPERSEDES,
-      });
-    }
-
-    const conflictsRels = store.getOutRelations(mem.id, RT.MEMORY_CONFLICTS);
-    for (const rel of conflictsRels) {
-      edges.push({
-        from: mem.id,
-        to: rel.target,
-        label: RT.MEMORY_CONFLICTS,
-      });
-    }
-  }
-
-  if (includeNodeDegree) {
-    const nativeDegreeMap: Record<string, number> = {};
-    try {
-      const nativeGraph = store.graph.exportGraph({
-        includeNodeDegree: true,
-        includeEdgeMeta: false,
-        maxNodes: Math.max(nodes.length * 2, 2000),
-        maxEdges: Math.max(edges.length * 2, 4000),
-      } as any) as any;
-
-      const nativeNodes = Array.isArray(nativeGraph?.nodes) ? nativeGraph.nodes : [];
-      for (const n of nativeNodes) {
-        if (typeof n?.id !== 'string') continue;
-        if (typeof n?.degree === 'number' && Number.isFinite(n.degree)) {
-          nativeDegreeMap[n.id] = n.degree;
+      // memory → main task（用 taskId 索引替代 N 次 findEntityByProp）
+      if (mem.relatedTaskId) {
+        const taskEntityId = mainTaskEntityIdByTaskId.get(mem.relatedTaskId);
+        if (taskEntityId) {
+          edges.push({ from: mem.id, to: taskEntityId, label: RT.MEMORY_FROM_TASK });
         }
       }
-    } catch {
-      // noop
-    }
 
+      // MEMORY_RELATES：保留 mem.id < target 的去重策略
+      for (const meta of getOutTargets(mem.id, RT.MEMORY_RELATES)) {
+        if (mem.id < meta.otherId) {
+          dedupPushEdge(mem.id, meta.otherId, RT.MEMORY_RELATES, meta.weight);
+        }
+      }
+
+      // doc → memory
+      for (const meta of getInSources(mem.id, RT.MEMORY_FROM_DOC)) {
+        dedupPushEdge(meta.otherId, mem.id, RT.MEMORY_FROM_DOC);
+      }
+      // module → memory
+      for (const meta of getInSources(mem.id, RT.MODULE_MEMORY)) {
+        dedupPushEdge(meta.otherId, mem.id, RT.MODULE_MEMORY);
+      }
+      for (const meta of getOutTargets(mem.id, RT.MEMORY_SUPERSEDES)) {
+        dedupPushEdge(mem.id, meta.otherId, RT.MEMORY_SUPERSEDES);
+      }
+      for (const meta of getOutTargets(mem.id, RT.MEMORY_CONFLICTS)) {
+        dedupPushEdge(mem.id, meta.otherId, RT.MEMORY_CONFLICTS);
+      }
+    }
+  }
+
+  // ── 8. Node degree（复用上面已经拿到的 nativeDegreeMap）──
+  if (includeNodeDegree) {
     const edgeDegreeMap: Record<string, number> = {};
     if (enableBackendDegreeFallback) {
       for (const node of nodes) edgeDegreeMap[node.id] = 0;

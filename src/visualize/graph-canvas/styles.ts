@@ -3,7 +3,7 @@
  *
  * 迁移自 vis-network 的样式规则:
  * - 5 种节点类型样式 (project/module/main-task/sub-task/document)
- * - 4 种状态颜色 (completed/in_progress/pending/cancelled)
+ * - 5 种状态颜色 (completed/in_progress/pending/cancelled/revoked)
  * - 动态大小规则 (基于度数 sqrt 曲线)
  * - 6 种边类型样式
  */
@@ -24,6 +24,7 @@ function StyleManager() {
     in_progress: { bg: '#7c3aed', border: '#6d28d9', font: '#ddd6fe' },
     pending:     { bg: '#4b5563', border: '#374151', font: '#d1d5db' },
     cancelled:   { bg: '#92400e', border: '#78350f', font: '#fde68a' },
+    revoked:     { bg: '#4b3a52', border: '#3b2f43', font: '#e0d8e5' },
   };
 
   // 统一样式缓存 (供 getNodeStyle 使用)

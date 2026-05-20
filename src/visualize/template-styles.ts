@@ -123,6 +123,7 @@ export function getStyles(): string {
     .status-in_progress { background: #1e3a5f; color: #93c5fd; }
     .status-pending { background: #374151; color: #9ca3af; }
     .status-cancelled { background: #451a03; color: #fbbf24; }
+    .status-revoked { background: #3b2f43; color: #e0d8e5; }
     .priority-P0 { background: #7f1d1d; color: #fca5a5; }
     .priority-P1 { background: #78350f; color: #fde68a; }
     .priority-P2 { background: #1e3a5f; color: #93c5fd; }
@@ -141,9 +142,11 @@ export function getStyles(): string {
     .subtask-icon.in_progress { background: #1e3a5f; color: #93c5fd; }
     .subtask-icon.pending { background: #374151; color: #6b7280; }
     .subtask-icon.cancelled { background: #451a03; color: #fbbf24; }
+    .subtask-icon.revoked { background: #3b2f43; color: #e0d8e5; }
     .subtask-name { color: #d1d5db; flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
     .subtask-name.completed { color: #6ee7b7; text-decoration: line-through; text-decoration-color: rgba(110,231,183,0.3); }
     .subtask-name.cancelled { color: #9ca3af; text-decoration: line-through; }
+    .subtask-name.revoked { color: #b5acba; text-decoration: line-through; text-decoration-color: rgba(181,172,186,0.4); }
     .subtask-id { color: #6b7280; font-size: 10px; flex-shrink: 0; font-family: monospace; }
     .subtask-time { color: #6ee7b7; font-size: 10px; flex-shrink: 0; opacity: 0.75; margin-left: auto; }
 
@@ -485,6 +488,8 @@ export function getStyles(): string {
     .phase-status-icon.completed { background: #064e3b; color: #6ee7b7; }
     .phase-status-icon.in_progress { background: #1e3a5f; color: #93c5fd; }
     .phase-status-icon.pending { background: #374151; color: #6b7280; }
+    .phase-status-icon.cancelled { background: #451a03; color: #fbbf24; }
+    .phase-status-icon.revoked { background: #3b2f43; color: #e0d8e5; }
     .phase-info { flex: 1; min-width: 0; }
     .phase-info-title { font-size: 13px; font-weight: 600; color: #e5e7eb; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
     .phase-info-sub { font-size: 11px; color: #6b7280; margin-top: 2px; }
@@ -504,8 +509,10 @@ export function getStyles(): string {
     .phase-sub-icon.in_progress { background: #1e3a5f; color: #93c5fd; }
     .phase-sub-icon.pending { background: #374151; color: #6b7280; }
     .phase-sub-icon.cancelled { background: #451a03; color: #fbbf24; }
+    .phase-sub-icon.revoked { background: #3b2f43; color: #e0d8e5; }
     .phase-sub-name { color: #d1d5db; flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
     .phase-sub-name.completed { color: #6ee7b7; text-decoration: line-through; text-decoration-color: rgba(110,231,183,0.3); }
+    .phase-sub-name.revoked { color: #b5acba; text-decoration: line-through; text-decoration-color: rgba(181,172,186,0.4); }
     .phase-sub-id { color: #4b5563; font-size: 10px; font-family: monospace; flex-shrink: 0; }
     .phase-time { color: #6ee7b7; font-size: 10px; opacity: 0.8; }
     .phase-sub-time { color: #6ee7b7; font-size: 10px; opacity: 0.7; flex-shrink: 0; margin-left: auto; }
@@ -749,6 +756,7 @@ export function getStyles(): string {
     .stats-modal-item-badge.in_progress { background: rgba(59,130,246,0.15); color: #93c5fd; }
     .stats-modal-item-badge.pending { background: rgba(107,114,128,0.15); color: #9ca3af; }
     .stats-modal-item-badge.cancelled { background: rgba(146,64,14,0.15); color: #fbbf24; }
+    .stats-modal-item-badge.revoked { background: rgba(75,58,82,0.35); color: #e0d8e5; }
     .stats-modal-item-badge.active { background: rgba(16,185,129,0.15); color: #6ee7b7; }
     .stats-modal-item-sub { font-size: 11px; color: #6b7280; flex-shrink: 0; font-family: monospace; }
 

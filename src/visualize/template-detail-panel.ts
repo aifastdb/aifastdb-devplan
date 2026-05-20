@@ -210,8 +210,8 @@ function showPanel(nodeId) {
       html += '<div class="subtask-section">';
       html += '<div class="subtask-section-title"><span>子任务列表</span><span style="color:#6b7280;">' + completedCount + '/' + subTasks.length + '</span></div>';
       html += '<ul class="subtask-list">';
-      // 排序：进行中 > 待开始 > 已完成 > 已取消
-      var statusOrder = { in_progress: 0, pending: 1, completed: 2, cancelled: 3 };
+      // 排序：进行中 > 待开始 > 已完成 > 已撤销 > 已取消
+      var statusOrder = { in_progress: 0, pending: 1, completed: 2, revoked: 3, cancelled: 4 };
       subTasks.sort(function(a, b) {
         var sa = (a.properties || {}).status || 'pending';
         var sb = (b.properties || {}).status || 'pending';
@@ -221,7 +221,7 @@ function showPanel(nodeId) {
         var st = subTasks[si];
         var stProps = st.properties || {};
         var stStatus = stProps.status || 'pending';
-        var stIcon = stStatus === 'completed' ? '✓' : stStatus === 'in_progress' ? '▶' : stStatus === 'cancelled' ? '✗' : '○';
+        var stIcon = stStatus === 'completed' ? '✓' : stStatus === 'in_progress' ? '▶' : stStatus === 'cancelled' ? '✗' : stStatus === 'revoked' ? '↩' : '○';
         var stTime = stProps.completedAt ? fmtTime(stProps.completedAt) : '';
         html += '<li class="subtask-item">';
         html += '<span class="subtask-icon ' + stStatus + '">' + stIcon + '</span>';
@@ -271,8 +271,8 @@ function showPanel(nodeId) {
       for (var mi = 0; mi < modMainTasks.length; mi++) {
         if ((modMainTasks[mi].properties || {}).status === 'completed') modCompleted++;
       }
-      // 排序：进行中 > 待开始 > 已完成 > 已取消；同状态按 taskId 升序
-      var modStatusOrder = { in_progress: 0, pending: 1, completed: 2, cancelled: 3 };
+      // 排序：进行中 > 待开始 > 已完成 > 已撤销 > 已取消；同状态按 taskId 升序
+      var modStatusOrder = { in_progress: 0, pending: 1, completed: 2, revoked: 3, cancelled: 4 };
       modMainTasks.sort(function(a, b) {
         var sa = (a.properties || {}).status || 'pending';
         var sb = (b.properties || {}).status || 'pending';
@@ -289,7 +289,7 @@ function showPanel(nodeId) {
         var mt = modMainTasks[mi];
         var mtProps = mt.properties || {};
         var mtStatus = mtProps.status || 'pending';
-        var mtIcon = mtStatus === 'completed' ? '✓' : mtStatus === 'in_progress' ? '▶' : mtStatus === 'cancelled' ? '✗' : '○';
+        var mtIcon = mtStatus === 'completed' ? '✓' : mtStatus === 'in_progress' ? '▶' : mtStatus === 'cancelled' ? '✗' : mtStatus === 'revoked' ? '↩' : '○';
         var mtPriority = mtProps.priority || 'P2';
         var mtSub = (mtProps.totalSubtasks !== undefined)
           ? ((mtProps.completedSubtasks || 0) + '/' + mtProps.totalSubtasks)
@@ -418,7 +418,7 @@ var panelIsExpanded = false;
 
 function row(label, value) { return '<div class="panel-row"><span class="panel-label">' + label + '</span><span class="panel-value">' + (value || '-') + '</span></div>'; }
 function statusBadge(s) { return '<span class="status-badge status-' + (s || 'pending') + '">' + statusText(s) + '</span>'; }
-function statusText(s) { var m = { completed: '已完成', in_progress: '进行中', pending: '待开始', cancelled: '已取消', active: '活跃', planning: '规划中', deprecated: '已废弃' }; return m[s] || s || '未知'; }
+function statusText(s) { var m = { completed: '已完成', in_progress: '进行中', pending: '待开始', cancelled: '已取消', revoked: '已撤销', active: '活跃', planning: '规划中', deprecated: '已废弃' }; return m[s] || s || '未知'; }
 function escHtml(s) { var d = document.createElement('div'); d.textContent = s || ''; return d.innerHTML; }
 
 // 格式化时间戳（毫秒）为可读日期时间，当年省略年份

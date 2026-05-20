@@ -3710,7 +3710,7 @@ function phaseItem(task, status, icon) {
   var subs = task.subTasks || [];
   var rDocsCheck = task.relatedDocs || [];
   var hasSubs = subs.length > 0 || rDocsCheck.length > 0;
-  var subIcons = { completed: '✓', in_progress: '◉', pending: '○', cancelled: '⊘' };
+  var subIcons = { completed: '✓', in_progress: '◉', pending: '○', cancelled: '⊘', revoked: '↩' };
   var mainTime = task.completedAt ? fmtTime(task.completedAt) : '';
   var h = '<div class="phase-item-wrap">';
   h += '<div class="phase-item-main" ' + (hasSubs ? 'onclick="togglePhaseExpand(this)"' : '') + '>';

@@ -130,11 +130,11 @@ export async function handleTaskToolCall(
         throw new McpError(ErrorCode.InvalidParams, 'Missing required: projectName, taskId, taskType, status');
       }
 
-      const mutableStatuses: TaskStatus[] = ['pending', 'in_progress', 'cancelled'];
+      const mutableStatuses: TaskStatus[] = ['pending', 'in_progress', 'cancelled', 'revoked'];
       if (!mutableStatuses.includes(args.status as TaskStatus)) {
         throw new McpError(
           ErrorCode.InvalidParams,
-          'status must be one of: pending, in_progress, cancelled. Use devplan_complete_task for completed.'
+          'status must be one of: pending, in_progress, cancelled, revoked. Use devplan_complete_task for completed.'
         );
       }
 

@@ -654,7 +654,7 @@ RETURNS: { success, projectName, engine, basePath, autoRegistered, cursorRuleGen
   },
   {
     name: 'devplan_update_task_status',
-    description: 'Update a main task or sub-task status for non-complete workflow changes. Supports pending, in_progress, and cancelled only; completed must still use the completion workflow.\n更新主任务或子任务状态，用于非完成态的工作流变更。仅支持 pending、in_progress、cancelled；completed 仍需使用完成工作流。',
+    description: 'Update a main task or sub-task status for non-complete workflow changes. Supports pending, in_progress, cancelled and revoked; completed must still use the completion workflow.\n更新主任务或子任务状态，用于非完成态的工作流变更。支持 pending、in_progress、cancelled、revoked；completed 仍需使用完成工作流。revoked 用于已完成任务的人工撤销/Git 失锚回退。',
     inputSchema: {
       type: 'object' as const,
       properties: {
@@ -673,8 +673,8 @@ RETURNS: { success, projectName, engine, basePath, autoRegistered, cursorRuleGen
         },
         status: {
           type: 'string',
-          enum: ['pending', 'in_progress', 'cancelled'],
-          description: 'Target status. Use devplan_complete_task for completed.\n目标状态。completed 请使用 devplan_complete_task。',
+          enum: ['pending', 'in_progress', 'cancelled', 'revoked'],
+          description: 'Target status. Use devplan_complete_task for completed. Use revoked for previously-completed tasks that have been undone (e.g. after a git reset).\n目标状态。completed 请使用 devplan_complete_task。revoked 用于已完成任务被撤销（例如 git reset 之后）。',
         },
       },
       required: ['projectName', 'taskId', 'taskType', 'status'],
@@ -722,7 +722,7 @@ RETURNS: { success, projectName, engine, basePath, autoRegistered, cursorRuleGen
         },
         status: {
           type: 'string',
-          enum: ['pending', 'in_progress', 'completed', 'cancelled'],
+          enum: ['pending', 'in_progress', 'completed', 'cancelled', 'revoked'],
           description: 'Target status (default: pending). Higher-priority existing status is preserved unless preserveStatus is false.\n目标状态（默认 pending）。已有的更高优先级状态会被保留，除非 preserveStatus 为 false。',
         },
         preserveStatus: {
@@ -785,7 +785,7 @@ RETURNS: { success, projectName, engine, basePath, autoRegistered, cursorRuleGen
         },
         status: {
           type: 'string',
-          enum: ['pending', 'in_progress', 'completed', 'cancelled'],
+          enum: ['pending', 'in_progress', 'completed', 'cancelled', 'revoked'],
           description: 'Optional: Filter by status\n可选：按状态筛选',
         },
         priority: {
@@ -907,7 +907,7 @@ RETURNS: { success, projectName, engine, basePath, autoRegistered, cursorRuleGen
   },
   {
     name: 'devplan_cleanup_duplicates',
-    description: 'Phase-21: Scan and cleanup duplicate entities in the WAL. Deduplicates main tasks (by taskId), sub-tasks (by taskId), modules (by moduleId), and documents (by section+subSection). Keeps the entity with the highest status priority (completed > in_progress > pending > cancelled) and latest updatedAt. Use dryRun=true to preview without changes.\nPhase-21: 扫描并清理 WAL 中的重复 Entity。按业务键去重（mainTask 按 taskId，subTask 按 taskId，module 按 moduleId，doc 按 section+subSection）。保留状态优先级最高 + updatedAt 最新的 Entity。使用 dryRun=true 可预览而不实际修改。',
+    description: 'Phase-21: Scan and cleanup duplicate entities in the WAL. Deduplicates main tasks (by taskId), sub-tasks (by taskId), modules (by moduleId), and documents (by section+subSection). Keeps the entity with the highest status priority (completed > in_progress > pending > cancelled / revoked) and latest updatedAt. Use dryRun=true to preview without changes.\nPhase-21: 扫描并清理 WAL 中的重复 Entity。按业务键去重（mainTask 按 taskId，subTask 按 taskId，module 按 moduleId，doc 按 section+subSection）。保留状态优先级最高 + updatedAt 最新的 Entity（cancelled 与 revoked 同级）。使用 dryRun=true 可预览而不实际修改。',
     inputSchema: {
       type: 'object' as const,
       properties: {
@@ -2434,7 +2434,7 @@ const TOOL_COMPACT_PROPERTY_DESCRIPTIONS_BY_NAME: Record<string, Record<string, 
     projectName: 'project name',
     taskId: 'task id',
     taskType: 'main | sub',
-    status: 'pending | in_progress | cancelled',
+    status: 'pending | in_progress | cancelled | revoked',
   },
   devplan_complete_task: {
     projectName: 'project name',

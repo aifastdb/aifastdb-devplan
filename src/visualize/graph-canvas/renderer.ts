@@ -701,6 +701,7 @@ RenderPipeline.prototype._drawStatusPie = function(ctx, cluster) {
     in_progress: _uniSC ? _uniSC.in_progress.bg : '#7c3aed',
     pending: _uniSC ? _uniSC.pending.bg : '#4b5563',
     cancelled: _uniSC ? _uniSC.cancelled.bg : '#92400e',
+    revoked: _uniSC && _uniSC.revoked ? _uniSC.revoked.bg : '#4b3a52',
   };
 
   var total = cluster.count;

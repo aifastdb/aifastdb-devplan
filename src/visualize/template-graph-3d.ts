@@ -44,14 +44,16 @@ var MAIN_TASK_STATUS_COLORS = {
   'pending':     _3dUniStyle.mainTask.pending.bg,
   'completed':   _3dUniStyle.mainTask.completed.bg,
   'in_progress': _3dUniStyle.mainTask.in_progress.bg,
-  'cancelled':   _3dUniStyle.mainTask.cancelled.bg
+  'cancelled':   _3dUniStyle.mainTask.cancelled.bg,
+  'revoked':     _3dUniStyle.mainTask.revoked.bg
 };
 // 子任务状态颜色 (从统一配置, completed=亮绿色)
 var SUB_TASK_STATUS_COLORS = {
   'pending':     _3dUniStyle.subTask.pending.bg,
   'completed':   _3dUniStyle.subTask.completed.bg,
   'in_progress': _3dUniStyle.subTask.in_progress.bg,
-  'cancelled':   _3dUniStyle.subTask.cancelled.bg
+  'cancelled':   _3dUniStyle.subTask.cancelled.bg,
+  'revoked':     _3dUniStyle.subTask.revoked.bg
 };
 
 // ========== 3D 呼吸灯动画 (in_progress 主任务) ==========

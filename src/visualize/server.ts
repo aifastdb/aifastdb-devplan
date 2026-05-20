@@ -951,7 +951,10 @@ function startServer(projectName: string, basePath: string, port: number): void 
         }
 
         case '/api/main-task/status': {
-          // 手动更新主任务状态（completed 仅限 pending；cancelled 允许 pending/in_progress）
+          // 手动更新主任务状态：
+          //  - completed: 仅限 pending → completed
+          //  - cancelled: 允许 pending / in_progress → cancelled
+          //  - revoked:   允许 completed → revoked（已完成任务被撤销）
           if (req.method !== 'POST') {
             res.writeHead(405, { 'Content-Type': 'application/json; charset=utf-8' });
             res.end(JSON.stringify({ error: 'Method Not Allowed. Use POST.' }));
@@ -965,9 +968,9 @@ function startServer(projectName: string, basePath: string, port: number): void 
             res.end(JSON.stringify({ error: '缺少 taskId 或 status 参数' }));
             break;
           }
-          if (targetStatus !== 'completed' && targetStatus !== 'cancelled') {
+          if (targetStatus !== 'completed' && targetStatus !== 'cancelled' && targetStatus !== 'revoked') {
             res.writeHead(400, { 'Content-Type': 'application/json; charset=utf-8' });
-            res.end(JSON.stringify({ error: 'status 仅支持 completed 或 cancelled' }));
+            res.end(JSON.stringify({ error: 'status 仅支持 completed、cancelled 或 revoked' }));
             break;
           }
 
@@ -981,10 +984,11 @@ function startServer(projectName: string, basePath: string, port: number): void 
           const canComplete = targetStatus === 'completed' && mainTask.status === 'pending';
           const canCancel = targetStatus === 'cancelled'
             && (mainTask.status === 'pending' || mainTask.status === 'in_progress');
-          if (!canComplete && !canCancel) {
+          const canRevoke = targetStatus === 'revoked' && mainTask.status === 'completed';
+          if (!canComplete && !canCancel && !canRevoke) {
             res.writeHead(409, { 'Content-Type': 'application/json; charset=utf-8' });
             res.end(JSON.stringify({
-              error: `当前状态 ${mainTask.status} 不支持手动标记为 ${targetStatus}；completed 仅支持 pending，cancelled 支持 pending/in_progress`,
+              error: `当前状态 ${mainTask.status} 不支持手动标记为 ${targetStatus}；completed 仅支持 pending，cancelled 支持 pending/in_progress，revoked 仅支持 completed`,
             }));
             break;
           }

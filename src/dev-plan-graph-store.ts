@@ -835,6 +835,7 @@ export class DevPlanGraphStore implements IDevPlanStore {
   /** 任务状态优先级映射（用于去重时选择"胜出"实体） */
   private static readonly STATUS_PRIORITY: Record<string, number> = {
     cancelled: 0,
+    revoked: 0,
     pending: 1,
     in_progress: 2,
     completed: 3,
@@ -844,7 +845,7 @@ export class DevPlanGraphStore implements IDevPlanStore {
    * 通用 Entity 去重：按指定 property key 分组，每组只保留"最优"实体。
    *
    * 胜出规则：
-   * 1. status 优先级高者胜（completed > in_progress > pending > cancelled）
+   * 1. status 优先级高者胜（completed > in_progress > pending > cancelled / revoked）
    * 2. 同 status 时 updatedAt 最新者胜
    *
    * 适用于 mainTask（按 taskId 去重）、subTask（按 taskId 去重）、

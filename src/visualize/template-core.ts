@@ -489,14 +489,16 @@ function getUnifiedNodeStyle() {
       'pending':     { bg: nc.colorMainTask, border: darkenHex(nc.colorMainTask, 0.15), font: '#052e16' },
       'completed':   { bg: darkenHex(nc.colorMainTask, 0.20), border: darkenHex(nc.colorMainTask, 0.35), font: '#d1fae5' },
       'in_progress': { bg: '#7c3aed', border: '#6d28d9', font: '#ddd6fe' },
-      'cancelled':   { bg: '#92400e', border: '#78350f', font: '#fde68a' }
+      'cancelled':   { bg: '#92400e', border: '#78350f', font: '#fde68a' },
+      'revoked':     { bg: '#4b3a52', border: '#3b2f43', font: '#e0d8e5' }
     },
     // 子任务: 深绿色系 (pending=深绿, completed=更深)
     subTask: {
       'pending':     { bg: nc.colorSubTask, border: darkenHex(nc.colorSubTask, 0.15), font: '#d1fae5' },
       'completed':   { bg: darkenHex(nc.colorSubTask, 0.20), border: darkenHex(nc.colorSubTask, 0.35), font: '#a7f3d0' },
       'in_progress': { bg: '#7c3aed', border: '#6d28d9', font: '#ddd6fe' },
-      'cancelled':   { bg: '#92400e', border: '#78350f', font: '#fde68a' }
+      'cancelled':   { bg: '#92400e', border: '#78350f', font: '#fde68a' },
+      'revoked':     { bg: '#4b3a52', border: '#3b2f43', font: '#e0d8e5' }
     },
     // 记忆节点: 紫粉色系
     memory: { bg: nc.colorMemory, border: darkenHex(nc.colorMemory, 0.15), font: '#fdf4ff' },
@@ -505,7 +507,8 @@ function getUnifiedNodeStyle() {
       completed:   { bg: '#059669', border: '#047857', font: '#d1fae5' },
       in_progress: { bg: '#7c3aed', border: '#6d28d9', font: '#ddd6fe' },
       pending:     { bg: '#4b5563', border: '#374151', font: '#d1d5db' },
-      cancelled:   { bg: '#92400e', border: '#78350f', font: '#fde68a' }
+      cancelled:   { bg: '#92400e', border: '#78350f', font: '#fde68a' },
+      revoked:     { bg: '#4b3a52', border: '#3b2f43', font: '#e0d8e5' }
     }
   };
 }

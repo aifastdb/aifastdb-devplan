@@ -116,7 +116,7 @@ export function upsertMainTask(
   let finalStatus = targetStatus;
   if (preserveStatus) {
     const statusPriority: Record<TaskStatus, number> = {
-      cancelled: 0, pending: 1, in_progress: 2, completed: 3,
+      cancelled: 0, revoked: 0, pending: 1, in_progress: 2, completed: 3,
     };
     if (statusPriority[existing.status] >= statusPriority[targetStatus]) {
       finalStatus = existing.status;
@@ -347,7 +347,7 @@ export function upsertSubTask(
   let finalStatus = targetStatus;
   if (preserveStatus) {
     const statusPriority: Record<TaskStatus, number> = {
-      cancelled: 0, pending: 1, in_progress: 2, completed: 3,
+      cancelled: 0, revoked: 0, pending: 1, in_progress: 2, completed: 3,
     };
     if (statusPriority[existing.status] >= statusPriority[targetStatus]) {
       finalStatus = existing.status;
@@ -683,7 +683,7 @@ export function repairAllMainTaskCounts(
   const report = { repaired: 0, autoCompleted: 0, details: [] as Array<{ taskId: string; action: string }> };
 
   for (const mt of allMainTasks) {
-    if (mt.status === 'cancelled') continue;
+    if (mt.status === 'cancelled' || mt.status === 'revoked') continue;
 
     const subs = listSubTasks(store, mt.taskId);
     const completedCount = subs.filter((s) => s.status === 'completed').length;

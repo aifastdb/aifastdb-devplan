@@ -29,8 +29,14 @@ export type DevPlanSection =
 
 /**
  * 任务状态
+ *
+ * - pending: 待开始
+ * - in_progress: 进行中
+ * - completed: 已完成
+ * - cancelled: 已废弃/取消（人工标记）
+ * - revoked: 已撤销（针对原本已完成的任务，因为 git 回滚或人工撤销让代码不再存在于当前分支）
  */
-export type TaskStatus = 'pending' | 'in_progress' | 'completed' | 'cancelled';
+export type TaskStatus = 'pending' | 'in_progress' | 'completed' | 'cancelled' | 'revoked';
 
 /**
  * 任务优先级
@@ -272,8 +278,11 @@ export interface DeleteTaskResult {
 
 /**
  * 手动任务状态更新允许的目标状态
+ *
+ * 注意：`completed` 仍需通过 devplan_complete_task 完成；
+ * `revoked` 用于"已完成任务被撤销"的场景，由 update_task_status 与 UI 的"撤销"按钮触发。
  */
-export type MutableTaskStatus = 'pending' | 'in_progress' | 'cancelled';
+export type MutableTaskStatus = 'pending' | 'in_progress' | 'cancelled' | 'revoked';
 
 /**
  * 更新任务状态的返回结果
