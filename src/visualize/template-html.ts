@@ -45,6 +45,7 @@ export function getHTML(projectName: string): string {
         <span class="nav-item-text">文档库</span>
         <span class="nav-tooltip">文档库</span>
       </div>
+      <!-- Phase-5: 临时隐藏代码智能侧边栏入口（保留后端渲染引擎，恢复时移除外层注释即可）
       <div class="nav-item" data-page="code-intel" onclick="navTo('code-intel')">
         <span class="nav-item-icon">
           <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
@@ -60,6 +61,7 @@ export function getHTML(projectName: string): string {
         <span class="nav-item-text">代码智能</span>
         <span class="nav-tooltip">Code Intelligence</span>
       </div>
+      -->
       <div class="nav-item" data-page="memory" onclick="navTo('memory')">
         <span class="nav-item-icon">🧠</span>
         <span class="nav-item-text">记忆</span>
@@ -401,6 +403,7 @@ export function getHTML(projectName: string): string {
     </div>
 
     <!-- ===== PAGE: Code Intelligence ===== -->
+    <!-- Phase-5: 临时禁用 /code-intel 页面 UI（后端 store/API/渲染引擎保留），恢复时移除外层注释即可
     <div class="page-view page-code-intel" id="pageCodeIntel">
       <div class="header code-intel-header">
         <div class="code-intel-header-copy">
@@ -508,6 +511,7 @@ export function getHTML(projectName: string): string {
         </div>
       </div>
     </div>
+    -->
 
     ${getMdViewerPageHTML()}
 

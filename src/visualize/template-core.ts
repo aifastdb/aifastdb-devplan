@@ -202,8 +202,11 @@ function initHorizontalResize(options) {
 })();
 
 var currentPage = 'graph';
-var pageMap = { graph: 'pageGraph', stats: 'pageStats', docs: 'pageDocs', 'code-intel': 'pageCodeIntel', memory: 'pageMemory', 'md-viewer': 'pageMdViewer', settings: 'pageSettings' };
-var routePages = { '/': 'graph', '/graph': 'graph', '/stats': 'stats', '/docs': 'docs', '/code-intel': 'code-intel', '/memory': 'memory', '/md-viewer': 'md-viewer', '/settings': 'settings' };
+// Phase-5: 临时禁用 code-intel 路由（保留后端渲染引擎，恢复时把下面两行注释还原即可）
+// var pageMap = { graph: 'pageGraph', stats: 'pageStats', docs: 'pageDocs', 'code-intel': 'pageCodeIntel', memory: 'pageMemory', 'md-viewer': 'pageMdViewer', settings: 'pageSettings' };
+// var routePages = { '/': 'graph', '/graph': 'graph', '/stats': 'stats', '/docs': 'docs', '/code-intel': 'code-intel', '/memory': 'memory', '/md-viewer': 'md-viewer', '/settings': 'settings' };
+var pageMap = { graph: 'pageGraph', stats: 'pageStats', docs: 'pageDocs', memory: 'pageMemory', 'md-viewer': 'pageMdViewer', settings: 'pageSettings' };
+var routePages = { '/': 'graph', '/graph': 'graph', '/stats': 'stats', '/docs': 'docs', '/memory': 'memory', '/md-viewer': 'md-viewer', '/settings': 'settings' };
 
 function getPageFromPath(pathname) {
   if (!pathname) return 'graph';
@@ -214,7 +217,8 @@ function getPathFromPage(page) {
   if (page === 'graph') return '/graph';
   if (page === 'stats') return '/stats';
   if (page === 'docs') return '/docs';
-  if (page === 'code-intel') return '/code-intel';
+  // Phase-5: code-intel 路由已临时禁用
+  // if (page === 'code-intel') return '/code-intel';
   if (page === 'memory') return '/memory';
   if (page === 'md-viewer') return '/md-viewer';
   if (page === 'settings') return '/settings';
@@ -263,7 +267,8 @@ function navTo(page, options) {
   // 按需加载页面数据
   if (page === 'stats') loadStatsPage();
   if (page === 'docs') loadDocsPage();
-  if (page === 'code-intel') loadCodeIntelPage();
+  // Phase-5: code-intel 页面已临时禁用，保留 loadCodeIntelPage 渲染逻辑不删除
+  // if (page === 'code-intel') loadCodeIntelPage();
   if (page === 'memory') loadMemoryPage();
   if (page === 'md-viewer') loadMdViewerPage();
   if (page === 'settings') loadGatewayAlertPanel();
