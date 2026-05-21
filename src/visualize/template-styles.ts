@@ -234,7 +234,10 @@ export function getStyles(): string {
       overflow: hidden;
       gap: 12px;
     }
-    .sidebar:not(.expanded) .nav-item { padding: 0; justify-content: center; }
+    .sidebar:not(.expanded) .nav-item { padding: 0; justify-content: center; gap: 0; }
+    /* 折叠态：彻底把文本/徽标从布局中移除，避免把图标挤偏甚至裁掉 */
+    .sidebar:not(.expanded) .nav-item-text,
+    .sidebar:not(.expanded) .nav-item-badge { display: none; }
     .nav-item:hover { background: var(--ds-surface-1); color: var(--ds-ink-muted); }
     .nav-item.active {
       color: var(--ds-ink);
