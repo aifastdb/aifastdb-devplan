@@ -6,7 +6,7 @@ import type { AutopilotConfig } from '../types';
 const ALL_TOOLS = [
   {
     name: 'devplan_capabilities',
-    description: 'Output runtime capability diagnostics for ABI/version alignment. Shows project engine, package versions, and native feature readiness (memoryTreeSearch, anchorExtractFromText, applyMutations).\n输出运行时能力诊断信息，用于 ABI/版本对齐排查。包含项目引擎、包版本和 native 能力状态（memoryTreeSearch、anchorExtractFromText、applyMutations）。',
+    description: 'Output runtime capability diagnostics for ABI/version alignment. Shows project engine, package versions, and native feature readiness (memoryTreeSearch, anchorExtractFromText, applyMutations, findEntitiesByProp, listEntitiesByTypePaginated).\n输出运行时能力诊断信息，用于 ABI/版本对齐排查。包含项目引擎、包版本和 native 能力状态（memoryTreeSearch、anchorExtractFromText、applyMutations、findEntitiesByProp、listEntitiesByTypePaginated）。',
     inputSchema: {
       type: 'object' as const,
       properties: {

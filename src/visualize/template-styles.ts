@@ -1018,7 +1018,7 @@ export function getStyles(): string {
     /* Stats Modal — left side panel */
     .stats-modal-overlay { display: none; position: fixed; inset: 0; z-index: 200; pointer-events: none; }
     .stats-modal-overlay.active { display: block; }
-    .stats-modal { position: fixed; top: 0; bottom: 0; left: 48px; width: 300px; background: #1f2937; border-right: 1px solid #374151; display: flex; flex-direction: column; box-shadow: 4px 0 24px rgba(0,0,0,0.4); animation: modal-slide-in 0.2s ease; z-index: 201; pointer-events: auto; transition: left 0.25s ease; min-width: 280px; }
+    .stats-modal { position: fixed; top: 0; bottom: 0; left: var(--ds-sidebar-w-collapsed); width: 300px; background: #1f2937; border-right: 1px solid #374151; display: flex; flex-direction: column; box-shadow: 4px 0 24px rgba(0,0,0,0.4); animation: modal-slide-in 0.2s ease; z-index: 201; pointer-events: auto; transition: left 0.25s ease; min-width: 280px; }
     @keyframes modal-slide-in { from { opacity: 0; transform: translateX(-16px); } to { opacity: 1; transform: translateX(0); } }
     .stats-modal-header { display: flex; align-items: center; justify-content: space-between; padding: 16px 20px; border-bottom: 1px solid #374151; }
     .stats-modal-title { font-size: 15px; font-weight: 700; color: #f3f4f6; }

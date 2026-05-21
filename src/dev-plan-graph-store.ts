@@ -284,6 +284,10 @@ export class DevPlanGraphStore implements IDevPlanStore {
   private nativeAnchorExtractReady: boolean = false;
   /** NAPI 能力探测：applyMutations 是否可用 */
   private nativeApplyMutationsReady: boolean = false;
+  /** Phase-7: NAPI 能力探测：findEntitiesByProp 是否可用（用于把 type+key+value 过滤推到 Rust core） */
+  private nativeFindEntitiesByPropReady: boolean = false;
+  /** Phase-7: NAPI 能力探测：listEntitiesByTypePaginated 是否可用（Phase-97 分页路径） */
+  private nativeListEntitiesByTypePaginatedReady: boolean = false;
   /** Phase-216: 向量搜索诊断快照（构造时写入，getVectorStatus 时读取） */
   private vectorDiag: {
     configSource: 'preset' | 'perceptionConfig' | 'default';
@@ -495,15 +499,25 @@ export class DevPlanGraphStore implements IDevPlanStore {
     try {
       const native = (this.graph as any).native as Record<string, unknown> | undefined;
       const hasNativeFn = (name: string): boolean => Boolean(native && typeof native[name] === 'function');
+      // Phase-7: 上层 wrapper 能力探测（some pass-throughs 只暴露在 wrapper 层）
+      const hasWrapperFn = (name: string): boolean =>
+        typeof (this.graph as any)[name] === 'function';
 
       this.nativeMemoryTreeSearchReady = hasNativeFn('memoryTreeSearch');
       this.nativeAnchorExtractReady = hasNativeFn('anchorExtractFromText');
       this.nativeApplyMutationsReady = hasNativeFn('applyMutations');
+      // Phase-7: 这两个走 wrapper 层探测（wrapper 是 native 的 thin pass-through，存在性一致）
+      this.nativeFindEntitiesByPropReady =
+        hasWrapperFn('findEntitiesByProp') && hasNativeFn('findEntitiesByProp');
+      this.nativeListEntitiesByTypePaginatedReady =
+        hasWrapperFn('listEntitiesByTypePaginated') && hasNativeFn('listEntitiesByTypePaginated');
 
       const missing: string[] = [];
       if (!this.nativeMemoryTreeSearchReady) missing.push('memoryTreeSearch');
       if (!this.nativeAnchorExtractReady) missing.push('anchorExtractFromText');
       if (!this.nativeApplyMutationsReady) missing.push('applyMutations');
+      if (!this.nativeFindEntitiesByPropReady) missing.push('findEntitiesByProp');
+      if (!this.nativeListEntitiesByTypePaginatedReady) missing.push('listEntitiesByTypePaginated');
 
       if (missing.length > 0) {
         console.warn(
@@ -525,11 +539,15 @@ export class DevPlanGraphStore implements IDevPlanStore {
     memoryTreeSearch: boolean;
     anchorExtractFromText: boolean;
     applyMutations: boolean;
+    findEntitiesByProp: boolean;
+    listEntitiesByTypePaginated: boolean;
   } {
     return {
       memoryTreeSearch: this.nativeMemoryTreeSearchReady,
       anchorExtractFromText: this.nativeAnchorExtractReady,
       applyMutations: this.nativeApplyMutationsReady,
+      findEntitiesByProp: this.nativeFindEntitiesByPropReady,
+      listEntitiesByTypePaginated: this.nativeListEntitiesByTypePaginatedReady,
     };
   }
 
@@ -935,8 +953,25 @@ export class DevPlanGraphStore implements IDevPlanStore {
     return duplicates;
   }
 
-  /** 按 entityType 列出所有实体并按属性过滤 */
+  /**
+   * 按 entityType 列出当前项目的全部实体。
+   *
+   * Phase-7 优化：优先调用 NAPI `findEntitiesByProp(type, 'projectName', this.projectName)`，
+   * 把 projectName 过滤推到 Rust core，避免把其它项目的实体也跨 NAPI 序列化到 JS。
+   * 不可用时回退到旧的 `listEntitiesByType + JS filter`。
+   */
   private findEntitiesByType(entityType: string): Entity[] {
+    if (this.nativeFindEntitiesByPropReady) {
+      try {
+        return (this.graph as any).findEntitiesByProp(entityType, 'projectName', this.projectName) as Entity[];
+      } catch (e) {
+        console.warn(
+          `[DevPlan] findEntitiesByProp(type='${entityType}', projectName) failed, falling back to listEntitiesByType: ${
+            e instanceof Error ? e.message : String(e)
+          }`
+        );
+      }
+    }
     return this.graph.listEntitiesByType(entityType).filter(
       (e) => (e.properties as any)?.projectName === this.projectName
     );
@@ -947,13 +982,33 @@ export class DevPlanGraphStore implements IDevPlanStore {
    *
    * Phase-21 改进：当同一 key+value 有多个 Entity（WAL 重复），
    * 选择状态优先级最高 + updatedAt 最新的那个（而非随机第一个）。
+   *
+   * Phase-7 优化：优先走 NAPI `findEntitiesByProp(type, key, value)`，把过滤推到
+   * Rust core，避免把整类实体跨 NAPI 序列化到 JS 后再 filter。仅保留必要的
+   * projectName 二次过滤（多项目共享同一图库时）。回退路径保持原语义。
    */
   private findEntityByProp(entityType: string, key: string, value: string): Entity | null {
-    const entities = this.findEntitiesByType(entityType);
-    const matches = entities.filter((e) => (e.properties as any)?.[key] === value);
+    let matches: Entity[];
+    if (this.nativeFindEntitiesByPropReady) {
+      try {
+        const raw = (this.graph as any).findEntitiesByProp(entityType, key, value) as Entity[];
+        matches = raw.filter((e) => (e.properties as any)?.projectName === this.projectName);
+      } catch (e) {
+        console.warn(
+          `[DevPlan] findEntitiesByProp(type='${entityType}', key='${key}') failed, falling back: ${
+            e instanceof Error ? e.message : String(e)
+          }`
+        );
+        const entities = this.findEntitiesByType(entityType);
+        matches = entities.filter((e) => (e.properties as any)?.[key] === value);
+      }
+    } else {
+      const entities = this.findEntitiesByType(entityType);
+      matches = entities.filter((e) => (e.properties as any)?.[key] === value);
+    }
     if (matches.length === 0) return null;
     if (matches.length === 1) return matches[0];
-    // 多个匹配 → 去重取最优
+    // 多个匹配 → Phase-21 去重取最优
     return this.deduplicateEntities(matches, key)[0] || null;
   }
 

@@ -357,6 +357,10 @@ export interface IDevPlanStore {
     memoryTreeSearch: boolean;
     anchorExtractFromText: boolean;
     applyMutations: boolean;
+    /** Phase-7: NAPI 原生 findEntitiesByProp 是否可用（热路径过滤推下沉） */
+    findEntitiesByProp?: boolean;
+    /** Phase-7: NAPI 原生 listEntitiesByTypePaginated 是否可用（分页路径推下沉） */
+    listEntitiesByTypePaginated?: boolean;
   };
 
   /**

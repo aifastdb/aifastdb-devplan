@@ -46,6 +46,8 @@ export async function handleCapabilitiesToolCall(name: string, args: ToolArgs, d
             memoryTreeSearch: false,
             anchorExtractFromText: false,
             applyMutations: false,
+            findEntitiesByProp: false,
+            listEntitiesByTypePaginated: false,
           };
       const aifastdbVersion = safeReadDependencyVersion('aifastdb');
       return JSON.stringify({
@@ -75,6 +77,8 @@ export async function handleCapabilitiesToolCall(name: string, args: ToolArgs, d
             memoryTreeSearch: false,
             anchorExtractFromText: false,
             applyMutations: false,
+            findEntitiesByProp: false,
+            listEntitiesByTypePaginated: false,
           };
       const aifastdbVersion = safeReadDependencyVersion('aifastdb');
       const aifastdbPkgJsonPath = safeResolveModuleFile('aifastdb/package.json');

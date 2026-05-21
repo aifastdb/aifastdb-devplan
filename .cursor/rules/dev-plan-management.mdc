@@ -1,11 +1,11 @@
 ---
-description: pythontoolbox 项目的 DevPlan 配置。包含项目标识、文档层级、开发阶段。通用的 DevPlan 工作流规则由用户级全局规则提供。
+description: aifastdb-devplan 项目的 DevPlan 配置。包含项目标识、文档层级、开发阶段。通用的 DevPlan 工作流规则由用户级全局规则提供。
 globs: []
 alwaysApply: true
 mcpServers: aifastdb-devplan
 ---
 
-# pythontoolbox 项目 — DevPlan 配置
+# aifastdb-devplan 项目 — DevPlan 配置
 
 > **MCP Server**: `aifastdb-devplan`
 > 通用的 DevPlan 工作流（触发词识别、阶段工作流、完成流程等）由用户级全局 Cursor Rule 提供。
@@ -13,33 +13,33 @@ mcpServers: aifastdb-devplan
 ## 项目标识
 
 ```
-projectName = "pythontoolbox"
+projectName = "aifastdb-devplan"
 ```
 
 ## 文档层级
 
 | 层级 | 文件 | 用途 | 大小 |
 |------|------|------|------|
-| Layer 1 (鸟瞰) | `docs/pythontoolbox-overview.md` | AI 首选阅读，< 500 行 | — |
+| Layer 1 (鸟瞰) | `docs/aifastdb-devplan-overview.md` | AI 首选阅读，< 500 行 | — |
 | Layer 2 (详细) | （项目完整设计文档） | 分段读取 | — |
-| Layer 3 (实时) | `.devplan/pythontoolbox/` | MCP 工具查询任务状态 | — |
+| Layer 3 (实时) | `.devplan/aifastdb-devplan/` | MCP 工具查询任务状态 | — |
 
 ## 快捷操作
 
 ```
-devplan_get_progress(projectName: "pythontoolbox")
-devplan_list_tasks(projectName: "pythontoolbox")
-devplan_list_tasks(projectName: "pythontoolbox", status: "pending")
-devplan_complete_task(projectName: "pythontoolbox", taskId: "T1.1")
-devplan_sync_git(projectName: "pythontoolbox", dryRun: true)
-devplan_list_sections(projectName: "pythontoolbox")
-devplan_get_section(projectName: "pythontoolbox", section: "overview")
-devplan_search_sections(projectName: "pythontoolbox", query: "171e9a18-c7e9-430b-9e3d-fa6d384a0b4e", searchBy: "id")
-devplan_search_sections(projectName: "pythontoolbox", query: "向量存储", searchBy: "title")
-devplan_search_sections(projectName: "pythontoolbox", query: "BM25 中文分词", searchBy: "content")
-devplan_search_sections(projectName: "pythontoolbox", query: "文档搜索", searchBy: "auto", mode: "hybrid")
-devplan_export_markdown(projectName: "pythontoolbox", scope: "tasks")
-devplan_list_modules(projectName: "pythontoolbox")
+devplan_get_progress(projectName: "aifastdb-devplan")
+devplan_list_tasks(projectName: "aifastdb-devplan")
+devplan_list_tasks(projectName: "aifastdb-devplan", status: "pending")
+devplan_complete_task(projectName: "aifastdb-devplan", taskId: "T1.1")
+devplan_sync_git(projectName: "aifastdb-devplan", dryRun: true)
+devplan_list_sections(projectName: "aifastdb-devplan")
+devplan_get_section(projectName: "aifastdb-devplan", section: "overview")
+devplan_search_sections(projectName: "aifastdb-devplan", query: "171e9a18-c7e9-430b-9e3d-fa6d384a0b4e", searchBy: "id")
+devplan_search_sections(projectName: "aifastdb-devplan", query: "向量存储", searchBy: "title")
+devplan_search_sections(projectName: "aifastdb-devplan", query: "BM25 中文分词", searchBy: "content")
+devplan_search_sections(projectName: "aifastdb-devplan", query: "文档搜索", searchBy: "auto", mode: "hybrid")
+devplan_export_markdown(projectName: "aifastdb-devplan", scope: "tasks")
+devplan_list_modules(projectName: "aifastdb-devplan")
 ```
 
 ## 文档搜索约定
@@ -82,7 +82,7 @@ devplan_list_modules(projectName: "pythontoolbox")
 
 ```
 devplan_create_main_task(
-  projectName: "pythontoolbox",
+  projectName: "aifastdb-devplan",
   taskId: "phase-43",
   title: "Phase-43: DevPlan phase title prefix rule alignment",
   priority: "P1"
@@ -92,7 +92,7 @@ devplan_create_main_task(
 ## 注意事项
 
 1. **优先读概览文件**：初次了解项目时，先读概览文件（< 500 行），再按需深入完整设计文档
-2. **数据存储位置**：本项目的 devplan 数据存储在项目根目录的 `.devplan/pythontoolbox/` 下
+2. **数据存储位置**：本项目的 devplan 数据存储在项目根目录的 `.devplan/aifastdb-devplan/` 下
 3. **通过 MCP 操作任务**：任务状态管理使用 `devplan_*` 系列 MCP 工具，不要手动编辑数据文件
 4. **完成任务后同步**：完成代码实现后，调用 `devplan_complete_task` 持久化状态（自动锚定 Git commit）
 5. **Git 回滚后检查**：如果执行了 `git reset` 或切换分支，运行 `devplan_sync_git` 检查任务状态一致性
@@ -119,9 +119,9 @@ devplan_create_main_task(
 
 读回方式（任选其一，覆盖刚改动的范围即可）：
 
-- `devplan_search_tasks(projectName: "pythontoolbox", query: "<刚改的 phase id>", includeSubTasks: true)`
-- `devplan_get_module(projectName: "pythontoolbox", moduleId: "<刚改的 module id>")`
-- `devplan_list_tasks(projectName: "pythontoolbox", limit: ...)`
+- `devplan_search_tasks(projectName: "aifastdb-devplan", query: "<刚改的 phase id>", includeSubTasks: true)`
+- `devplan_get_module(projectName: "aifastdb-devplan", moduleId: "<刚改的 module id>")`
+- `devplan_list_tasks(projectName: "aifastdb-devplan", limit: ...)`
 
 ### 回滚处置
 

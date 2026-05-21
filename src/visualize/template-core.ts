@@ -22,13 +22,24 @@ function toggleSidebar() {
   setTimeout(function() { if (network) network.redraw(); }, 300);
 }
 
-/** 根据侧边栏状态更新左侧弹层位置 */
+/** 根据侧边栏状态更新左侧弹层位置（吸在 sidebar 右边，避免遮挡） */
 function updateStatsModalPosition() {
   var modal = document.querySelector('.stats-modal');
   var sidebar = document.getElementById('sidebar');
-  if (modal && sidebar) {
-    modal.style.left = (sidebar.classList.contains('expanded') ? 200 : 48) + 'px';
+  if (!modal || !sidebar) return;
+  // 读 CSS 变量的目标宽度而不是 offsetWidth：
+  // 点击 toggle 后 sidebar 立刻变 expanded，但 offsetWidth 仍是过渡前的旧值；
+  // 用变量目标值能让 sidebar 与 modal 的 transition 并行跑，避免 modal 先回旧位再追。
+  var root = getComputedStyle(document.documentElement);
+  var isExpanded = sidebar.classList.contains('expanded');
+  var varName = isExpanded ? '--ds-sidebar-w-expanded' : '--ds-sidebar-w-collapsed';
+  var raw = (root.getPropertyValue(varName) || '').trim();
+  var px = parseFloat(raw);
+  if (!isFinite(px) || px <= 0) {
+    // 兜底：如果 CSS 变量丢失，再退回 offsetWidth / 默认 56
+    px = sidebar.offsetWidth || (isExpanded ? 224 : 56);
   }
+  modal.style.left = px + 'px';
 }
 
 function safeLocalStorageGet(key) {
@@ -195,7 +206,7 @@ function initHorizontalResize(options) {
     storageKey: 'devplan_stats_modal_width',
     getMaxWidth: function() {
       var sidebar = document.getElementById('sidebar');
-      var leftOffset = sidebar && sidebar.classList.contains('expanded') ? 200 : 48;
+      var leftOffset = sidebar ? (sidebar.offsetWidth || (sidebar.classList.contains('expanded') ? 224 : 56)) : 56;
       return Math.max(280, window.innerWidth - leftOffset - 240);
     }
   });
