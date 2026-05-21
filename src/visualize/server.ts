@@ -1363,9 +1363,9 @@ function startServer(projectName: string, basePath: string, port: number): void 
             res.end(JSON.stringify({ error: `主任务 "${delTaskId}" 未找到` }));
             break;
           }
-          if (delTarget.status !== 'cancelled') {
+          if (delTarget.status !== 'cancelled' && delTarget.status !== 'revoked') {
             res.writeHead(409, { 'Content-Type': 'application/json; charset=utf-8' });
-            res.end(JSON.stringify({ error: `仅允许删除已取消的任务，当前状态: ${delTarget.status}` }));
+            res.end(JSON.stringify({ error: `仅允许删除已取消或已撤销的任务，当前状态: ${delTarget.status}` }));
             break;
           }
           const delResult = delStore.deleteTask(delTaskId, 'main');

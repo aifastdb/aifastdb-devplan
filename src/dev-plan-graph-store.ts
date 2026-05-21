@@ -269,6 +269,7 @@ export class DevPlanGraphStore implements IDevPlanStore {
   private synapse: VibeSynapse | null = null;
   /** 语义搜索是否在配置上启用（懒初始化前为 true，ready 仍可能为 false） */
   private semanticSearchConfigured: boolean = false;
+  private enableMilestonesEmbeddingOnAutoUpdate: boolean = true;
   /** 语义搜索是否成功初始化 */
   private semanticSearchReady: boolean = false;
   /** 是否已经尝试过初始化 Synapse（避免失败后每次请求都重复冷启动） */
@@ -378,6 +379,7 @@ export class DevPlanGraphStore implements IDevPlanStore {
     this.projectName = projectName;
     this.gitCwd = config.gitCwd;
     this.semanticSearchConfigured = Boolean(config.enableSemanticSearch);
+    this.enableMilestonesEmbeddingOnAutoUpdate = Boolean(config.enableMilestonesEmbeddingOnAutoUpdate);
     this.synapseConfig = this.semanticSearchConfigured ? config : null;
 
     // ── WAL 目录迁移：旧名 → 语义化新名 ──
@@ -3983,6 +3985,10 @@ export class DevPlanGraphStore implements IDevPlanStore {
         updatedAt: now,
       },
     });
+    if (this.enableMilestonesEmbeddingOnAutoUpdate) {
+      // 可选恢复 milestones 文档 embedding；默认开启，可在配置中显式关闭。
+      this.autoIndexDocument(milestonesDoc.id, milestonesDoc.title, updatedContent);
+    }
     this.graph.flush();
   }
 

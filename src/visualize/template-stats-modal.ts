@@ -48,7 +48,7 @@ function toggleMainTaskMoreMenu(btn, taskId, nodeId, status) {
     // 已完成任务支持手动撤销（恢复代码后等效于 syncWithGit 自动撤销）
     menuHtml += '<button class="stats-modal-more-item" onclick="event.stopPropagation();markMainTaskStatus(\\x27' + safeNodeId + '\\x27,\\x27' + safeTaskId + '\\x27,\\x27revoked\\x27,event)">↩️ 撤销</button>';
   }
-  if (status === 'cancelled') {
+  if (status === 'cancelled' || status === 'revoked') {
     menuHtml += '<button class="stats-modal-more-item stats-modal-more-item--danger" onclick="event.stopPropagation();deleteMainTask(\\x27' + safeNodeId + '\\x27,\\x27' + safeTaskId + '\\x27,event)">🗑️ 删除任务</button>';
   }
   menu.innerHTML = menuHtml;
@@ -149,7 +149,7 @@ function deleteMainTask(nodeId, taskId, e) {
   if (e) e.stopPropagation();
   closeMainTaskMoreMenu();
   if (!taskId) return;
-  if (!confirm('确定要删除已取消的任务 "' + taskId + '" 吗？\\n此操作会级联删除其所有子任务且不可恢复。')) return;
+  if (!confirm('确定要删除任务 "' + taskId + '" 吗？\\n仅允许删除「已取消」或「已撤销」状态任务。\\n此操作会级联删除其所有子任务且不可恢复。')) return;
   fetch('/api/main-task/delete', {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },

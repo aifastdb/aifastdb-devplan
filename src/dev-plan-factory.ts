@@ -75,6 +75,11 @@ export interface DevPlanConfig {
   /** 是否启用语义搜索（graph 引擎可用时生效） */
   enableSemanticSearch?: boolean;
   /**
+   * 是否在任务完成自动更新 milestones 时恢复文档向量 embedding（默认 true）。
+   * 关闭时仅更新 milestones 文本内容，不触发 embedding 计算。
+   */
+  enableMilestonesEmbeddingOnAutoUpdate?: boolean;
+  /**
    * Embedding 向量维度覆盖（Matryoshka 截断）
    *
    * 通常不需要设置 — 维度从 modelId 自动解析。
@@ -558,6 +563,9 @@ export function createDevPlan(
     ?? workspaceConfig?.llmGatewayMemory;
   const memoryGatewayAdapter = projectConfig?.memoryGatewayAdapter
     ?? workspaceConfig?.memoryGatewayAdapter;
+  const enableMilestonesEmbeddingOnAutoUpdate = projectConfig?.enableMilestonesEmbeddingOnAutoUpdate
+    ?? workspaceConfig?.enableMilestonesEmbeddingOnAutoUpdate
+    ?? true;
 
   // 推导项目根目录（用于 git 操作的 cwd）
   // base 是 .devplan 目录路径（如 D:\xxx\project\.devplan），dirname 即项目根
@@ -583,6 +591,7 @@ export function createDevPlan(
       llmAnalyze,
       llmGatewayMemory,
       memoryGatewayAdapter,
+      enableMilestonesEmbeddingOnAutoUpdate,
       gitCwd,
     });
   } else {
