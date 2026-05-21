@@ -49,7 +49,8 @@ export async function handleSectionToolCall(
       }
 
       const plan = getDevPlan(args.projectName);
-      const id = plan.saveSection({
+      // Phase-235: 优先 saveSectionAsync 走 applyMutations 批写（doc relation 合并）
+      const saveSectionInput = {
         projectName: args.projectName,
         section: args.section as DevPlanSection,
         title: args.title,
@@ -59,7 +60,10 @@ export async function handleSectionToolCall(
         moduleId: args.moduleId,
         relatedTaskIds: args.relatedTaskIds,
         parentDoc: args.parentDoc,
-      });
+      };
+      const id = typeof plan.saveSectionAsync === 'function'
+        ? await plan.saveSectionAsync(saveSectionInput)
+        : plan.saveSection(saveSectionInput);
 
       return JSON.stringify({
         success: true,

@@ -104,6 +104,38 @@ export interface IDevPlanStore {
   createMainTask(input: MainTaskInput): MainTask;
 
   /**
+   * Phase-234: createMainTask 的 async 版本，把多步 putRelation 合并为一次 applyMutations 原子批写。
+   *
+   * 调用约束：
+   * - 仅 graph 引擎实现真正的 applyMutations 路径，document 引擎默认薄包装走 sync createMainTask。
+   * - 当 NAPI 能力 applyMutations 不可用时，graph 引擎也会无缝 fallback 到 sync 路径。
+   * - 语义与 createMainTask 等价；调用方可安全替换。
+   * - 当前可选（optional），调用方应做 `await plan.createMainTaskAsync?.(input) ?? plan.createMainTask(input)` 兜底。
+   */
+  createMainTaskAsync?(input: MainTaskInput): Promise<MainTask>;
+
+  /**
+   * Phase-235: upsertMainTask 的 async 版本（applyMutations 批写 module + doc 关联）。
+   * 见 createMainTaskAsync 注释，可选实现 + 调用方需 `await plan.upsertMainTaskAsync?.(input) ?? plan.upsertMainTask(input)` 兜底。
+   */
+  upsertMainTaskAsync?(input: MainTaskInput, options?: { preserveStatus?: boolean; status?: TaskStatus }): Promise<MainTask>;
+
+  /**
+   * Phase-235: addSubTask 的 async 版本。
+   */
+  addSubTaskAsync?(input: SubTaskInput): Promise<SubTask>;
+
+  /**
+   * Phase-235: deleteTask 的 async 版本（main 分支收益最大：N+1 个 DeleteEntity 一次批写）。
+   */
+  deleteTaskAsync?(taskId: string, taskType?: 'main' | 'sub'): Promise<import('./types').DeleteTaskResult>;
+
+  /**
+   * Phase-235: saveSection 的 async 版本（合并 doc relation 的多步 putRelation/deleteRelation）。
+   */
+  saveSectionAsync?(input: DevPlanDocInput): Promise<string>;
+
+  /**
    * 幂等导入主任务（Upsert）
    */
   upsertMainTask(input: MainTaskInput, options?: {

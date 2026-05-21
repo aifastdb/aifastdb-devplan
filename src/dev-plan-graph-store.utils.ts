@@ -182,21 +182,83 @@ export function mapGroupToDevPlanType(group: string | number): DevPlanGraphNode[
   return 'sub-task';
 }
 
+/**
+ * Phase-237 P1：完成任务 (devplan_complete_task) 的 wall-clock 瓶颈是这里的
+ * `execSync('git rev-parse')`。Windows 上 fork git 进程 ~200ms / 次，连续 complete
+ * 多个 sub-task 时累计可达数秒（实测两次 complete 间隔 5.16s）。
+ *
+ * 优化手段：
+ *  1) **进程级 TTL 缓存**（默认 5s）：批量 complete / save 短时间内复用 HEAD 哈希。
+ *     缓存 key 为 gitCwd，进程退出失效；TTL 短到不可能跨越用户的真实 git commit。
+ *  2) **AIFASTDB_DEVPLAN_GIT_ANCHOR_DISABLED 全局开关**：CI / 无 git 项目 / 极致延迟敏感
+ *     场景下完全跳过 spawn，commit hash 返回 undefined。
+ */
+const GIT_HEAD_CACHE_TTL_MS = (() => {
+  const raw = process.env.AIFASTDB_DEVPLAN_GIT_ANCHOR_TTL_MS;
+  const n = raw ? Number(raw) : NaN;
+  return Number.isFinite(n) && n >= 0 ? n : 5000;
+})();
+
+function gitAnchorDisabled(): boolean {
+  const raw = String(process.env.AIFASTDB_DEVPLAN_GIT_ANCHOR_DISABLED || '').trim().toLowerCase();
+  return raw === '1' || raw === 'true' || raw === 'yes';
+}
+
+const gitHeadCache = new Map<string, { value: string | undefined; expiresAt: number }>();
+
 export function getCurrentGitCommit(gitCwd?: string): string | undefined {
+  if (gitAnchorDisabled()) return undefined;
+
+  const cacheKey = gitCwd || '__default__';
+  if (GIT_HEAD_CACHE_TTL_MS > 0) {
+    const entry = gitHeadCache.get(cacheKey);
+    if (entry && entry.expiresAt > Date.now()) {
+      return entry.value;
+    }
+  }
+
+  let value: string | undefined;
   try {
     const { execSync } = require('child_process');
-    return execSync('git rev-parse --short HEAD', {
+    value = execSync('git rev-parse --short HEAD', {
       encoding: 'utf-8',
       timeout: 5000,
       stdio: ['pipe', 'pipe', 'pipe'],
       cwd: gitCwd,
     }).trim();
   } catch {
-    return undefined;
+    value = undefined;
+  }
+
+  if (GIT_HEAD_CACHE_TTL_MS > 0) {
+    gitHeadCache.set(cacheKey, { value, expiresAt: Date.now() + GIT_HEAD_CACHE_TTL_MS });
+  }
+  return value;
+}
+
+/** 测试 / debug hook：手动清空 HEAD 缓存（例如 syncWithGit 检测到回滚后） */
+export function invalidateGitHeadCache(gitCwd?: string): void {
+  if (gitCwd) {
+    gitHeadCache.delete(gitCwd);
+  } else {
+    gitHeadCache.clear();
   }
 }
 
+const ancestorCache = new Map<string, { value: boolean; expiresAt: number }>();
+
 export function isAncestor(commit: string, target: string, gitCwd?: string): boolean {
+  if (gitAnchorDisabled()) return false;
+
+  const cacheKey = `${gitCwd || '__default__'}|${commit}|${target}`;
+  if (GIT_HEAD_CACHE_TTL_MS > 0) {
+    const entry = ancestorCache.get(cacheKey);
+    if (entry && entry.expiresAt > Date.now()) {
+      return entry.value;
+    }
+  }
+
+  let value = false;
   try {
     const { execSync } = require('child_process');
     execSync(`git merge-base --is-ancestor ${commit} ${target}`, {
@@ -204,10 +266,15 @@ export function isAncestor(commit: string, target: string, gitCwd?: string): boo
       stdio: ['pipe', 'pipe', 'pipe'],
       cwd: gitCwd,
     });
-    return true;
+    value = true;
   } catch {
-    return false;
+    value = false;
   }
+
+  if (GIT_HEAD_CACHE_TTL_MS > 0) {
+    ancestorCache.set(cacheKey, { value, expiresAt: Date.now() + GIT_HEAD_CACHE_TTL_MS });
+  }
+  return value;
 }
 
 export function progressBar(percent: number): string {

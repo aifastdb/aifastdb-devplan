@@ -349,6 +349,34 @@ export class DevPlanDocumentStore implements IDevPlanStore {
   // ==========================================================================
 
   /**
+   * Phase-234: createMainTask 的 async 兼容封装。document 引擎是纯本地 JSON 持久化，
+   * 没有 NAPI 边界穿越问题，因此直接转发到同步 createMainTask 即可保持接口对齐。
+   */
+  async createMainTaskAsync(input: MainTaskInput): Promise<MainTask> {
+    return this.createMainTask(input);
+  }
+
+  /** Phase-235: 与 createMainTaskAsync 同理，纯本地 JSON 直接转发 sync 路径。 */
+  async upsertMainTaskAsync(input: MainTaskInput, options?: { preserveStatus?: boolean; status?: TaskStatus }): Promise<MainTask> {
+    return this.upsertMainTask(input, options);
+  }
+
+  /** Phase-235: addSubTask async 兼容封装。 */
+  async addSubTaskAsync(input: SubTaskInput): Promise<SubTask> {
+    return this.addSubTask(input);
+  }
+
+  /** Phase-235: deleteTask async 兼容封装。 */
+  async deleteTaskAsync(taskId: string, taskType?: 'main' | 'sub'): Promise<DeleteTaskResult> {
+    return this.deleteTask(taskId, taskType);
+  }
+
+  /** Phase-235: saveSection async 兼容封装。 */
+  async saveSectionAsync(input: DevPlanDocInput): Promise<string> {
+    return this.saveSection(input);
+  }
+
+  /**
    * 创建主任务（开发阶段）
    */
   createMainTask(input: MainTaskInput): MainTask {

@@ -41,7 +41,12 @@ export async function handleTaskToolCall(
         const plan = getDevPlan(args.projectName);
         try {
           // Phase-23: createMainTask 内部已幂等处理（upsertEntityByProp），无需额外检查
-          const mainTask = plan.createMainTask({
+          // Phase-237: 回滚 Phase-234 的 createMainTaskAsync 分支。Microbenchmark 实测
+          //   100 轮均值 sync 61.63ms vs async 77.68ms (+26.0% 退化)。原因：新建 main task
+          //   只有 2 条 PutRelation (project + module)，applyMutations 的 Tokio async runtime
+          //   + 完整 Relation payload (8 字段) 序列化成本，比 sync putRelation 简化 schema 贵。
+          //   保留 createMainTaskAsync 实现以备后续 batch import 场景调用，但 MCP 入口强走 sync。
+          const createInput = {
             projectName: args.projectName,
             taskId: args.taskId,
             title: args.title,
@@ -52,7 +57,8 @@ export async function handleTaskToolCall(
             relatedSections: args.relatedDocSections,
             relatedPromptIds: args.relatedPromptIds,
             order: args.order,
-          });
+          };
+          const mainTask = plan.createMainTask(createInput);
 
           return JSON.stringify({
             success: true,
@@ -79,7 +85,8 @@ export async function handleTaskToolCall(
       const plan = getDevPlan(args.projectName);
       try {
         // Phase-23: addSubTask 内部已幂等处理（upsertEntityByProp），无需额外检查
-        const subTask = plan.addSubTask({
+        // Phase-235: 优先调 async 版（applyMutations 批写），未实现时 fallback sync。
+        const addSubInput = {
           projectName: args.projectName,
           taskId: args.taskId,
           parentTaskId: args.parentTaskId,
@@ -87,7 +94,10 @@ export async function handleTaskToolCall(
           estimatedHours: args.estimatedHours,
           description: args.description,
           order: args.order,
-        });
+        };
+        const subTask = typeof plan.addSubTaskAsync === 'function'
+          ? await plan.addSubTaskAsync(addSubInput)
+          : plan.addSubTask(addSubInput);
 
         return JSON.stringify({
           success: true,
@@ -112,7 +122,11 @@ export async function handleTaskToolCall(
 
       const plan = getDevPlan(args.projectName);
       try {
-        const result = plan.deleteTask(args.taskId, args.taskType as 'main' | 'sub' | undefined);
+        // Phase-235: main 分支收益最大（N+1 个 DeleteEntity 合并），优先调 async 版。
+        const taskTypeArg = args.taskType as 'main' | 'sub' | undefined;
+        const result = typeof plan.deleteTaskAsync === 'function'
+          ? await plan.deleteTaskAsync(args.taskId, taskTypeArg)
+          : plan.deleteTask(args.taskId, taskTypeArg);
         return JSON.stringify({
           success: result.deleted,
           ...result,
@@ -174,21 +188,23 @@ export async function handleTaskToolCall(
           if (!args.priority) {
             throw new McpError(ErrorCode.InvalidParams, 'Missing required for main task: priority');
           }
-          const mainTask = plan.upsertMainTask(
-            {
-              projectName: args.projectName,
-              taskId: args.taskId,
-              title: args.title,
-              priority: args.priority as TaskPriority,
-              description: args.description,
-              estimatedHours: args.estimatedHours,
-              moduleId: args.moduleId,
-              relatedSections: args.relatedDocSections,
-              relatedPromptIds: args.relatedPromptIds,
-              order: args.order,
-            },
-            { preserveStatus, status: targetStatus }
-          );
+          // Phase-235: 优先 upsertMainTaskAsync 走 applyMutations 批写（module + doc 关联）
+          const upsertMainInput = {
+            projectName: args.projectName,
+            taskId: args.taskId,
+            title: args.title,
+            priority: args.priority as TaskPriority,
+            description: args.description,
+            estimatedHours: args.estimatedHours,
+            moduleId: args.moduleId,
+            relatedSections: args.relatedDocSections,
+            relatedPromptIds: args.relatedPromptIds,
+            order: args.order,
+          };
+          const upsertOpts = { preserveStatus, status: targetStatus };
+          const mainTask = typeof plan.upsertMainTaskAsync === 'function'
+            ? await plan.upsertMainTaskAsync(upsertMainInput, upsertOpts)
+            : plan.upsertMainTask(upsertMainInput, upsertOpts);
           return JSON.stringify({
             success: true,
             taskType: 'main',
