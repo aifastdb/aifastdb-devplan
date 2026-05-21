@@ -38,7 +38,7 @@ function toggleMainTaskMoreMenu(btn, taskId, nodeId, status) {
   menu.className = 'stats-modal-more-menu';
   var menuHtml = '';
   menuHtml += '<button class="stats-modal-more-item" onclick="event.stopPropagation();refreshSingleMainTask(\\x27' + safeNodeId + '\\x27,\\x27' + safeTaskId + '\\x27,event)">🔄 刷新</button>';
-  if (status === 'pending') {
+  if (status === 'pending' || status === 'in_progress') {
     menuHtml += '<button class="stats-modal-more-item" onclick="event.stopPropagation();markMainTaskStatus(\\x27' + safeNodeId + '\\x27,\\x27' + safeTaskId + '\\x27,\\x27completed\\x27,event)">✅ 标记为完成</button>';
   }
   if (CANCELABLE_MAIN_TASK_STATUSES[status]) {
@@ -119,6 +119,9 @@ function markMainTaskStatus(nodeId, taskId, status, e) {
   if (e) e.stopPropagation();
   closeMainTaskMoreMenu();
   if (!taskId || (status !== 'completed' && status !== 'cancelled' && status !== 'revoked')) return;
+  if (status === 'completed' && !confirm('确认将任务 "' + taskId + '" 标记为「已完成」吗？\\n通常该状态由编程工具通过 MCP 命令自动更新。')) {
+    return;
+  }
   // 撤销操作显式二次确认，避免误点导致已完成任务被回退
   if (status === 'revoked' && !confirm('确定要撤销已完成的任务 "' + taskId + '" 吗？\\n撤销后状态会变为「已撤销」。')) {
     return;
