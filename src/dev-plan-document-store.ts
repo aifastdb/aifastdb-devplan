@@ -1183,18 +1183,14 @@ export class DevPlanDocumentStore implements IDevPlanStore {
       updatedMainTask.totalSubtasks > 0 &&
       updatedMainTask.completedSubtasks >= updatedMainTask.totalSubtasks;
 
-    if (mainTaskCompleted && updatedMainTask.status !== 'completed') {
-      const completedMain = this.updateMainTaskStatus(updatedSubTask.parentTaskId, 'completed');
-      if (completedMain) {
-        // 5. 更新 milestones 文档（如果存在）
-        this.autoUpdateMilestones(completedMain);
-        return {
-          subTask: updatedSubTask,
-          mainTask: completedMain,
-          mainTaskCompleted: true,
-          completedAtCommit: commitHash,
-        };
-      }
+    if (mainTaskCompleted) {
+      const completedMain = this.completeMainTaskCore(updatedSubTask.parentTaskId);
+      return {
+        subTask: updatedSubTask,
+        mainTask: completedMain,
+        mainTaskCompleted: true,
+        completedAtCommit: commitHash,
+      };
     }
 
     return {
@@ -1209,6 +1205,18 @@ export class DevPlanDocumentStore implements IDevPlanStore {
    * 手动完成主任务（跳过子任务检查）
    */
   completeMainTask(taskId: string): MainTask {
+    return this.completeMainTaskCore(taskId);
+  }
+
+  private completeMainTaskCore(taskId: string): MainTask {
+    const existing = this.getMainTask(taskId);
+    if (!existing) {
+      throw new Error(`Main task "${taskId}" not found for project "${this.projectName}"`);
+    }
+    if (existing.status === 'completed') {
+      return existing;
+    }
+
     const result = this.updateMainTaskStatus(taskId, 'completed');
     if (!result) {
       throw new Error(`Main task "${taskId}" not found for project "${this.projectName}"`);
@@ -2132,20 +2140,41 @@ export class DevPlanDocumentStore implements IDevPlanStore {
   private autoUpdateMilestones(completedMainTask: MainTask): void {
     const milestonesDoc = this.getSection('milestones');
     if (!milestonesDoc) return;
+    const rowPrefix = `| ${completedMainTask.taskId} |`;
+    if (milestonesDoc.content.includes(rowPrefix)) return;
 
     const dateStr = new Date().toISOString().split('T')[0];
     const appendLine = `\n| ${completedMainTask.taskId} | ${completedMainTask.title} | ${dateStr} | ✅ 已完成 |`;
-
-    // 追加到 milestones 内容末尾
     const updatedContent = milestonesDoc.content + appendLine;
-    this.saveSection({
-      projectName: this.projectName,
-      section: 'milestones',
-      title: milestonesDoc.title,
+    const now = Date.now();
+
+    // milestones 走专用快速路径：直接覆写同一文档，避免 saveSection 的通用逻辑开销
+    this.deleteAndEnsureTimestampAdvance(this.docStore, milestonesDoc.id);
+    const docInput: DocumentInput = {
       content: updatedContent,
-      version: milestonesDoc.version,
-      relatedSections: milestonesDoc.relatedSections,
-    });
+      contentType: ContentType.Text,
+      tags: [
+        `plan:${this.projectName}`,
+        'section:milestones',
+        `ver:${milestonesDoc.version || '1.0.0'}`,
+      ],
+      metadata: {
+        projectName: this.projectName,
+        section: 'milestones',
+        title: milestonesDoc.title,
+        version: milestonesDoc.version || '1.0.0',
+        subSection: milestonesDoc.subSection || null,
+        relatedSections: milestonesDoc.relatedSections || [],
+        relatedTaskIds: milestonesDoc.relatedTaskIds || [],
+        moduleId: milestonesDoc.moduleId || null,
+        parentDoc: milestonesDoc.parentDoc || null,
+        createdAt: milestonesDoc.createdAt || now,
+        updatedAt: now,
+      },
+      importance: sectionImportance('milestones'),
+    };
+    this.docStore.put(docInput);
+    this.docStore.flush();
   }
 
   // ==========================================================================

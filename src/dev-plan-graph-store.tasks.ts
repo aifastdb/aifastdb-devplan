@@ -18,6 +18,11 @@ import { ET, RT } from './dev-plan-graph-store.shared';
 import { getCurrentGitCommit as getCurrentGitCommitUtil } from './dev-plan-graph-store.utils';
 import { normalizeMainTaskTitle } from './task-title-utils';
 
+function isCompleteTaskProfileEnabled(): boolean {
+  const raw = String(process.env.AIFASTDB_DEVPLAN_PROFILE_COMPLETE_SUBTASK || '').trim().toLowerCase();
+  return raw === '1' || raw === 'true' || raw === 'yes';
+}
+
 export type TaskStoreBindings = {
   projectName: string;
   gitCwd?: string;
@@ -895,34 +900,110 @@ export function updateTaskStatus(
 }
 
 export function completeSubTask(store: TaskStoreBindings, taskId: string): CompleteSubTaskResult {
+  const profileEnabled = isCompleteTaskProfileEnabled();
+  const tStart = Date.now();
+  let tCursor = tStart;
+  const profile: Record<string, number | string | boolean> = {
+    taskId,
+    projectName: store.projectName,
+  };
+
   const commitHash = getCurrentGitCommitUtil(store.gitCwd);
-  const updatedSubTask = updateSubTaskStatus(store, taskId, 'completed', {
-    completedAtCommit: commitHash,
-  });
-  if (!updatedSubTask) {
+  const tAfterCommit = Date.now();
+  profile.gitCommitMs = tAfterCommit - tCursor;
+  tCursor = tAfterCommit;
+
+  const subTaskEntity = store.findEntityByProp(ET.SUB_TASK, 'taskId', taskId);
+  if (!subTaskEntity) {
     throw new Error(`Sub task "${taskId}" not found for project "${store.projectName}"`);
   }
-
-  const updatedMainTask = refreshMainTaskCounts(store, updatedSubTask.parentTaskId);
-  if (!updatedMainTask) {
-    throw new Error(`Parent main task "${updatedSubTask.parentTaskId}" not found`);
+  const subTask = store.entityToSubTask(subTaskEntity);
+  const mainTaskEntity = store.findEntityByProp(ET.MAIN_TASK, 'taskId', subTask.parentTaskId);
+  if (!mainTaskEntity) {
+    throw new Error(`Parent main task "${subTask.parentTaskId}" not found`);
   }
+  const mainTask = store.entityToMainTask(mainTaskEntity);
+  const tAfterLookup = Date.now();
+  profile.lookupMs = tAfterLookup - tCursor;
+  tCursor = tAfterLookup;
+
+  const now = Date.now();
+  const completedAtCommit = commitHash || subTask.completedAtCommit;
+  store.graph.updateEntity(subTaskEntity.id, {
+    properties: {
+      status: 'completed',
+      updatedAt: now,
+      completedAt: now,
+      completedAtCommit: completedAtCommit || null,
+      revertReason: null,
+    },
+  });
+  const tAfterSubWrite = Date.now();
+  profile.subTaskWriteMs = tAfterSubWrite - tCursor;
+  tCursor = tAfterSubWrite;
+
+  const subTasks = listSubTasks(store, subTask.parentTaskId);
+  const completedCount = subTasks.filter((s) => s.taskId === taskId || s.status === 'completed').length;
+  const tAfterCount = Date.now();
+  profile.aggregateCountMs = tAfterCount - tCursor;
+  tCursor = tAfterCount;
 
   const mainTaskCompleted =
-    updatedMainTask.totalSubtasks > 0 &&
-    updatedMainTask.completedSubtasks >= updatedMainTask.totalSubtasks;
+    subTasks.length > 0 &&
+    completedCount >= subTasks.length;
 
-  if (mainTaskCompleted && updatedMainTask.status !== 'completed') {
-    const completedMain = updateMainTaskStatus(store, updatedSubTask.parentTaskId, 'completed');
-    if (completedMain) {
-      store.autoUpdateMilestones(completedMain);
-      return {
-        subTask: updatedSubTask,
-        mainTask: completedMain,
-        mainTaskCompleted: true,
-        completedAtCommit: commitHash,
-      };
-    }
+  const nextMainStatus = mainTaskCompleted ? 'completed' : mainTask.status;
+  const nextMainCompletedAt = mainTaskCompleted
+    ? (mainTask.completedAt || now)
+    : mainTask.completedAt;
+  store.graph.updateEntity(mainTaskEntity.id, {
+    properties: {
+      totalSubtasks: subTasks.length,
+      completedSubtasks: completedCount,
+      status: nextMainStatus,
+      updatedAt: now,
+      completedAt: nextMainCompletedAt,
+    },
+  });
+  const tAfterMainWrite = Date.now();
+  profile.mainTaskWriteMs = tAfterMainWrite - tCursor;
+  tCursor = tAfterMainWrite;
+
+  store.graph.flush();
+  const tAfterFlush = Date.now();
+  profile.flushMs = tAfterFlush - tCursor;
+  tCursor = tAfterFlush;
+
+  const updatedSubTaskEntity = store.graph.getEntity(subTaskEntity.id);
+  const updatedMainTaskEntity = store.graph.getEntity(mainTaskEntity.id);
+  const updatedSubTask = updatedSubTaskEntity
+    ? store.entityToSubTask(updatedSubTaskEntity)
+    : { ...subTask, status: 'completed' as const, updatedAt: now, completedAt: now, completedAtCommit };
+  const updatedMainTask = updatedMainTaskEntity
+    ? store.entityToMainTask(updatedMainTaskEntity)
+    : {
+      ...mainTask,
+      totalSubtasks: subTasks.length,
+      completedSubtasks: completedCount,
+      status: nextMainStatus,
+      updatedAt: now,
+      completedAt: nextMainCompletedAt,
+    };
+  const tAfterHydrate = Date.now();
+  profile.readbackMs = tAfterHydrate - tCursor;
+  tCursor = tAfterHydrate;
+
+  if (mainTaskCompleted && mainTask.status !== 'completed') {
+    store.autoUpdateMilestones(updatedMainTask);
+  }
+  const tAfterMilestone = Date.now();
+  profile.milestoneMs = tAfterMilestone - tCursor;
+  profile.mainTaskCompleted = mainTaskCompleted;
+  profile.totalMs = tAfterMilestone - tStart;
+
+  if (profileEnabled) {
+    // eslint-disable-next-line no-console
+    console.error(`[DevPlan][Profile][completeSubTask] ${JSON.stringify(profile)}`);
   }
 
   return {
@@ -933,13 +1014,25 @@ export function completeSubTask(store: TaskStoreBindings, taskId: string): Compl
   };
 }
 
-export function completeMainTask(store: TaskStoreBindings, taskId: string): MainTask {
+function completeMainTaskCore(store: TaskStoreBindings, taskId: string): MainTask {
+  const existing = getMainTask(store, taskId);
+  if (!existing) {
+    throw new Error(`Main task "${taskId}" not found for project "${store.projectName}"`);
+  }
+  if (existing.status === 'completed') {
+    return existing;
+  }
+
   const result = updateMainTaskStatus(store, taskId, 'completed');
   if (!result) {
     throw new Error(`Main task "${taskId}" not found for project "${store.projectName}"`);
   }
   store.autoUpdateMilestones(result);
   return result;
+}
+
+export function completeMainTask(store: TaskStoreBindings, taskId: string): MainTask {
+  return completeMainTaskCore(store, taskId);
 }
 
 export function getProgress(store: TaskStoreBindings): ProjectProgress {

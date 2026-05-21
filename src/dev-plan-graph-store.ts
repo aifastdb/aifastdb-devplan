@@ -1139,6 +1139,11 @@ export class DevPlanGraphStore implements IDevPlanStore {
   // Document Section Operations
   // ==========================================================================
 
+  private shouldAutoIndexSection(section: DevPlanSection): boolean {
+    // 低价值结构化日志文档跳过 embedding，降低 saveSection 尾延迟
+    return section !== 'milestones' && section !== 'changelog';
+  }
+
   /**
    * Phase-235: saveSection 的 async 版本。
    *
@@ -1239,7 +1244,9 @@ export class DevPlanGraphStore implements IDevPlanStore {
       }
 
       await executeMutationsOnGraph(this.graph, mutations);
-      this.autoIndexDocument(existing.id, input.title, input.content);
+      if (this.shouldAutoIndexSection(input.section)) {
+        this.autoIndexDocument(existing.id, input.title, input.content);
+      }
       this.graph.flush();
       return existing.id;
     }
@@ -1293,7 +1300,9 @@ export class DevPlanGraphStore implements IDevPlanStore {
     }
 
     await executeMutationsOnGraph(this.graph, mutations);
-    this.autoIndexDocument(entity.id, input.title, input.content);
+    if (this.shouldAutoIndexSection(input.section)) {
+      this.autoIndexDocument(entity.id, input.title, input.content);
+    }
     this.graph.flush();
     return entity.id;
   }
@@ -1350,7 +1359,9 @@ export class DevPlanGraphStore implements IDevPlanStore {
       }
 
       // 语义搜索：自动为更新的文档生成 Embedding 并索引
-      this.autoIndexDocument(existing.id, input.title, input.content);
+      if (this.shouldAutoIndexSection(input.section)) {
+        this.autoIndexDocument(existing.id, input.title, input.content);
+      }
 
       this.graph.flush();
       return existing.id;
@@ -1410,7 +1421,9 @@ export class DevPlanGraphStore implements IDevPlanStore {
     }
 
     // 语义搜索：自动为新文档生成 Embedding 并索引
-    this.autoIndexDocument(entity.id, input.title, input.content);
+    if (this.shouldAutoIndexSection(input.section)) {
+      this.autoIndexDocument(entity.id, input.title, input.content);
+    }
 
     this.graph.flush();
     return entity.id;
@@ -1480,7 +1493,9 @@ export class DevPlanGraphStore implements IDevPlanStore {
     }
 
     // 语义搜索：自动为新文档生成 Embedding 并索引
-    this.autoIndexDocument(entity.id, input.title, input.content);
+    if (this.shouldAutoIndexSection(input.section)) {
+      this.autoIndexDocument(entity.id, input.title, input.content);
+    }
 
     this.graph.flush();
     return entity.id;
@@ -3953,19 +3968,22 @@ export class DevPlanGraphStore implements IDevPlanStore {
   private autoUpdateMilestones(completedMainTask: MainTask): void {
     const milestonesDoc = this.getSection('milestones');
     if (!milestonesDoc) return;
+    const rowPrefix = `| ${completedMainTask.taskId} |`;
+    if (milestonesDoc.content.includes(rowPrefix)) return;
 
+    // milestones 走专用快速路径：只更新 content/updatedAt，避免触发 saveSection 的通用关系维护开销
     const dateStr = new Date().toISOString().split('T')[0];
     const appendLine = `\n| ${completedMainTask.taskId} | ${completedMainTask.title} | ${dateStr} | ✅ 已完成 |`;
     const updatedContent = milestonesDoc.content + appendLine;
+    const now = Date.now();
 
-    this.saveSection({
-      projectName: this.projectName,
-      section: 'milestones',
-      title: milestonesDoc.title,
-      content: updatedContent,
-      version: milestonesDoc.version,
-      relatedSections: milestonesDoc.relatedSections,
+    this.graph.updateEntity(milestonesDoc.id, {
+      properties: {
+        content: updatedContent,
+        updatedAt: now,
+      },
     });
+    this.graph.flush();
   }
 
   private updateModuleDocRelation(docEntityId: string, oldModuleId?: string, newModuleId?: string): void {
