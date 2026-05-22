@@ -858,6 +858,18 @@ function log(msg, ok) {
   dbg.innerHTML = (ok ? '<span class="ok">✓</span> ' : '<span class="err">✗</span> ') + msg;
 }
 
+var __DEVPLAN_PAGE_START = (typeof performance !== 'undefined' && performance.now) ? performance.now() : Date.now();
+function nowMs() {
+  return (typeof performance !== 'undefined' && performance.now) ? performance.now() : Date.now();
+}
+function fmtDuration(ms) {
+  return (ms >= 1000 ? ms.toFixed(0) : ms.toFixed(1)) + 'ms';
+}
+function perfLog(msg) {
+  var elapsed = nowMs() - __DEVPLAN_PAGE_START;
+  console.log('[DevPlan][perf +' + fmtDuration(elapsed) + '] ' + msg);
+}
+
 // ========== Loading Progress ==========
 //
 // 启动期可视进度条。所有加载阶段统一通过 setLoadingProgress(pct, status) 推进；
@@ -956,6 +968,7 @@ function loadScriptWithFallbacks(options, callback) {
   var done = typeof callback === 'function' ? callback : function() {};
 
   if (isAssetReady(options.globalCheck)) {
+    perfLog(label + ' already available, skip script load');
     done(true, { source: 'existing', url: '' });
     return;
   }
@@ -980,7 +993,9 @@ function loadScriptWithFallbacks(options, callback) {
     }
 
     log('加载 ' + label + ' [' + candidate.source + ']: ' + candidate.url, true);
+    var startedAt = nowMs();
     var timer = setTimeout(function() {
+      perfLog(label + ' [' + candidate.source + '] timeout after ' + fmtDuration(nowMs() - startedAt) + ': ' + candidate.url);
       tryNext('加载超时');
     }, timeoutMs);
 
@@ -989,15 +1004,19 @@ function loadScriptWithFallbacks(options, callback) {
       if (settled) return;
       settled = true;
       clearTimeout(timer);
+      var took = nowMs() - startedAt;
       if (isAssetReady(options.globalCheck)) {
+        perfLog(label + ' [' + candidate.source + '] loaded in ' + fmtDuration(took) + ': ' + candidate.url);
         done(true, candidate);
       } else {
         try { s.remove(); } catch (e) {}
+        perfLog(label + ' [' + candidate.source + '] loaded in ' + fmtDuration(took) + ' but global check failed');
         log(label + ' [' + candidate.source + '] 脚本已返回，但全局对象未就绪，尝试下一个来源', false);
         tryLoad(index + 1);
       }
     };
     s.onerror = function() {
+      perfLog(label + ' [' + candidate.source + '] failed after ' + fmtDuration(nowMs() - startedAt) + ': ' + candidate.url);
       tryNext('加载失败');
     };
     document.head.appendChild(s);
@@ -1111,6 +1130,7 @@ SimpleDataSet.prototype.remove = function(idOrArray) {
 };
 // ========== 动态加载渲染引擎 ==========
 function loadRenderEngine() {
+  perfLog('renderer selection start: ' + RENDERER_ENGINE);
   if (RENDERER_ENGINE === '3d') {
     log('正在加载 3D Force Graph 引擎 (Three.js + d3-force-3d)...', true);
     setLoadingProgress(10, '加载 3D 渲染引擎…');
@@ -1142,6 +1162,7 @@ var VIS_NETWORK_CDN_URLS = [
 
 function load3DForceGraph() {
   // Step 1: 先加载 Three.js (3d-force-graph 依赖 window.THREE)
+  perfLog('3D engine load start');
   log('Step 1/2: 加载 Three.js（本地优先）...', true);
   loadThreeJS();
 }
@@ -1154,6 +1175,7 @@ function loadThreeJS() {
     globalCheck: function() { return typeof THREE !== 'undefined'; }
   }, function(ok, source) {
     if (ok) {
+      perfLog('Three.js ready from ' + (source && source.source ? source.source : 'existing'));
       log('Three.js 加载成功 ✓ (' + (source && source.source ? source.source : 'existing') + ', r' + (THREE.REVISION || '?') + ')', true);
       setLoadingProgress(20, 'Three.js 就绪，加载 3D Force Graph…');
       // Step 2: 加载 3d-force-graph
@@ -1177,6 +1199,7 @@ function loadForceGraph3D() {
     globalCheck: function() { return typeof ForceGraph3D !== 'undefined'; }
   }, function(ok, source) {
     if (ok) {
+      perfLog('3D Force Graph ready from ' + (source && source.source ? source.source : 'existing'));
       log('3D Force Graph 引擎加载成功 ✓ (' + (source && source.source ? source.source : 'existing') + ', Three.js WebGL)', true);
       setLoadingProgress(30, '渲染引擎就绪，请求图谱数据…');
       USE_3D = true;
@@ -1202,6 +1225,7 @@ function loadVisNetwork() {
     globalCheck: function() { return typeof vis !== 'undefined' && vis.Network && vis.DataSet; }
   }, function(ok, source) {
     if (ok) {
+      perfLog('vis-network ready from ' + (source && source.source ? source.source : 'existing'));
       log('vis-network 加载成功 ✓ (' + (source && source.source ? source.source : 'existing') + ')', true);
       setLoadingProgress(30, '渲染引擎就绪，请求图谱数据…');
       USE_3D = false;

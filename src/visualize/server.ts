@@ -192,22 +192,47 @@ let _cachedStore: IDevPlanStore | null = null;
 let _cachedStoreAt = 0;
 
 const BENCH_LOG = process.env.GRAPH_CACHE_DEBUG === '1';
+const PERF_LOG = process.env.DEVPLAN_VIS_PERF_LOG !== '0';
+
+function perfNowMs(): number {
+  return Number(process.hrtime.bigint()) / 1_000_000;
+}
+
+function fmtMs(ms: number): string {
+  return `${ms.toFixed(ms >= 1000 ? 0 : 1)}ms`;
+}
+
+function perfLog(message: string): void {
+  if (PERF_LOG) console.error(`[perf] ${message}`);
+}
+
+function primeStoreCache(store: IDevPlanStore, source: string): void {
+  _cachedStore = store;
+  _cachedStoreAt = Date.now();
+  invalidateGraphPayloadCache();
+  invalidateProgressCache();
+  perfLog(`store cache primed from ${source}`);
+}
 
 /** 读操作优先：TTL 内复用 store。超时自动重建。 */
 function getCachedStore(projectName: string, basePath: string): IDevPlanStore {
   const now = Date.now();
   if (_cachedStore && (now - _cachedStoreAt) < STORE_CACHE_TTL_MS) {
     if (BENCH_LOG) console.error(`[cache] store HIT (age=${now - _cachedStoreAt}ms)`);
+    perfLog(`store HIT age=${now - _cachedStoreAt}ms`);
     return _cachedStore;
   }
+  const t0 = perfNowMs();
   if (BENCH_LOG) {
     const reason = !_cachedStore ? 'cold' : 'ttl';
     console.error(`[cache] store MISS (reason=${reason})`);
   }
+  const reason = !_cachedStore ? 'cold' : 'ttl';
   _cachedStore = createDevPlan(projectName, basePath, 'graph');
   _cachedStoreAt = now;
   invalidateGraphPayloadCache();
   invalidateProgressCache();
+  perfLog(`store MISS reason=${reason}; createDevPlan/recover took ${fmtMs(perfNowMs() - t0)}`);
   return _cachedStore;
 }
 
@@ -238,17 +263,23 @@ function getCachedGraphPayload(
     && (now - _graphPayloadCache.ts) < STORE_CACHE_TTL_MS
   ) {
     if (BENCH_LOG) console.error(`[cache] payload HIT (age=${now - _graphPayloadCache.ts}ms)`);
+    perfLog(`graph payload HIT age=${now - _graphPayloadCache.ts}ms`);
     return _graphPayloadCache.payload;
   }
+  const reason = !_graphPayloadCache ? 'cold' :
+    _graphPayloadCache.optionsKey !== optionsKey ? 'options' :
+    _graphPayloadCache.storeAt !== storeAt ? 'store' : 'ttl';
   if (BENCH_LOG) {
-    const reason = !_graphPayloadCache ? 'cold' :
-      _graphPayloadCache.optionsKey !== optionsKey ? 'options' :
-      _graphPayloadCache.storeAt !== storeAt ? 'store' : 'ttl';
     console.error(`[cache] payload MISS (reason=${reason})`);
   }
-  const tBuild = Date.now();
+  const tBuild = perfNowMs();
   const payload = (store as any).exportGraph(options);
-  if (BENCH_LOG) console.error(`[cache] exportGraph build took ${Date.now() - tBuild}ms`);
+  const graph = payload as { nodes?: unknown[]; edges?: unknown[] };
+  const nodes = Array.isArray(graph?.nodes) ? graph.nodes.length : undefined;
+  const edges = Array.isArray(graph?.edges) ? graph.edges.length : undefined;
+  const sizeLabel = nodes !== undefined && edges !== undefined ? ` nodes=${nodes} edges=${edges}` : '';
+  perfLog(`graph payload MISS reason=${reason}; exportGraph took ${fmtMs(perfNowMs() - tBuild)}${sizeLabel}`);
+  if (BENCH_LOG) console.error(`[cache] exportGraph build took ${fmtMs(perfNowMs() - tBuild)}`);
   _graphPayloadCache = { ts: now, storeAt, optionsKey, payload };
   return payload;
 }
@@ -279,21 +310,31 @@ function getCachedProgress(store: IDevPlanStore, storeAt: number): unknown {
     && (now - _progressCache.ts) < STORE_CACHE_TTL_MS
   ) {
     if (BENCH_LOG) console.error(`[cache] progress HIT (age=${now - _progressCache.ts}ms)`);
+    perfLog(`progress HIT age=${now - _progressCache.ts}ms`);
     return _progressCache.payload;
   }
+  const reason = !_progressCache ? 'cold' :
+    _progressCache.storeAt !== storeAt ? 'store' : 'ttl';
   if (BENCH_LOG) {
-    const reason = !_progressCache ? 'cold' :
-      _progressCache.storeAt !== storeAt ? 'store' : 'ttl';
     console.error(`[cache] progress MISS (reason=${reason})`);
   }
-  const tBuild = Date.now();
+  const tBuild = perfNowMs();
+  const tProgress = perfNowMs();
   const progress = store.getProgress();
+  const progressMs = perfNowMs() - tProgress;
+  const tSections = perfNowMs();
   const sections = store.listSections();
+  const sectionsMs = perfNowMs() - tSections;
+  const tModules = perfNowMs();
   const modules = store.listModules();
+  const modulesMs = perfNowMs() - tModules;
   let promptCount = 0;
+  let promptsMs = 0;
   try {
     if (typeof store.listPrompts === 'function') {
+      const tPrompts = perfNowMs();
       promptCount = store.listPrompts().length;
+      promptsMs = perfNowMs() - tPrompts;
     }
   } catch { /* listPrompts 不支持时忽略 */ }
   const payload = {
@@ -302,7 +343,13 @@ function getCachedProgress(store: IDevPlanStore, storeAt: number): unknown {
     docCount: sections.length,
     promptCount,
   };
-  if (BENCH_LOG) console.error(`[cache] progress build took ${Date.now() - tBuild}ms`);
+  const totalMs = perfNowMs() - tBuild;
+  perfLog(
+    `progress MISS reason=${reason}; build took ${fmtMs(totalMs)} ` +
+    `(getProgress=${fmtMs(progressMs)}, listSections=${fmtMs(sectionsMs)}, ` +
+    `listModules=${fmtMs(modulesMs)}, listPrompts=${fmtMs(promptsMs)})`,
+  );
+  if (BENCH_LOG) console.error(`[cache] progress build took ${fmtMs(totalMs)}`);
   _progressCache = { ts: now, storeAt, payload };
   return payload;
 }
@@ -324,7 +371,9 @@ function writeJsonMaybeCompressed(
   statusCode: number,
   payload: unknown,
 ): void {
+  const t0 = perfNowMs();
   const body = Buffer.from(JSON.stringify(payload), 'utf8');
+  const stringifyMs = perfNowMs() - t0;
   const acceptEnc = (req.headers['accept-encoding'] as string | undefined) || '';
 
   const baseHeaders: Record<string, string> = {
@@ -333,18 +382,24 @@ function writeJsonMaybeCompressed(
   };
 
   if (body.length < COMPRESSION_MIN_BYTES) {
+    perfLog(`${req.url || ''} response identity size=${body.length}B stringify=${fmtMs(stringifyMs)}`);
     res.writeHead(statusCode, { ...baseHeaders, 'Content-Length': String(body.length) });
     res.end(body);
     return;
   }
 
   if (acceptEnc.includes('br')) {
+    const tCompress = perfNowMs();
     const compressed = zlib.brotliCompressSync(body, {
       params: {
         [zlib.constants.BROTLI_PARAM_QUALITY]: 1,
         [zlib.constants.BROTLI_PARAM_SIZE_HINT]: body.length,
       },
     });
+    perfLog(
+      `${req.url || ''} response br raw=${body.length}B compressed=${compressed.length}B ` +
+      `stringify=${fmtMs(stringifyMs)} compress=${fmtMs(perfNowMs() - tCompress)}`,
+    );
     res.writeHead(statusCode, {
       ...baseHeaders,
       'Content-Encoding': 'br',
@@ -355,7 +410,12 @@ function writeJsonMaybeCompressed(
   }
 
   if (acceptEnc.includes('gzip')) {
+    const tCompress = perfNowMs();
     const compressed = zlib.gzipSync(body, { level: 6 });
+    perfLog(
+      `${req.url || ''} response gzip raw=${body.length}B compressed=${compressed.length}B ` +
+      `stringify=${fmtMs(stringifyMs)} compress=${fmtMs(perfNowMs() - tCompress)}`,
+    );
     res.writeHead(statusCode, {
       ...baseHeaders,
       'Content-Encoding': 'gzip',
@@ -365,6 +425,7 @@ function writeJsonMaybeCompressed(
     return;
   }
 
+  perfLog(`${req.url || ''} response identity size=${body.length}B stringify=${fmtMs(stringifyMs)}`);
   res.writeHead(statusCode, { ...baseHeaders, 'Content-Length': String(body.length) });
   res.end(body);
 }
@@ -633,9 +694,15 @@ function readRequestBody(req: http.IncomingMessage): Promise<any> {
 }
 
 function startServer(projectName: string, basePath: string, port: number): void {
+  const tHtml = perfNowMs();
   const htmlContent = getVisualizationHTML(projectName);
+  perfLog(`template HTML generated in ${fmtMs(perfNowMs() - tHtml)} size=${Buffer.byteLength(htmlContent, 'utf8')}B`);
+  const tCanvas = perfNowMs();
   const graphCanvasJs = getGraphCanvasScript();
+  perfLog(`graph canvas script generated in ${fmtMs(perfNowMs() - tCanvas)} size=${Buffer.byteLength(graphCanvasJs, 'utf8')}B`);
+  const tCodeIntel = perfNowMs();
   const codeIntelStore = new EmbeddedCodeIntelligenceStore(projectName, basePath);
+  perfLog(`code intelligence store init took ${fmtMs(perfNowMs() - tCodeIntel)}`);
   const getCodeBridgeStore = () => new CodeBridgeStore(
     projectName,
     basePath,
@@ -649,14 +716,17 @@ function startServer(projectName: string, basePath: string, port: number): void 
   }
 
   async function writeStaticJsFile(
+    req: http.IncomingMessage,
     res: http.ServerResponse,
     filePath: string,
   ): Promise<void> {
+    const t0 = perfNowMs();
     try {
       const content = await fs.readFile(filePath);
+      perfLog(`${req.url || ''} vendor read took ${fmtMs(perfNowMs() - t0)} size=${content.length}B file=${path.basename(filePath)}`);
       res.writeHead(200, {
         'Content-Type': 'application/javascript; charset=utf-8',
-        'Cache-Control': 'public, max-age=3600',
+        'Cache-Control': 'public, max-age=31536000, immutable',
       });
       res.end(content);
     } catch (error) {
@@ -716,8 +786,12 @@ function startServer(projectName: string, basePath: string, port: number): void 
   }
 
   const server = http.createServer(async (req, res) => {
+    const reqStart = perfNowMs();
     const url = new URL(req.url || '/', `http://localhost:${port}`);
     const repoPath = normalizeNonEmptyString(url.searchParams.get('repoPath'));
+    res.on('finish', () => {
+      perfLog(`${req.method || 'GET'} ${url.pathname} -> ${res.statusCode} total=${fmtMs(perfNowMs() - reqStart)}`);
+    });
 
     // CORS headers
     res.setHeader('Access-Control-Allow-Origin', '*');
@@ -736,31 +810,31 @@ function startServer(projectName: string, basePath: string, port: number): void 
     try {
       switch (url.pathname) {
         case '/vendor/three.min.js':
-          await writeStaticJsFile(res, THREE_VENDOR_FILE);
+          await writeStaticJsFile(req, res, THREE_VENDOR_FILE);
           break;
 
         case '/vendor/3d-force-graph.min.js':
-          await writeStaticJsFile(res, FORCE_GRAPH_VENDOR_FILE);
+          await writeStaticJsFile(req, res, FORCE_GRAPH_VENDOR_FILE);
           break;
 
         case '/vendor/vis-network.min.js':
-          await writeStaticJsFile(res, VIS_NETWORK_VENDOR_FILE);
+          await writeStaticJsFile(req, res, VIS_NETWORK_VENDOR_FILE);
           break;
 
         case '/vendor/marked.umd.js':
-          await writeStaticJsFile(res, MARKED_VENDOR_FILE);
+          await writeStaticJsFile(req, res, MARKED_VENDOR_FILE);
           break;
 
         case '/vendor/highlight.min.js':
-          await writeStaticJsFile(res, HIGHLIGHT_JS_VENDOR_FILE);
+          await writeStaticJsFile(req, res, HIGHLIGHT_JS_VENDOR_FILE);
           break;
 
         case '/vendor/mermaid.min.js':
-          await writeStaticJsFile(res, MERMAID_VENDOR_FILE);
+          await writeStaticJsFile(req, res, MERMAID_VENDOR_FILE);
           break;
 
         case '/vendor/deck.gl.min.js':
-          await writeStaticJsFile(res, DECK_GL_VENDOR_FILE);
+          await writeStaticJsFile(req, res, DECK_GL_VENDOR_FILE);
           break;
 
         case '/':
@@ -1377,10 +1451,17 @@ function startServer(projectName: string, basePath: string, port: number): void 
 
         case '/api/stats': {
           // 详细统计数据 — 用于仪表盘页面
+          const statsStart = perfNowMs();
           const store = getCachedStore(projectName, basePath);
+          const progressStart = perfNowMs();
           const progress = store.getProgress();
+          const progressMs = perfNowMs() - progressStart;
+          const sectionsStart = perfNowMs();
           const sections = store.listSections();
+          const sectionsMs = perfNowMs() - sectionsStart;
+          const modulesStart = perfNowMs();
           const modules = store.listModules();
+          const modulesMs = perfNowMs() - modulesStart;
 
           // 按优先级统计
           const byPriority: Record<string, { total: number; completed: number }> = {};
@@ -1482,6 +1563,10 @@ function startServer(projectName: string, basePath: string, port: number): void 
             moduleStats,
             docBySection,
           };
+          perfLog(
+            `/api/stats build took ${fmtMs(perfNowMs() - statsStart)} ` +
+            `(getProgress=${fmtMs(progressMs)}, listSections=${fmtMs(sectionsMs)}, listModules=${fmtMs(modulesMs)})`,
+          );
 
           res.writeHead(200, { 'Content-Type': 'application/json; charset=utf-8' });
           res.end(JSON.stringify(stats));
@@ -3599,16 +3684,21 @@ function tryOpenBrowser(url: string): void {
 // ============================================================================
 
 function main(): void {
+  const mainStart = perfNowMs();
   const { project, port, basePath } = parseArgs();
 
   console.log(`正在加载项目 "${project}" 的数据...`);
   console.log(`数据路径: ${path.resolve(basePath)}`);
 
   // 验证 store 可以正常创建（启动时检查一次）
-  createStore(project, basePath);
+  const tStore = perfNowMs();
+  const startupStore = createStore(project, basePath);
+  perfLog(`startup store validation took ${fmtMs(perfNowMs() - tStore)}`);
+  primeStoreCache(startupStore, 'startup validation');
 
-  // 启动服务器，每次 API 请求时会重新创建 store 以获取最新数据
+  // 启动服务器；读请求优先复用启动时已恢复的 store，TTL 过期后再重建。
   startServer(project, basePath, port);
+  perfLog(`main bootstrap scheduled server in ${fmtMs(perfNowMs() - mainStart)}`);
 }
 
 main();

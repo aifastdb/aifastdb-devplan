@@ -252,6 +252,7 @@ var LINK_3D_HIGHLIGHT_COLORS = {
  * 使用 Three.js WebGL + d3-force-3d 实现 3D 球体力导向可视化
  */
 function render3DGraph(container, visibleNodes, visibleEdges) {
+  var renderStartedAt = (typeof nowMs === 'function') ? nowMs() : Date.now();
   log('正在创建 3D Force Graph (Three.js WebGL)...', true);
 
   // 清空容器
@@ -272,6 +273,7 @@ function render3DGraph(container, visibleNodes, visibleEdges) {
   // 使用全局 LINK_3D_HIGHLIGHT_COLORS (Phase-75: 提升为全局供增量注入使用)
 
   // 转换数据格式: vis-network edges → 3d-force-graph links
+  var transformStartedAt = (typeof nowMs === 'function') ? nowMs() : Date.now();
   var links3d = [];
   for (var i = 0; i < visibleEdges.length; i++) {
     var e = visibleEdges[i];
@@ -309,8 +311,13 @@ function render3DGraph(container, visibleNodes, visibleEdges) {
       z: n.z
     });
   }
+  if (typeof perfLog === 'function') {
+    perfLog('3D data transform took ' + fmtDuration(((typeof nowMs === 'function') ? nowMs() : Date.now()) - transformStartedAt) +
+      ' nodes=' + nodes3d.length + ' links=' + links3d.length);
+  }
 
   // 构建邻接表（用于快速查找节点的关联边和邻居节点）
+  var adjacencyStartedAt = (typeof nowMs === 'function') ? nowMs() : Date.now();
   var _3dNodeNeighbors = {};  // nodeId → Set of neighbor nodeIds
   var _3dNodeLinks = {};      // nodeId → Set of link references
   for (var i = 0; i < links3d.length; i++) {
@@ -325,6 +332,9 @@ function render3DGraph(container, visibleNodes, visibleEdges) {
     if (!_3dNodeLinks[tgtId]) _3dNodeLinks[tgtId] = new Set();
     _3dNodeLinks[srcId].add(l);
     _3dNodeLinks[tgtId].add(l);
+  }
+  if (typeof perfLog === 'function') {
+    perfLog('3D adjacency build took ' + fmtDuration(((typeof nowMs === 'function') ? nowMs() : Date.now()) - adjacencyStartedAt));
   }
 
   // ── 单击/双击判定状态 ──
@@ -398,6 +408,7 @@ function render3DGraph(container, visibleNodes, visibleEdges) {
 
   // 创建 3D 图实例
   // bgColor 走 getCurrent3DBgColor() — 跟随当前主题（deep-black / ink-blue），用户自定义可覆盖
+  var graphCreateStartedAt = (typeof nowMs === 'function') ? nowMs() : Date.now();
   var graph3d = ForceGraph3D({ controlType: 'orbit' })(container)
     .width(rect.width)
     .height(rect.height)
@@ -1099,7 +1110,14 @@ function render3DGraph(container, visibleNodes, visibleEdges) {
 
   // 注入数据
   _3dBreathItems = []; // 重置呼吸灯列表 (nodeThreeObject 回调会填充)
+  if (typeof perfLog === 'function') {
+    perfLog('ForceGraph3D constructor/config took ' + fmtDuration(((typeof nowMs === 'function') ? nowMs() : Date.now()) - graphCreateStartedAt));
+  }
+  var graphDataStartedAt = (typeof nowMs === 'function') ? nowMs() : Date.now();
   graph3d.graphData({ nodes: nodes3d, links: links3d });
+  if (typeof perfLog === 'function') {
+    perfLog('ForceGraph3D graphData injection took ' + fmtDuration(((typeof nowMs === 'function') ? nowMs() : Date.now()) - graphDataStartedAt));
+  }
 
   // ── 3D 呼吸灯: nodeThreeObject 回调在下一帧才执行, 需延迟检测 ──
   stop3DBreathAnimation();
@@ -1458,6 +1476,9 @@ function render3DGraph(container, visibleNodes, visibleEdges) {
   // 隐藏加载指示器（带 100% + fade out 收尾）
   if (typeof finishLoadingProgress === 'function') finishLoadingProgress();
   else document.getElementById('loading').style.display = 'none';
+  if (typeof perfLog === 'function') {
+    perfLog('3D render setup complete in ' + fmtDuration(((typeof nowMs === 'function') ? nowMs() : Date.now()) - renderStartedAt));
+  }
   log('3D 图谱渲染完成! ' + nodes3d.length + ' 节点, ' + links3d.length + ' 边 (Three.js WebGL)', true);
 
   // 自动聚焦视图

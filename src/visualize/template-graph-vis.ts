@@ -545,6 +545,7 @@ function edgeStyle(edge) {
 // ========== Graph Rendering ==========
 function renderGraph() {
   try {
+    var renderStartedAt = (typeof nowMs === 'function') ? nowMs() : Date.now();
     var container = document.getElementById('graph');
     var rect = container.getBoundingClientRect();
     log('容器尺寸: ' + Math.round(rect.width) + 'x' + Math.round(rect.height) + ', 渲染中...', true);
@@ -555,6 +556,7 @@ function renderGraph() {
       log('容器高度修正为: ' + Math.round(rect.height) + 'px', true);
     }
 
+    var prepareStartedAt = (typeof nowMs === 'function') ? nowMs() : Date.now();
     var visibleNodes = [];
     var DOC_BTN_PAD = '      ';  // 父文档标签左侧留白，为 +/- 按钮腾出空间
 
@@ -629,6 +631,10 @@ function renderGraph() {
     }
 
     log('可见节点: ' + visibleNodes.length + ', 可见边: ' + visibleEdges.length, true);
+    if (typeof perfLog === 'function') {
+      perfLog('renderGraph prepare data took ' + fmtDuration(((typeof nowMs === 'function') ? nowMs() : Date.now()) - prepareStartedAt) +
+        ' visibleNodes=' + visibleNodes.length + ' visibleEdges=' + visibleEdges.length);
+    }
 
     if (network) {
       network.destroy();
@@ -639,13 +645,20 @@ function renderGraph() {
     if (USE_3D) {
       nodesDataSet = new SimpleDataSet(visibleNodes);
       edgesDataSet = new SimpleDataSet(visibleEdges);
+      if (typeof perfLog === 'function') {
+        perfLog('SimpleDataSet build before 3D took ' + fmtDuration(((typeof nowMs === 'function') ? nowMs() : Date.now()) - renderStartedAt));
+      }
       render3DGraph(container, visibleNodes, visibleEdges);
       return; // 3D 有独立的事件绑定和生命周期
     }
 
     // ── vis-network 渲染路径 ──
+    var datasetStartedAt = (typeof nowMs === 'function') ? nowMs() : Date.now();
     nodesDataSet = new vis.DataSet(visibleNodes);
     edgesDataSet = new vis.DataSet(visibleEdges);
+    if (typeof perfLog === 'function') {
+      perfLog('vis DataSet build took ' + fmtDuration(((typeof nowMs === 'function') ? nowMs() : Date.now()) - datasetStartedAt));
+    }
 
     // ── Phase-10 T10.4: Adaptive physics config based on node count ──
     var nodeCount = visibleNodes.length;
@@ -737,10 +750,14 @@ function renderGraph() {
       }
     };
 
+    var networkCreateStartedAt = (typeof nowMs === 'function') ? nowMs() : Date.now();
     network = new vis.Network(container,
       { nodes: nodesDataSet, edges: edgesDataSet },
       networkOptions
     );
+    if (typeof perfLog === 'function') {
+      perfLog('vis.Network constructor took ' + fmtDuration(((typeof nowMs === 'function') ? nowMs() : Date.now()) - networkCreateStartedAt));
+    }
 
     // Phase-10 T10.3: Mark network as reusable for incremental updates
     networkReusable = true;
@@ -749,6 +766,9 @@ function renderGraph() {
     if (!physicsConfig.enabled) {
       if (typeof finishLoadingProgress === 'function') finishLoadingProgress();
       else document.getElementById('loading').style.display = 'none';
+      if (typeof perfLog === 'function') {
+        perfLog('vis render complete without physics in ' + fmtDuration(((typeof nowMs === 'function') ? nowMs() : Date.now()) - renderStartedAt));
+      }
       log('图谱渲染完成 (无物理引擎)! ' + visibleNodes.length + ' 节点, ' + visibleEdges.length + ' 边', true);
       network.fit({ animation: { duration: 500, easingFunction: 'easeInOutQuad' } });
     } else {
@@ -761,6 +781,9 @@ function renderGraph() {
       network.setOptions({ physics: { enabled: false } });
       if (typeof finishLoadingProgress === 'function') finishLoadingProgress();
       else document.getElementById('loading').style.display = 'none';
+      if (typeof perfLog === 'function') {
+        perfLog('vis stabilization complete in ' + fmtDuration(((typeof nowMs === 'function') ? nowMs() : Date.now()) - renderStartedAt));
+      }
       log('图谱渲染完成! ' + visibleNodes.length + ' 节点, ' + visibleEdges.length + ' 边', true);
       // 稳定后将父文档-子文档按思维导图方式整齐排列
       arrangeAllDocMindMaps();
@@ -968,6 +991,9 @@ function renderGraph() {
       if (el && el.style.display !== 'none' && !el.classList.contains('hide')) {
         if (typeof finishLoadingProgress === 'function') finishLoadingProgress();
         else el.style.display = 'none';
+        if (typeof perfLog === 'function') {
+          perfLog('vis stabilization timeout after ' + fmtDuration(((typeof nowMs === 'function') ? nowMs() : Date.now()) - renderStartedAt));
+        }
         log('稳定化超时, 强制显示图谱', true);
         if (network) network.fit({ animation: { duration: 500, easingFunction: 'easeInOutQuad' } });
       }

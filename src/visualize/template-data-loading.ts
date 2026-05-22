@@ -13,6 +13,8 @@ var CHUNK_THRESHOLD = 3000;  // use chunked loading if total > this
 
 function loadData() {
   document.getElementById('loading').style.display = 'flex';
+  window.__DEVPLAN_LOAD_START = (typeof nowMs === 'function') ? nowMs() : Date.now();
+  if (typeof perfLog === 'function') perfLog('loadData start');
   log('正在获取图谱数据...', true);
   if (typeof setLoadingProgress === 'function') setLoadingProgress(35, '请求图谱与进度数据…');
   // 35% 之后到拿到 response 头之前可能很长（首次冷启动 ~1-30s 取决于数据集与 WAL 体积），
@@ -154,6 +156,7 @@ function loadDataTiered() {
 
 /** Phase-10: Full load fallback (same as original loadData for vis-network) */
 function loadDataFull() {
+  var loadStartedAt = (typeof nowMs === 'function') ? nowMs() : Date.now();
   // Phase-68: 初始加载不包含记忆节点（includeMemories=false），勾选后懒加载
   var graphApiUrl = '/api/graph?includeNodeDegree=' + (INCLUDE_NODE_DEGREE ? 'true' : 'false') +
     '&enableBackendDegreeFallback=' + (ENABLE_BACKEND_DEGREE_FALLBACK ? 'true' : 'false') +
@@ -161,20 +164,55 @@ function loadDataFull() {
 
   // 进度条阶段：fetch 头返回 → 60%，body 完整下载完 → 80%
   function fetchWithProgress(url) {
+    var startedAt = (typeof nowMs === 'function') ? nowMs() : Date.now();
+    if (typeof perfLog === 'function') perfLog('fetch start ' + url);
     return fetch(url).then(function(r) {
+      var headerMs = ((typeof nowMs === 'function') ? nowMs() : Date.now()) - startedAt;
+      if (typeof perfLog === 'function') {
+        perfLog('fetch headers ' + url + ' in ' + fmtDuration(headerMs) + ' status=' + r.status);
+      }
       if (typeof setLoadingProgress === 'function') setLoadingProgress(60, '接收图谱数据…');
-      return r.json();
+      var parseStartedAt = (typeof nowMs === 'function') ? nowMs() : Date.now();
+      return r.json().then(function(data) {
+        var doneMs = ((typeof nowMs === 'function') ? nowMs() : Date.now()) - startedAt;
+        var parseMs = ((typeof nowMs === 'function') ? nowMs() : Date.now()) - parseStartedAt;
+        if (typeof perfLog === 'function') {
+          var countLabel = data && Array.isArray(data.nodes) && Array.isArray(data.edges)
+            ? ' nodes=' + data.nodes.length + ' edges=' + data.edges.length
+            : '';
+          perfLog('fetch body+json ' + url + ' total=' + fmtDuration(doneMs) + ' json=' + fmtDuration(parseMs) + countLabel);
+        }
+        return data;
+      });
+    });
+  }
+  function fetchJsonTimed(url) {
+    var startedAt = (typeof nowMs === 'function') ? nowMs() : Date.now();
+    if (typeof perfLog === 'function') perfLog('fetch start ' + url);
+    return fetch(url).then(function(r) {
+      var headerMs = ((typeof nowMs === 'function') ? nowMs() : Date.now()) - startedAt;
+      if (typeof perfLog === 'function') perfLog('fetch headers ' + url + ' in ' + fmtDuration(headerMs) + ' status=' + r.status);
+      var parseStartedAt = (typeof nowMs === 'function') ? nowMs() : Date.now();
+      return r.json().then(function(data) {
+        var doneMs = ((typeof nowMs === 'function') ? nowMs() : Date.now()) - startedAt;
+        var parseMs = ((typeof nowMs === 'function') ? nowMs() : Date.now()) - parseStartedAt;
+        if (typeof perfLog === 'function') perfLog('fetch body+json ' + url + ' total=' + fmtDuration(doneMs) + ' json=' + fmtDuration(parseMs));
+        return data;
+      });
     });
   }
 
   Promise.all([
     fetchWithProgress(graphApiUrl),
-    fetch('/api/progress').then(function(r) { return r.json(); })
+    fetchJsonTimed('/api/progress')
   ]).then(function(results) {
     if (typeof setLoadingProgress === 'function') setLoadingProgress(80, '解析数据…');
+    if (typeof perfLog === 'function') perfLog('initial API requests completed in ' + fmtDuration(((typeof nowMs === 'function') ? nowMs() : Date.now()) - loadStartedAt));
     var graphRes = results[0];
     var progressRes = results[1];
+    var normalizeStartedAt = (typeof nowMs === 'function') ? nowMs() : Date.now();
     var normalized = normalizeGraphPayload(graphRes, 'full-load');
+    if (typeof perfLog === 'function') perfLog('normalizeGraphPayload took ' + fmtDuration(((typeof nowMs === 'function') ? nowMs() : Date.now()) - normalizeStartedAt));
     allNodes = normalized.nodes;
     allEdges = normalized.edges;
     tieredLoadState.l0l1Loaded = true;
