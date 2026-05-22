@@ -560,6 +560,11 @@ export interface DevPlanGraphStoreConfig {
   /** 是否启用语义搜索（需要 VibeSynapse Embedding + SocialGraphV2 向量索引） */
   enableSemanticSearch?: boolean;
   /**
+   * 是否在任务完成自动更新 milestones 时恢复文档向量 embedding（默认 true）。
+   * 关闭时仅更新 milestones 文本内容，不触发 embedding 计算。
+   */
+  enableMilestonesEmbeddingOnAutoUpdate?: boolean;
+  /**
    * Embedding 向量维度覆盖（Matryoshka 截断）
    *
    * - **通常不需要设置**：维度会从 modelId 自动解析（如 qwen3-embedding:8b → 4096d）

@@ -176,6 +176,13 @@ import {
   completeMainTask as completeMainTaskImpl,
   completeSubTask as completeSubTaskImpl,
   createMainTask as createMainTaskImpl,
+  createMainTaskAsync as createMainTaskAsyncImpl,
+  addSubTaskAsync as addSubTaskAsyncImpl,
+  upsertMainTaskAsync as upsertMainTaskAsyncImpl,
+  deleteTaskAsync as deleteTaskAsyncImpl,
+  buildPutRelationMutation,
+  buildDeleteRelationMutation,
+  executeMutationsOnGraph,
   deleteTask as deleteTaskImpl,
   getMainTask as getMainTaskImpl,
   getNextMainTaskOrder as getNextMainTaskOrderImpl,
@@ -262,6 +269,7 @@ export class DevPlanGraphStore implements IDevPlanStore {
   private synapse: VibeSynapse | null = null;
   /** 语义搜索是否在配置上启用（懒初始化前为 true，ready 仍可能为 false） */
   private semanticSearchConfigured: boolean = false;
+  private enableMilestonesEmbeddingOnAutoUpdate: boolean = true;
   /** 语义搜索是否成功初始化 */
   private semanticSearchReady: boolean = false;
   /** 是否已经尝试过初始化 Synapse（避免失败后每次请求都重复冷启动） */
@@ -371,6 +379,7 @@ export class DevPlanGraphStore implements IDevPlanStore {
     this.projectName = projectName;
     this.gitCwd = config.gitCwd;
     this.semanticSearchConfigured = Boolean(config.enableSemanticSearch);
+    this.enableMilestonesEmbeddingOnAutoUpdate = Boolean(config.enableMilestonesEmbeddingOnAutoUpdate);
     this.synapseConfig = this.semanticSearchConfigured ? config : null;
 
     // ── WAL 目录迁移：旧名 → 语义化新名 ──
@@ -1132,6 +1141,174 @@ export class DevPlanGraphStore implements IDevPlanStore {
   // Document Section Operations
   // ==========================================================================
 
+  private shouldAutoIndexSection(section: DevPlanSection): boolean {
+    // 低价值结构化日志文档跳过 embedding，降低 saveSection 尾延迟
+    return section !== 'milestones' && section !== 'changelog';
+  }
+
+  /**
+   * Phase-235: saveSection 的 async 版本。
+   *
+   * 把所有 putRelation / deleteRelation 合并为一次 applyMutations 原子批写：
+   * - 新建分支：parent/project + module + task→doc 关联（最多 1 + 1 + N 条 PutRelation）
+   * - 更新分支：module 变更 + parentDoc 变更 + task→doc 重建（DeleteRelation+PutRelation 各 N+ 条）
+   *
+   * upsertEntityByProp / updateEntity（partial 语义）保留同步——applyMutations 的 PutEntity 是 replace 语义无法 1:1 替代。
+   * autoIndexDocument 是 embedding 索引，与 graph 写无关，保留同步原位调用。
+   */
+  async saveSectionAsync(input: DevPlanDocInput): Promise<string> {
+    if (!this.nativeApplyMutationsReady) {
+      return this.saveSection(input);
+    }
+
+    const existing = this.getSection(input.section, input.subSection);
+    const now = Date.now();
+    const version = input.version || '1.0.0';
+    const finalModuleId = input.moduleId || existing?.moduleId;
+    const finalParentDoc = input.parentDoc !== undefined ? input.parentDoc : existing?.parentDoc;
+    this.validateParentDocAssignment(input.section, input.subSection, existing?.id, finalParentDoc);
+
+    if (existing) {
+      const finalRelatedTaskIds = input.relatedTaskIds || existing.relatedTaskIds || [];
+      this.graph.updateEntity(existing.id, {
+        properties: {
+          title: input.title,
+          content: input.content,
+          version,
+          subSection: input.subSection || null,
+          relatedSections: input.relatedSections || [],
+          relatedTaskIds: finalRelatedTaskIds,
+          moduleId: finalModuleId || null,
+          parentDoc: finalParentDoc || null,
+          updatedAt: now,
+        },
+      });
+
+      const mutations: Array<Record<string, unknown>> = [];
+
+      // module 关联变更
+      if (finalModuleId && finalModuleId !== existing.moduleId) {
+        if (existing.moduleId) {
+          const oldMod = this.findEntityByProp(ET.MODULE, 'moduleId', existing.moduleId);
+          if (oldMod) {
+            const rel = this.graph.getRelationBetween(oldMod.id, existing.id);
+            if (rel) mutations.push(buildDeleteRelationMutation(rel.id, oldMod.id));
+          }
+        }
+        const newMod = this.findEntityByProp(ET.MODULE, 'moduleId', finalModuleId);
+        if (newMod) {
+          mutations.push(buildPutRelationMutation(newMod.id, existing.id, RT.MODULE_HAS_DOC, now));
+        }
+      }
+
+      // parentDoc 关联变更
+      if ((finalParentDoc || null) !== (existing.parentDoc || null)) {
+        const projectId = this.getProjectId();
+        if (existing.parentDoc) {
+          const [oldSection, oldSub] = existing.parentDoc.split('|');
+          const oldParentEntity = this.findDocEntityBySection(oldSection as DevPlanSection, oldSub || undefined);
+          if (oldParentEntity) {
+            const rel = this.graph.getRelationBetween(oldParentEntity.id, existing.id);
+            if (rel) mutations.push(buildDeleteRelationMutation(rel.id, oldParentEntity.id));
+          }
+        }
+        if (finalParentDoc) {
+          const [newSection, newSub] = finalParentDoc.split('|');
+          const newParentEntity = this.findDocEntityBySection(newSection as DevPlanSection, newSub || undefined);
+          if (newParentEntity) {
+            mutations.push(buildPutRelationMutation(newParentEntity.id, existing.id, RT.DOC_HAS_CHILD, now));
+          }
+          // 从顶级变为子文档 → 移除 project→doc 的 has_document
+          if (!existing.parentDoc) {
+            const hasDocRels = this.getInRelations(existing.id, RT.HAS_DOCUMENT);
+            for (const rel of hasDocRels) {
+              mutations.push(buildDeleteRelationMutation(rel.id, rel.source || projectId));
+            }
+          }
+        } else if (existing.parentDoc) {
+          // 从子文档变为顶级 → 重建 project→doc 关系
+          mutations.push(buildPutRelationMutation(projectId, existing.id, RT.HAS_DOCUMENT, now));
+        }
+      }
+
+      // task→doc 关联重建（如果显式传了 relatedTaskIds）
+      if (input.relatedTaskIds) {
+        const oldTaskRels = this.getInRelations(existing.id, RT.TASK_HAS_DOC);
+        for (const rel of oldTaskRels) {
+          mutations.push(buildDeleteRelationMutation(rel.id, rel.source || existing.id));
+        }
+        for (const taskId of finalRelatedTaskIds) {
+          const taskEntity = this.findEntityByProp(ET.MAIN_TASK, 'taskId', taskId);
+          if (taskEntity) {
+            mutations.push(buildPutRelationMutation(taskEntity.id, existing.id, RT.TASK_HAS_DOC, now));
+          }
+        }
+      }
+
+      await executeMutationsOnGraph(this.graph, mutations);
+      if (this.shouldAutoIndexSection(input.section)) {
+        this.autoIndexDocument(existing.id, input.title, input.content);
+      }
+      this.graph.flush();
+      return existing.id;
+    }
+
+    // 新建分支
+    const sectionKey = input.subSection ? `${input.section}|${input.subSection}` : input.section;
+    const entity = this.graph.upsertEntityByProp(
+      ET.DOC, 'sectionKey', sectionKey, input.title, {
+        projectName: this.projectName,
+        section: input.section,
+        sectionKey,
+        title: input.title,
+        content: input.content,
+        version,
+        subSection: input.subSection || null,
+        relatedSections: input.relatedSections || [],
+        relatedTaskIds: input.relatedTaskIds || [],
+        moduleId: finalModuleId || null,
+        parentDoc: finalParentDoc || null,
+        createdAt: now,
+        updatedAt: now,
+      }
+    );
+
+    const mutations: Array<Record<string, unknown>> = [];
+
+    if (finalParentDoc) {
+      const [parentSection, parentSubSection] = finalParentDoc.split('|');
+      const parentEntity = this.findDocEntityBySection(parentSection as DevPlanSection, parentSubSection || undefined);
+      if (parentEntity) {
+        mutations.push(buildPutRelationMutation(parentEntity.id, entity.id, RT.DOC_HAS_CHILD, now));
+      }
+    } else {
+      mutations.push(buildPutRelationMutation(this.getProjectId(), entity.id, RT.HAS_DOCUMENT, now));
+    }
+
+    if (finalModuleId) {
+      const modEntity = this.findEntityByProp(ET.MODULE, 'moduleId', finalModuleId);
+      if (modEntity) {
+        mutations.push(buildPutRelationMutation(modEntity.id, entity.id, RT.MODULE_HAS_DOC, now));
+      }
+    }
+
+    if (input.relatedTaskIds?.length) {
+      for (const taskId of input.relatedTaskIds) {
+        const taskEntity = this.findEntityByProp(ET.MAIN_TASK, 'taskId', taskId);
+        if (taskEntity) {
+          mutations.push(buildPutRelationMutation(taskEntity.id, entity.id, RT.TASK_HAS_DOC, now));
+        }
+      }
+    }
+
+    await executeMutationsOnGraph(this.graph, mutations);
+    if (this.shouldAutoIndexSection(input.section)) {
+      this.autoIndexDocument(entity.id, input.title, input.content);
+    }
+    this.graph.flush();
+    return entity.id;
+  }
+
   saveSection(input: DevPlanDocInput): string {
     const existing = this.getSection(input.section, input.subSection);
     const now = Date.now();
@@ -1184,7 +1361,9 @@ export class DevPlanGraphStore implements IDevPlanStore {
       }
 
       // 语义搜索：自动为更新的文档生成 Embedding 并索引
-      this.autoIndexDocument(existing.id, input.title, input.content);
+      if (this.shouldAutoIndexSection(input.section)) {
+        this.autoIndexDocument(existing.id, input.title, input.content);
+      }
 
       this.graph.flush();
       return existing.id;
@@ -1244,7 +1423,9 @@ export class DevPlanGraphStore implements IDevPlanStore {
     }
 
     // 语义搜索：自动为新文档生成 Embedding 并索引
-    this.autoIndexDocument(entity.id, input.title, input.content);
+    if (this.shouldAutoIndexSection(input.section)) {
+      this.autoIndexDocument(entity.id, input.title, input.content);
+    }
 
     this.graph.flush();
     return entity.id;
@@ -1314,7 +1495,9 @@ export class DevPlanGraphStore implements IDevPlanStore {
     }
 
     // 语义搜索：自动为新文档生成 Embedding 并索引
-    this.autoIndexDocument(entity.id, input.title, input.content);
+    if (this.shouldAutoIndexSection(input.section)) {
+      this.autoIndexDocument(entity.id, input.title, input.content);
+    }
 
     this.graph.flush();
     return entity.id;
@@ -1563,11 +1746,30 @@ export class DevPlanGraphStore implements IDevPlanStore {
     return createMainTaskImpl(this.taskStoreBindings, input);
   }
 
+  /**
+   * Phase-234: createMainTask 的 async 版本，调用 applyMutations 把多步 putRelation 合并为单次原子批写。
+   * MCP / HTTP 等本身在 async 上下文的调用方应优先调用此版本以获得 NAPI 边界穿越次数的 O(N) → O(1) 收益。
+   * 内部能力不可用或 applyMutations 抛错时无缝 fallback 到 sync createMainTask 路径。
+   */
+  createMainTaskAsync(input: MainTaskInput): Promise<MainTask> {
+    return createMainTaskAsyncImpl(this.taskStoreBindings, input);
+  }
+
   upsertMainTask(input: MainTaskInput, options?: {
     preserveStatus?: boolean;
     status?: TaskStatus;
   }): MainTask {
     return upsertMainTaskImpl(this.taskStoreBindings, input, options);
+  }
+
+  /**
+   * Phase-235: upsertMainTask 的 async 版本，把 module 关联变更 + doc 关联 delete/add 合并为一次 applyMutations。
+   */
+  upsertMainTaskAsync(input: MainTaskInput, options?: {
+    preserveStatus?: boolean;
+    status?: TaskStatus;
+  }): Promise<MainTask> {
+    return upsertMainTaskAsyncImpl(this.taskStoreBindings, input, options);
   }
 
   getMainTask(taskId: string): MainTask | null {
@@ -1590,12 +1792,26 @@ export class DevPlanGraphStore implements IDevPlanStore {
     return deleteTaskImpl(this.taskStoreBindings, taskId, taskType);
   }
 
+  /**
+   * Phase-235: deleteTask 的 async 版本，把 N+1 个 DeleteEntity 合并为一次 applyMutations 原子批写。
+   */
+  deleteTaskAsync(taskId: string, taskType?: 'main' | 'sub'): Promise<DeleteTaskResult> {
+    return deleteTaskAsyncImpl(this.taskStoreBindings, taskId, taskType);
+  }
+
   // ==========================================================================
   // Sub Task Operations
   // ==========================================================================
 
   addSubTask(input: SubTaskInput): SubTask {
     return addSubTaskImpl(this.taskStoreBindings, input);
+  }
+
+  /**
+   * Phase-235: addSubTask 的 async 版本，与 createMainTaskAsync 共享 mutations / fallback 工具链。
+   */
+  addSubTaskAsync(input: SubTaskInput): Promise<SubTask> {
+    return addSubTaskAsyncImpl(this.taskStoreBindings, input);
   }
 
   upsertSubTask(input: SubTaskInput, options?: {
@@ -3754,19 +3970,26 @@ export class DevPlanGraphStore implements IDevPlanStore {
   private autoUpdateMilestones(completedMainTask: MainTask): void {
     const milestonesDoc = this.getSection('milestones');
     if (!milestonesDoc) return;
+    const rowPrefix = `| ${completedMainTask.taskId} |`;
+    if (milestonesDoc.content.includes(rowPrefix)) return;
 
+    // milestones 走专用快速路径：只更新 content/updatedAt，避免触发 saveSection 的通用关系维护开销
     const dateStr = new Date().toISOString().split('T')[0];
     const appendLine = `\n| ${completedMainTask.taskId} | ${completedMainTask.title} | ${dateStr} | ✅ 已完成 |`;
     const updatedContent = milestonesDoc.content + appendLine;
+    const now = Date.now();
 
-    this.saveSection({
-      projectName: this.projectName,
-      section: 'milestones',
-      title: milestonesDoc.title,
-      content: updatedContent,
-      version: milestonesDoc.version,
-      relatedSections: milestonesDoc.relatedSections,
+    this.graph.updateEntity(milestonesDoc.id, {
+      properties: {
+        content: updatedContent,
+        updatedAt: now,
+      },
     });
+    if (this.enableMilestonesEmbeddingOnAutoUpdate) {
+      // 可选恢复 milestones 文档 embedding；默认开启，可在配置中显式关闭。
+      this.autoIndexDocument(milestonesDoc.id, milestonesDoc.title, updatedContent);
+    }
+    this.graph.flush();
   }
 
   private updateModuleDocRelation(docEntityId: string, oldModuleId?: string, newModuleId?: string): void {

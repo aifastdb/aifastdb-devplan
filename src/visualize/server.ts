@@ -1291,7 +1291,7 @@ function startServer(projectName: string, basePath: string, port: number): void 
 
         case '/api/main-task/status': {
           // 手动更新主任务状态：
-          //  - completed: 仅限 pending → completed
+          //  - completed: 允许 pending / in_progress → completed
           //  - cancelled: 允许 pending / in_progress → cancelled
           //  - revoked:   允许 completed → revoked（已完成任务被撤销）
           if (req.method !== 'POST') {
@@ -1320,14 +1320,15 @@ function startServer(projectName: string, basePath: string, port: number): void 
             res.end(JSON.stringify({ error: `主任务 "${taskId}" 未找到` }));
             break;
           }
-          const canComplete = targetStatus === 'completed' && mainTask.status === 'pending';
+          const canComplete = targetStatus === 'completed'
+            && (mainTask.status === 'pending' || mainTask.status === 'in_progress');
           const canCancel = targetStatus === 'cancelled'
             && (mainTask.status === 'pending' || mainTask.status === 'in_progress');
           const canRevoke = targetStatus === 'revoked' && mainTask.status === 'completed';
           if (!canComplete && !canCancel && !canRevoke) {
             res.writeHead(409, { 'Content-Type': 'application/json; charset=utf-8' });
             res.end(JSON.stringify({
-              error: `当前状态 ${mainTask.status} 不支持手动标记为 ${targetStatus}；completed 仅支持 pending，cancelled 支持 pending/in_progress，revoked 仅支持 completed`,
+              error: `当前状态 ${mainTask.status} 不支持手动标记为 ${targetStatus}；completed 支持 pending/in_progress，cancelled 支持 pending/in_progress，revoked 仅支持 completed`,
             }));
             break;
           }
@@ -1363,9 +1364,9 @@ function startServer(projectName: string, basePath: string, port: number): void 
             res.end(JSON.stringify({ error: `主任务 "${delTaskId}" 未找到` }));
             break;
           }
-          if (delTarget.status !== 'cancelled') {
+          if (delTarget.status !== 'cancelled' && delTarget.status !== 'revoked') {
             res.writeHead(409, { 'Content-Type': 'application/json; charset=utf-8' });
-            res.end(JSON.stringify({ error: `仅允许删除已取消的任务，当前状态: ${delTarget.status}` }));
+            res.end(JSON.stringify({ error: `仅允许删除已取消或已撤销的任务，当前状态: ${delTarget.status}` }));
             break;
           }
           const delResult = delStore.deleteTask(delTaskId, 'main');

@@ -1,3 +1,4 @@
+import { randomUUID } from 'crypto';
 import type { Entity } from 'aifastdb';
 import {
   type CompleteSubTaskResult,
@@ -17,10 +18,17 @@ import { ET, RT } from './dev-plan-graph-store.shared';
 import { getCurrentGitCommit as getCurrentGitCommitUtil } from './dev-plan-graph-store.utils';
 import { normalizeMainTaskTitle } from './task-title-utils';
 
+function isCompleteTaskProfileEnabled(): boolean {
+  const raw = String(process.env.AIFASTDB_DEVPLAN_PROFILE_COMPLETE_SUBTASK || '').trim().toLowerCase();
+  return raw === '1' || raw === 'true' || raw === 'yes';
+}
+
 export type TaskStoreBindings = {
   projectName: string;
   gitCwd?: string;
   graph: any;
+  /** Phase-234: NAPI 能力探测：applyMutations 是否可用（用于把多步 putRelation 合并为单次原子批写） */
+  nativeApplyMutationsReady?: boolean;
   getProjectId(): string;
   findEntityByProp(entityType: string, propKey: string, value: string): Entity | null;
   findEntitiesByType(entityType: string): Entity[];
@@ -35,6 +43,103 @@ export type TaskStoreBindings = {
   getSection(section: DevPlanSection, subSection?: string): any;
   saveSection(input: any): any;
 };
+
+/**
+ * Phase-234: 构造一个 PutRelation mutation（applyMutations 批写用）。
+ * Relation schema 见 ai_db/packages/core/src/types/graph.rs `pub struct Relation { id, source, target, relation_type, weight, bidirectional, metadata, created_at }`。
+ * id 必填且服务端无默认；created_at 也必填无默认；其余字段有 serde 默认值。
+ *
+ * Phase-235: 导出供 graph-store.ts saveSectionAsync 等其他文件复用。
+ */
+export function buildPutRelationMutation(
+  sourceId: string,
+  targetId: string,
+  relationType: string,
+  createdAtMs: number,
+): { type: 'PutRelation'; relation: Record<string, unknown> } {
+  return {
+    type: 'PutRelation',
+    relation: {
+      id: randomUUID(),
+      source: sourceId,
+      target: targetId,
+      relation_type: relationType,
+      weight: 1.0,
+      bidirectional: false,
+      metadata: {},
+      created_at: createdAtMs,
+    },
+  };
+}
+
+/**
+ * Phase-235: 构造一个 DeleteRelation mutation。
+ * applyMutations 的 DeleteRelation 需要 `relation_id` 和 `source_entity_id`（用于 shard 路由）。
+ */
+export function buildDeleteRelationMutation(
+  relationId: string,
+  sourceEntityId: string,
+): { type: 'DeleteRelation'; relation_id: string; source_entity_id: string } {
+  return {
+    type: 'DeleteRelation',
+    relation_id: relationId,
+    source_entity_id: sourceEntityId,
+  };
+}
+
+/**
+ * Phase-235: 构造一个 DeleteEntity mutation。
+ */
+export function buildDeleteEntityMutation(id: string): { type: 'DeleteEntity'; id: string } {
+  return {
+    type: 'DeleteEntity',
+    id,
+  };
+}
+
+/**
+ * Phase-235: 统一执行 mutations 数组，applyMutations 抛错时按 op 类型 fallback 到同步等效调用。
+ * 这样每条 mutation 都能保证落地，避免因为单批失败导致整批数据丢失。
+ *
+ * 该函数只依赖 graph 对象本身（applyMutations / putRelation / deleteRelation / deleteEntity），
+ * 因此既可以由 task 系（传 store.graph）调用，也可以由 graph-store.ts 里 saveSectionAsync 直接传 this.graph 调用。
+ */
+export async function executeMutationsOnGraph(
+  graph: any,
+  mutations: Array<Record<string, unknown>>,
+): Promise<void> {
+  if (mutations.length === 0) return;
+  try {
+    await graph.applyMutations(mutations);
+    return;
+  } catch (e) {
+    // eslint-disable-next-line no-console
+    console.warn('[Phase-235] applyMutations failed, falling back to per-op sync', e);
+  }
+  for (const m of mutations) {
+    try {
+      if (m.type === 'PutRelation') {
+        const r = m.relation as { source: string; target: string; relation_type: string };
+        graph.putRelation(r.source, r.target, r.relation_type);
+      } else if (m.type === 'DeleteRelation') {
+        graph.deleteRelation((m as any).relation_id);
+      } else if (m.type === 'DeleteEntity') {
+        graph.deleteEntity((m as any).id);
+      }
+    } catch (innerErr) {
+      // eslint-disable-next-line no-console
+      console.warn('[Phase-235] per-op fallback failed', m.type, innerErr);
+    }
+  }
+}
+
+/** Phase-234 兼容入口：保留原 TaskStoreBindings 接收形态供任务系函数继续使用。 */
+async function executeMutationsOrFallback(
+  store: TaskStoreBindings,
+  mutations: Array<Record<string, unknown>>,
+): Promise<void> {
+  return executeMutationsOnGraph(store.graph, mutations);
+}
 
 export function createMainTask(store: TaskStoreBindings, input: MainTaskInput): MainTask {
   const existing = getMainTask(store, input.taskId);
@@ -94,6 +199,139 @@ export function createMainTask(store: TaskStoreBindings, input: MainTaskInput): 
 
   store.graph.flush();
   return store.entityToMainTask(entity);
+}
+
+/**
+ * Phase-234: createMainTask 的 async 版本，把所有 relation 写入合并为一次 applyMutations 原子批写。
+ *
+ * 收益：NAPI 边界穿越从 O(1 + N + M)（典型 3~10+ 次）降到 O(1)（1 次 upsertEntity + 1 次 applyMutations）。
+ *
+ * 注意：
+ * - entity 本身仍走同步 upsertEntityByProp（applyMutations 的 PutEntity 需要预生成 entity.id，
+ *   而 upsertEntityByProp 的幂等语义来自 Rust core，无法在 JS 端原子复刻——继续走同步路径最安全）。
+ * - 当 nativeApplyMutationsReady === false 或 applyMutations 抛错时，无缝 fallback 到 sync createMainTask 路径，
+ *   保证语义与原实现完全一致。
+ */
+export async function createMainTaskAsync(
+  store: TaskStoreBindings,
+  input: MainTaskInput,
+): Promise<MainTask> {
+  const existing = getMainTask(store, input.taskId);
+  if (existing) return existing;
+
+  if (!store.nativeApplyMutationsReady) {
+    return createMainTask(store, input);
+  }
+
+  const now = Date.now();
+  const order = input.order != null ? input.order : getNextMainTaskOrder(store);
+  const normalizedTitle = normalizeMainTaskTitle(input.taskId, input.title);
+
+  const entity = store.graph.upsertEntityByProp(
+    ET.MAIN_TASK, 'taskId', input.taskId, normalizedTitle, {
+      projectName: store.projectName,
+      taskId: input.taskId,
+      title: normalizedTitle,
+      priority: input.priority,
+      description: input.description || '',
+      estimatedHours: input.estimatedHours || 0,
+      relatedSections: input.relatedSections || [],
+      relatedPromptIds: input.relatedPromptIds || [],
+      moduleId: input.moduleId || null,
+      totalSubtasks: 0,
+      completedSubtasks: 0,
+      status: 'pending',
+      order,
+      createdAt: now,
+      updatedAt: now,
+      completedAt: null,
+    },
+  );
+
+  const mutations: Array<{ type: string; relation: Record<string, unknown> }> = [];
+  mutations.push(buildPutRelationMutation(store.getProjectId(), entity.id, RT.HAS_MAIN_TASK, now));
+
+  if (input.moduleId) {
+    const modEntity = store.findEntityByProp(ET.MODULE, 'moduleId', input.moduleId);
+    if (modEntity) {
+      mutations.push(buildPutRelationMutation(modEntity.id, entity.id, RT.MODULE_HAS_TASK, now));
+    }
+  }
+
+  if (input.relatedSections?.length) {
+    for (const sk of input.relatedSections) {
+      const [sec, sub] = sk.split('|');
+      const docEntity = store.findDocEntityBySection(sec as DevPlanSection, sub);
+      if (docEntity) {
+        mutations.push(buildPutRelationMutation(entity.id, docEntity.id, RT.TASK_HAS_DOC, now));
+      }
+    }
+  }
+
+  if (input.relatedPromptIds?.length) {
+    for (const promptId of input.relatedPromptIds) {
+      const promptEntity = store.graph.getEntity(promptId);
+      if (promptEntity && promptEntity.entity_type === ET.PROMPT) {
+        mutations.push(buildPutRelationMutation(entity.id, promptEntity.id, RT.TASK_HAS_PROMPT, now));
+      }
+    }
+  }
+
+  await executeMutationsOrFallback(store, mutations);
+
+  store.graph.flush();
+  return store.entityToMainTask(entity);
+}
+
+/**
+ * Phase-235: addSubTask 的 async 版本。
+ *
+ * 该热路径单步 putRelation 较少（仅 HAS_SUB_TASK 一条），主要价值在保持模式一致：
+ * 与 createMainTaskAsync / upsertMainTaskAsync 等共享同一套 mutation/批写/fallback 工具链，
+ * 也便于未来 addSubTask 内部新增其他 relation（如 SUB_TASK_HAS_FILE 等）时直接挂入 mutations 数组。
+ */
+export async function addSubTaskAsync(
+  store: TaskStoreBindings,
+  input: SubTaskInput,
+): Promise<SubTask> {
+  const existing = getSubTask(store, input.taskId);
+  if (existing) return existing;
+
+  if (!store.nativeApplyMutationsReady) {
+    return addSubTask(store, input);
+  }
+
+  const mainTask = getMainTask(store, input.parentTaskId);
+  if (!mainTask) {
+    throw new Error(`Parent main task "${input.parentTaskId}" not found for project "${store.projectName}"`);
+  }
+
+  const now = Date.now();
+  const order = input.order != null ? input.order : getNextSubTaskOrder(store, input.parentTaskId);
+  const entity = store.graph.upsertEntityByProp(
+    ET.SUB_TASK, 'taskId', input.taskId, input.title, {
+      projectName: store.projectName,
+      taskId: input.taskId,
+      parentTaskId: input.parentTaskId,
+      title: input.title,
+      estimatedHours: input.estimatedHours || 0,
+      relatedFiles: input.relatedFiles || [],
+      description: input.description || '',
+      status: 'pending',
+      order,
+      createdAt: now,
+      updatedAt: now,
+      completedAt: null,
+    },
+  );
+
+  await executeMutationsOrFallback(store, [
+    buildPutRelationMutation(mainTask.id, entity.id, RT.HAS_SUB_TASK, now),
+  ]);
+
+  refreshMainTaskCounts(store, input.parentTaskId);
+  store.graph.flush();
+  return store.entityToSubTask(entity);
 }
 
 export function upsertMainTask(
@@ -169,6 +407,108 @@ export function upsertMainTask(
       }
     }
   }
+
+  store.graph.flush();
+  return getMainTask(store, input.taskId) || existing;
+}
+
+/**
+ * Phase-235: upsertMainTask 的 async 版本。
+ *
+ * existing 分支可批写最多：1×DeleteRelation(old module) + 1×PutRelation(new module) + N×DeleteRelation(old docs) + N×PutRelation(new docs)。
+ * 不存在分支转发到 createMainTaskAsync 复用其批写路径。
+ */
+export async function upsertMainTaskAsync(
+  store: TaskStoreBindings,
+  input: MainTaskInput,
+  options?: { preserveStatus?: boolean; status?: TaskStatus },
+): Promise<MainTask> {
+  const preserveStatus = options?.preserveStatus !== false;
+  const targetStatus = options?.status || 'pending';
+  const existing = getMainTask(store, input.taskId);
+
+  if (!existing) {
+    const task = await createMainTaskAsync(store, input);
+    if (targetStatus !== 'pending') {
+      return updateMainTaskStatus(store, task.taskId, targetStatus) || task;
+    }
+    return task;
+  }
+
+  if (!store.nativeApplyMutationsReady) {
+    return upsertMainTask(store, input, options);
+  }
+
+  let finalStatus = targetStatus;
+  if (preserveStatus) {
+    const statusPriority: Record<TaskStatus, number> = {
+      cancelled: 0, revoked: 0, pending: 1, in_progress: 2, completed: 3,
+    };
+    if (statusPriority[existing.status] >= statusPriority[targetStatus]) {
+      finalStatus = existing.status;
+    }
+  }
+
+  const now = Date.now();
+  const completedAt = finalStatus === 'completed' ? (existing.completedAt || now) : null;
+  const finalModuleId = input.moduleId || existing.moduleId;
+  const finalOrder = input.order != null ? input.order : existing.order;
+  const normalizedTitle = normalizeMainTaskTitle(input.taskId, input.title);
+
+  const upsertedEntity = store.graph.upsertEntityByProp(
+    ET.MAIN_TASK, 'taskId', input.taskId, normalizedTitle, {
+      projectName: store.projectName,
+      taskId: input.taskId,
+      title: normalizedTitle,
+      priority: input.priority,
+      description: input.description || existing.description || '',
+      estimatedHours: input.estimatedHours || existing.estimatedHours || 0,
+      relatedSections: input.relatedSections || existing.relatedSections || [],
+      relatedPromptIds: input.relatedPromptIds || existing.relatedPromptIds || [],
+      moduleId: finalModuleId || null,
+      totalSubtasks: existing.totalSubtasks,
+      completedSubtasks: existing.completedSubtasks,
+      status: finalStatus,
+      order: finalOrder,
+      createdAt: existing.createdAt,
+      updatedAt: now,
+      completedAt,
+    },
+  );
+  const upsertedId = upsertedEntity?.id || existing.id;
+
+  const mutations: Array<Record<string, unknown>> = [];
+
+  if (finalModuleId && finalModuleId !== existing.moduleId) {
+    if (existing.moduleId) {
+      const oldMod = store.findEntityByProp(ET.MODULE, 'moduleId', existing.moduleId);
+      if (oldMod) {
+        const rel = store.graph.getRelationBetween(oldMod.id, upsertedId);
+        if (rel) mutations.push(buildDeleteRelationMutation(rel.id, oldMod.id));
+      }
+    }
+    const newMod = store.findEntityByProp(ET.MODULE, 'moduleId', finalModuleId);
+    if (newMod) {
+      mutations.push(buildPutRelationMutation(newMod.id, upsertedId, RT.MODULE_HAS_TASK, now));
+    }
+  }
+
+  const newRelatedSections = input.relatedSections || existing.relatedSections || [];
+  if (newRelatedSections.length) {
+    const oldDocRels = store.getOutRelations(upsertedId, RT.TASK_HAS_DOC);
+    for (const rel of oldDocRels) {
+      mutations.push(buildDeleteRelationMutation(rel.id, rel.source || upsertedId));
+    }
+    for (const sk of newRelatedSections) {
+      const [sec, sub] = sk.split('|');
+      const docEntity = store.findDocEntityBySection(sec as DevPlanSection, sub);
+      if (docEntity) {
+        mutations.push(buildPutRelationMutation(upsertedId, docEntity.id, RT.TASK_HAS_DOC, now));
+      }
+    }
+  }
+
+  await executeMutationsOrFallback(store, mutations);
 
   store.graph.flush();
   return getMainTask(store, input.taskId) || existing;
@@ -260,6 +600,71 @@ export function deleteTask(
   }
 
   store.graph.deleteEntity(subTask.id);
+  const reconciled = reconcileMainTaskAfterSubTaskDeletion(store, subTask.parentTaskId);
+  store.graph.flush();
+  return {
+    deleted: true,
+    taskType: 'sub',
+    deletedSubTaskIds: [taskId],
+    deletedTaskIds: [taskId],
+    parentTaskId: reconciled?.taskId || subTask.parentTaskId,
+  };
+}
+
+/**
+ * Phase-235: deleteTask 的 async 版本。
+ *
+ * main 分支收益最大：N 个子任务 + 1 个主任务的 DeleteEntity 一次性原子批写。
+ * sub 分支只有 1 个 DeleteEntity，仍走单批以保持模式一致。
+ *
+ * 能力不可用时无缝 fallback 到 sync deleteTask 路径。
+ */
+export async function deleteTaskAsync(
+  store: TaskStoreBindings,
+  taskId: string,
+  taskType?: 'main' | 'sub',
+): Promise<DeleteTaskResult> {
+  const resolvedType = resolveTaskDeleteType(store, taskId, taskType);
+  if (!resolvedType) {
+    return { deleted: false, taskType: null, deletedSubTaskIds: [], deletedTaskIds: [], parentTaskId: null };
+  }
+
+  if (!store.nativeApplyMutationsReady) {
+    return deleteTask(store, taskId, taskType);
+  }
+
+  if (resolvedType === 'main') {
+    const mainTask = getMainTask(store, taskId);
+    if (!mainTask) {
+      return { deleted: false, taskType: null, deletedSubTaskIds: [], deletedTaskIds: [], parentTaskId: null };
+    }
+
+    const subTasks = listSubTasks(store, taskId);
+    const mutations: Array<Record<string, unknown>> = [];
+    for (const subTask of subTasks) {
+      mutations.push(buildDeleteEntityMutation(subTask.id));
+    }
+    mutations.push(buildDeleteEntityMutation(mainTask.id));
+
+    await executeMutationsOrFallback(store, mutations);
+    store.graph.flush();
+
+    return {
+      deleted: true,
+      taskType: 'main',
+      deletedMainTaskId: taskId,
+      deletedSubTaskIds: subTasks.map((sub) => sub.taskId),
+      deletedTaskIds: [taskId, ...subTasks.map((sub) => sub.taskId)],
+      parentTaskId: null,
+    };
+  }
+
+  const subTask = getSubTask(store, taskId);
+  if (!subTask) {
+    return { deleted: false, taskType: null, deletedSubTaskIds: [], deletedTaskIds: [], parentTaskId: null };
+  }
+
+  await executeMutationsOrFallback(store, [buildDeleteEntityMutation(subTask.id)]);
   const reconciled = reconcileMainTaskAfterSubTaskDeletion(store, subTask.parentTaskId);
   store.graph.flush();
   return {
@@ -495,34 +900,110 @@ export function updateTaskStatus(
 }
 
 export function completeSubTask(store: TaskStoreBindings, taskId: string): CompleteSubTaskResult {
+  const profileEnabled = isCompleteTaskProfileEnabled();
+  const tStart = Date.now();
+  let tCursor = tStart;
+  const profile: Record<string, number | string | boolean> = {
+    taskId,
+    projectName: store.projectName,
+  };
+
   const commitHash = getCurrentGitCommitUtil(store.gitCwd);
-  const updatedSubTask = updateSubTaskStatus(store, taskId, 'completed', {
-    completedAtCommit: commitHash,
-  });
-  if (!updatedSubTask) {
+  const tAfterCommit = Date.now();
+  profile.gitCommitMs = tAfterCommit - tCursor;
+  tCursor = tAfterCommit;
+
+  const subTaskEntity = store.findEntityByProp(ET.SUB_TASK, 'taskId', taskId);
+  if (!subTaskEntity) {
     throw new Error(`Sub task "${taskId}" not found for project "${store.projectName}"`);
   }
-
-  const updatedMainTask = refreshMainTaskCounts(store, updatedSubTask.parentTaskId);
-  if (!updatedMainTask) {
-    throw new Error(`Parent main task "${updatedSubTask.parentTaskId}" not found`);
+  const subTask = store.entityToSubTask(subTaskEntity);
+  const mainTaskEntity = store.findEntityByProp(ET.MAIN_TASK, 'taskId', subTask.parentTaskId);
+  if (!mainTaskEntity) {
+    throw new Error(`Parent main task "${subTask.parentTaskId}" not found`);
   }
+  const mainTask = store.entityToMainTask(mainTaskEntity);
+  const tAfterLookup = Date.now();
+  profile.lookupMs = tAfterLookup - tCursor;
+  tCursor = tAfterLookup;
+
+  const now = Date.now();
+  const completedAtCommit = commitHash || subTask.completedAtCommit;
+  store.graph.updateEntity(subTaskEntity.id, {
+    properties: {
+      status: 'completed',
+      updatedAt: now,
+      completedAt: now,
+      completedAtCommit: completedAtCommit || null,
+      revertReason: null,
+    },
+  });
+  const tAfterSubWrite = Date.now();
+  profile.subTaskWriteMs = tAfterSubWrite - tCursor;
+  tCursor = tAfterSubWrite;
+
+  const subTasks = listSubTasks(store, subTask.parentTaskId);
+  const completedCount = subTasks.filter((s) => s.taskId === taskId || s.status === 'completed').length;
+  const tAfterCount = Date.now();
+  profile.aggregateCountMs = tAfterCount - tCursor;
+  tCursor = tAfterCount;
 
   const mainTaskCompleted =
-    updatedMainTask.totalSubtasks > 0 &&
-    updatedMainTask.completedSubtasks >= updatedMainTask.totalSubtasks;
+    subTasks.length > 0 &&
+    completedCount >= subTasks.length;
 
-  if (mainTaskCompleted && updatedMainTask.status !== 'completed') {
-    const completedMain = updateMainTaskStatus(store, updatedSubTask.parentTaskId, 'completed');
-    if (completedMain) {
-      store.autoUpdateMilestones(completedMain);
-      return {
-        subTask: updatedSubTask,
-        mainTask: completedMain,
-        mainTaskCompleted: true,
-        completedAtCommit: commitHash,
-      };
-    }
+  const nextMainStatus = mainTaskCompleted ? 'completed' : mainTask.status;
+  const nextMainCompletedAt = mainTaskCompleted
+    ? (mainTask.completedAt || now)
+    : mainTask.completedAt;
+  store.graph.updateEntity(mainTaskEntity.id, {
+    properties: {
+      totalSubtasks: subTasks.length,
+      completedSubtasks: completedCount,
+      status: nextMainStatus,
+      updatedAt: now,
+      completedAt: nextMainCompletedAt,
+    },
+  });
+  const tAfterMainWrite = Date.now();
+  profile.mainTaskWriteMs = tAfterMainWrite - tCursor;
+  tCursor = tAfterMainWrite;
+
+  store.graph.flush();
+  const tAfterFlush = Date.now();
+  profile.flushMs = tAfterFlush - tCursor;
+  tCursor = tAfterFlush;
+
+  const updatedSubTaskEntity = store.graph.getEntity(subTaskEntity.id);
+  const updatedMainTaskEntity = store.graph.getEntity(mainTaskEntity.id);
+  const updatedSubTask = updatedSubTaskEntity
+    ? store.entityToSubTask(updatedSubTaskEntity)
+    : { ...subTask, status: 'completed' as const, updatedAt: now, completedAt: now, completedAtCommit };
+  const updatedMainTask = updatedMainTaskEntity
+    ? store.entityToMainTask(updatedMainTaskEntity)
+    : {
+      ...mainTask,
+      totalSubtasks: subTasks.length,
+      completedSubtasks: completedCount,
+      status: nextMainStatus,
+      updatedAt: now,
+      completedAt: nextMainCompletedAt,
+    };
+  const tAfterHydrate = Date.now();
+  profile.readbackMs = tAfterHydrate - tCursor;
+  tCursor = tAfterHydrate;
+
+  if (mainTaskCompleted && mainTask.status !== 'completed') {
+    store.autoUpdateMilestones(updatedMainTask);
+  }
+  const tAfterMilestone = Date.now();
+  profile.milestoneMs = tAfterMilestone - tCursor;
+  profile.mainTaskCompleted = mainTaskCompleted;
+  profile.totalMs = tAfterMilestone - tStart;
+
+  if (profileEnabled) {
+    // eslint-disable-next-line no-console
+    console.error(`[DevPlan][Profile][completeSubTask] ${JSON.stringify(profile)}`);
   }
 
   return {
@@ -533,13 +1014,25 @@ export function completeSubTask(store: TaskStoreBindings, taskId: string): Compl
   };
 }
 
-export function completeMainTask(store: TaskStoreBindings, taskId: string): MainTask {
+function completeMainTaskCore(store: TaskStoreBindings, taskId: string): MainTask {
+  const existing = getMainTask(store, taskId);
+  if (!existing) {
+    throw new Error(`Main task "${taskId}" not found for project "${store.projectName}"`);
+  }
+  if (existing.status === 'completed') {
+    return existing;
+  }
+
   const result = updateMainTaskStatus(store, taskId, 'completed');
   if (!result) {
     throw new Error(`Main task "${taskId}" not found for project "${store.projectName}"`);
   }
   store.autoUpdateMilestones(result);
   return result;
+}
+
+export function completeMainTask(store: TaskStoreBindings, taskId: string): MainTask {
+  return completeMainTaskCore(store, taskId);
 }
 
 export function getProgress(store: TaskStoreBindings): ProjectProgress {

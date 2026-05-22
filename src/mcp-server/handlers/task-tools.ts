@@ -17,6 +17,11 @@ const MUTATING_TASK_TOOLS = new Set([
   'devplan_sync_git',
 ]);
 
+function isTaskHandlerProfileEnabled(): boolean {
+  const raw = String(process.env.AIFASTDB_DEVPLAN_PROFILE_COMPLETE_SUBTASK || '').trim().toLowerCase();
+  return raw === '1' || raw === 'true' || raw === 'yes';
+}
+
 export async function handleTaskToolCall(
   name: string,
   args: ToolArgs,
@@ -41,7 +46,12 @@ export async function handleTaskToolCall(
         const plan = getDevPlan(args.projectName);
         try {
           // Phase-23: createMainTask 内部已幂等处理（upsertEntityByProp），无需额外检查
-          const mainTask = plan.createMainTask({
+          // Phase-237: 回滚 Phase-234 的 createMainTaskAsync 分支。Microbenchmark 实测
+          //   100 轮均值 sync 61.63ms vs async 77.68ms (+26.0% 退化)。原因：新建 main task
+          //   只有 2 条 PutRelation (project + module)，applyMutations 的 Tokio async runtime
+          //   + 完整 Relation payload (8 字段) 序列化成本，比 sync putRelation 简化 schema 贵。
+          //   保留 createMainTaskAsync 实现以备后续 batch import 场景调用，但 MCP 入口强走 sync。
+          const createInput = {
             projectName: args.projectName,
             taskId: args.taskId,
             title: args.title,
@@ -52,7 +62,8 @@ export async function handleTaskToolCall(
             relatedSections: args.relatedDocSections,
             relatedPromptIds: args.relatedPromptIds,
             order: args.order,
-          });
+          };
+          const mainTask = plan.createMainTask(createInput);
 
           return JSON.stringify({
             success: true,
@@ -79,7 +90,8 @@ export async function handleTaskToolCall(
       const plan = getDevPlan(args.projectName);
       try {
         // Phase-23: addSubTask 内部已幂等处理（upsertEntityByProp），无需额外检查
-        const subTask = plan.addSubTask({
+        // Phase-235: 优先调 async 版（applyMutations 批写），未实现时 fallback sync。
+        const addSubInput = {
           projectName: args.projectName,
           taskId: args.taskId,
           parentTaskId: args.parentTaskId,
@@ -87,7 +99,10 @@ export async function handleTaskToolCall(
           estimatedHours: args.estimatedHours,
           description: args.description,
           order: args.order,
-        });
+        };
+        const subTask = typeof plan.addSubTaskAsync === 'function'
+          ? await plan.addSubTaskAsync(addSubInput)
+          : plan.addSubTask(addSubInput);
 
         return JSON.stringify({
           success: true,
@@ -112,7 +127,11 @@ export async function handleTaskToolCall(
 
       const plan = getDevPlan(args.projectName);
       try {
-        const result = plan.deleteTask(args.taskId, args.taskType as 'main' | 'sub' | undefined);
+        // Phase-235: main 分支收益最大（N+1 个 DeleteEntity 合并），优先调 async 版。
+        const taskTypeArg = args.taskType as 'main' | 'sub' | undefined;
+        const result = typeof plan.deleteTaskAsync === 'function'
+          ? await plan.deleteTaskAsync(args.taskId, taskTypeArg)
+          : plan.deleteTask(args.taskId, taskTypeArg);
         return JSON.stringify({
           success: result.deleted,
           ...result,
@@ -174,21 +193,23 @@ export async function handleTaskToolCall(
           if (!args.priority) {
             throw new McpError(ErrorCode.InvalidParams, 'Missing required for main task: priority');
           }
-          const mainTask = plan.upsertMainTask(
-            {
-              projectName: args.projectName,
-              taskId: args.taskId,
-              title: args.title,
-              priority: args.priority as TaskPriority,
-              description: args.description,
-              estimatedHours: args.estimatedHours,
-              moduleId: args.moduleId,
-              relatedSections: args.relatedDocSections,
-              relatedPromptIds: args.relatedPromptIds,
-              order: args.order,
-            },
-            { preserveStatus, status: targetStatus }
-          );
+          // Phase-235: 优先 upsertMainTaskAsync 走 applyMutations 批写（module + doc 关联）
+          const upsertMainInput = {
+            projectName: args.projectName,
+            taskId: args.taskId,
+            title: args.title,
+            priority: args.priority as TaskPriority,
+            description: args.description,
+            estimatedHours: args.estimatedHours,
+            moduleId: args.moduleId,
+            relatedSections: args.relatedDocSections,
+            relatedPromptIds: args.relatedPromptIds,
+            order: args.order,
+          };
+          const upsertOpts = { preserveStatus, status: targetStatus };
+          const mainTask = typeof plan.upsertMainTaskAsync === 'function'
+            ? await plan.upsertMainTaskAsync(upsertMainInput, upsertOpts)
+            : plan.upsertMainTask(upsertMainInput, upsertOpts);
           return JSON.stringify({
             success: true,
             taskType: 'main',
@@ -245,38 +266,27 @@ export async function handleTaskToolCall(
       const plan = getDevPlan(args.projectName);
       const taskType = args.taskType || 'sub';
 
-      /**
-       * 查找下一个待处理的主任务（按 order 排序）
-       * 优先返回 in_progress 的，其次是 pending 的
-       */
-      const findNextPendingPhase = () => {
+      const getPhaseCompletionSummary = () => {
         const allMainTasks = plan.listMainTasks();
-        // 优先找 in_progress 的主任务
         const inProgress = allMainTasks.find(t => t.status === 'in_progress');
-        if (inProgress) {
-          return { taskId: inProgress.taskId, title: inProgress.title, status: inProgress.status, priority: inProgress.priority };
-        }
-        // 其次找 pending 的主任务（已按 order 排序）
         const pending = allMainTasks.find(t => t.status === 'pending');
-        if (pending) {
-          return { taskId: pending.taskId, title: pending.title, status: pending.status, priority: pending.priority };
-        }
-        return null;
-      };
-
-      /**
-       * 统计剩余未完成的主任务数量
-       */
-      const countRemainingPhases = () => {
-        const allMainTasks = plan.listMainTasks();
-        return allMainTasks.filter(t => t.status === 'pending' || t.status === 'in_progress').length;
+        const nextPhaseCandidate = inProgress || pending;
+        const nextPhase = nextPhaseCandidate
+          ? {
+            taskId: nextPhaseCandidate.taskId,
+            title: nextPhaseCandidate.title,
+            status: nextPhaseCandidate.status,
+            priority: nextPhaseCandidate.priority,
+          }
+          : null;
+        const remainingCount = allMainTasks.filter(t => t.status === 'pending' || t.status === 'in_progress').length;
+        return { nextPhase, remainingCount };
       };
 
       try {
         if (taskType === 'main') {
           const mainTask = plan.completeMainTask(args.taskId);
-          const nextPhase = findNextPendingPhase();
-          const remainingCount = countRemainingPhases();
+          const { nextPhase, remainingCount } = getPhaseCompletionSummary();
           const response: Record<string, unknown> = {
             success: true,
             taskType: 'main',
@@ -322,8 +332,19 @@ export async function handleTaskToolCall(
           };
           // 当主任务也随之完成时，查询下一个待处理阶段
           if (result.mainTaskCompleted) {
-            const nextPhase = findNextPendingPhase();
-            const remainingCount = countRemainingPhases();
+            const profileEnabled = isTaskHandlerProfileEnabled();
+            const phaseSummaryStart = Date.now();
+            const { nextPhase, remainingCount } = getPhaseCompletionSummary();
+            const phaseSummaryMs = Date.now() - phaseSummaryStart;
+            if (profileEnabled) {
+              // eslint-disable-next-line no-console
+              console.error(`[DevPlan][Profile][completeTaskHandler] ${JSON.stringify({
+                taskId: result.subTask.taskId,
+                parentTaskId: result.mainTask.taskId,
+                phaseSummaryMs,
+                remainingCount,
+              })}`);
+            }
             if (nextPhase) {
               response.nextPhase = nextPhase;
               response.remainingPhases = remainingCount;
