@@ -20,9 +20,10 @@ import * as path from 'path';
 import * as fs from 'fs/promises';
 import * as zlib from 'zlib';
 import { DevPlanGraphStore } from '../dev-plan-graph-store';
-import { createDevPlan, getDefaultBasePath, resolveBasePathForProject, readDevPlanConfig } from '../dev-plan-factory';
+import { createDevPlan, createDevPlanVisualLite, getDefaultBasePath, resolveBasePathForProject, readDevPlanConfig } from '../dev-plan-factory';
 import { CodeBridgeStore, EmbeddedCodeIntelligenceStore, runCodeIntelRegressionCheck } from '../code-intelligence';
 import type { IDevPlanStore } from '../dev-plan-interface';
+import { ET } from '../dev-plan-graph-store.shared';
 import { getVisualizationHTML } from './template';
 import { getGraphCanvasScript } from './graph-canvas/index';
 import { buildPutRelationMutation } from '../graph-mutation-utils';
@@ -145,7 +146,7 @@ function parseArgs(): CliArgs {
 // ============================================================================
 
 function createStore(project: string, basePath: string): IDevPlanStore {
-  const store = createDevPlan(project, basePath, 'graph');
+  const store = createDevPlanVisualLite(project, basePath);
 
   if (!(store instanceof DevPlanGraphStore)) {
     console.error(`错误: 项目 "${project}" 未使用 graph 引擎。`);
@@ -206,6 +207,18 @@ function perfLog(message: string): void {
   if (PERF_LOG) console.error(`[perf] ${message}`);
 }
 
+function countModulesLite(store: IDevPlanStore): number {
+  try {
+    const findEntitiesByType = (store as any).findEntitiesByType;
+    if (typeof findEntitiesByType === 'function') {
+      return findEntitiesByType.call(store, ET.MODULE).length;
+    }
+  } catch {
+    // fallback below
+  }
+  return store.listModules().length;
+}
+
 function primeStoreCache(store: IDevPlanStore, source: string): void {
   _cachedStore = store;
   _cachedStoreAt = Date.now();
@@ -228,7 +241,7 @@ function getCachedStore(projectName: string, basePath: string): IDevPlanStore {
     console.error(`[cache] store MISS (reason=${reason})`);
   }
   const reason = !_cachedStore ? 'cold' : 'ttl';
-  _cachedStore = createDevPlan(projectName, basePath, 'graph');
+  _cachedStore = createDevPlanVisualLite(projectName, basePath);
   _cachedStoreAt = now;
   invalidateGraphPayloadCache();
   invalidateProgressCache();
@@ -326,7 +339,7 @@ function getCachedProgress(store: IDevPlanStore, storeAt: number): unknown {
   const sections = store.listSections();
   const sectionsMs = perfNowMs() - tSections;
   const tModules = perfNowMs();
-  const modules = store.listModules();
+  const moduleCount = countModulesLite(store);
   const modulesMs = perfNowMs() - tModules;
   let promptCount = 0;
   let promptsMs = 0;
@@ -339,7 +352,7 @@ function getCachedProgress(store: IDevPlanStore, storeAt: number): unknown {
   } catch { /* listPrompts 不支持时忽略 */ }
   const payload = {
     ...progress,
-    moduleCount: modules.length,
+    moduleCount,
     docCount: sections.length,
     promptCount,
   };
@@ -432,7 +445,7 @@ function writeJsonMaybeCompressed(
 
 /** 写操作：创建全新 store + invalidate 全部缓存（含 graph payload / progress） */
 function createFreshStore(projectName: string, basePath: string): IDevPlanStore {
-  const store = createDevPlan(projectName, basePath, 'graph');
+  const store = createDevPlanVisualLite(projectName, basePath);
   _cachedStore = null;
   _cachedStoreAt = 0;
   invalidateGraphPayloadCache();
@@ -707,7 +720,7 @@ function startServer(projectName: string, basePath: string, port: number): void 
     projectName,
     basePath,
     codeIntelStore,
-    createDevPlan(projectName, basePath, 'graph'),
+    createDevPlanVisualLite(projectName, basePath),
   );
 
   function writeJson(res: http.ServerResponse, statusCode: number, body: unknown): void {
@@ -2146,92 +2159,6 @@ function startServer(projectName: string, basePath: string, port: number): void 
             res.writeHead(500, { 'Content-Type': 'application/json; charset=utf-8' });
             res.end(JSON.stringify({ error: '删除文档失败: ' + (delErr.message || String(delErr)) }));
           }
-          break;
-        }
-
-        case '/api/chat': {
-          // POST /api/chat — 智能文档对话（元信息问答 + 语义搜索 + 分数过滤）
-          if (req.method !== 'POST') {
-            res.writeHead(405, { 'Content-Type': 'application/json; charset=utf-8' });
-            res.end(JSON.stringify({ error: 'Method Not Allowed. Use POST.' }));
-            break;
-          }
-
-          const body = await readRequestBody(req);
-          const query = body?.query;
-          if (!query || typeof query !== 'string' || query.trim().length === 0) {
-            res.writeHead(400, { 'Content-Type': 'application/json; charset=utf-8' });
-            res.end(JSON.stringify({ error: '缺少 query 参数' }));
-            break;
-          }
-
-          const store = getCachedStore(projectName, basePath);
-          const q = query.trim();
-          const qLower = q.toLowerCase();
-
-          // ================================================================
-          // 第一步：检测元信息问题，直接回答
-          // ================================================================
-          const metaAnswer = detectMetaQuestion(store, projectName, q, qLower);
-          if (metaAnswer) {
-            res.writeHead(200, { 'Content-Type': 'application/json; charset=utf-8' });
-            res.end(JSON.stringify({
-              query: q,
-              type: 'meta',
-              answer: metaAnswer,
-            }));
-            break;
-          }
-
-          // ================================================================
-          // 第二步：文档内容搜索（带分数过滤）
-          // ================================================================
-          const limit = body.limit || 5;
-          const MIN_SCORE = 0.03; // 低于此分数视为不相关
-
-          let results: any[] = [];
-          let searchMode = 'literal';
-          if (store.searchSectionsAdvanced) {
-            const isSemanticEnabled = store.isSemanticSearchEnabled?.() || false;
-            searchMode = isSemanticEnabled ? 'hybrid' : 'literal';
-            const hits = store.searchSectionsAdvanced(q, {
-              mode: searchMode as any,
-              limit: limit * 2, // 多取一些，后面过滤
-              minScore: 0,
-            });
-            results = hits
-              .filter((doc: any) => doc.score == null || doc.score >= MIN_SCORE)
-              .slice(0, limit)
-              .map((doc: any) => ({
-                section: doc.section,
-                subSection: doc.subSection || null,
-                title: doc.title,
-                score: doc.score != null ? Math.round(doc.score * 1000) / 1000 : null,
-                snippet: (doc.content || '').substring(0, 300).replace(/\n/g, ' ').trim(),
-                updatedAt: doc.updatedAt || null,
-                version: doc.version || null,
-              }));
-          } else {
-            const hits = store.searchSections(q, limit);
-            results = hits.map((doc: any) => ({
-              section: doc.section,
-              subSection: doc.subSection || null,
-              title: doc.title,
-              score: null,
-              snippet: (doc.content || '').substring(0, 300).replace(/\n/g, ' ').trim(),
-              updatedAt: doc.updatedAt || null,
-              version: doc.version || null,
-            }));
-          }
-
-          res.writeHead(200, { 'Content-Type': 'application/json; charset=utf-8' });
-          res.end(JSON.stringify({
-            query: q,
-            type: 'search',
-            mode: searchMode,
-            count: results.length,
-            results,
-          }));
           break;
         }
 

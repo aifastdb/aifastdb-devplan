@@ -1,7 +1,7 @@
 /**
  * DevPlan 图可视化 — 页面模块
  *
- * 包含: 文档浏览页、RAG 聊天、统计仪表盘。
+ * 包含: 文档浏览页、统计仪表盘。
  */
 
 export function getPagesScript(): string {
@@ -795,159 +795,14 @@ function docsSetupScrollSpy(headings) {
   onScroll();
 }
 
-// ========== RAG Chat ==========
-var chatHistory = []; // [{role:'user'|'assistant', content:string, results?:array}]
-var chatBusy = false;
-
-/** 点击推荐话题 */
-function chatSendTip(el) {
-  var input = document.getElementById('docsChatInput');
-  if (input) { input.value = el.textContent; chatSend(); }
-}
-
-/** Enter 发送（Shift+Enter 换行） */
-function chatInputKeydown(e) {
-  if (e.key === 'Enter' && !e.shiftKey) {
-    e.preventDefault();
-    chatSend();
-  }
-}
-
-/** 自动调整 textarea 高度 */
-function chatAutoResize(el) {
-  el.style.height = 'auto';
-  el.style.height = Math.min(el.scrollHeight, 120) + 'px';
-}
-
-/** 发送消息并搜索 */
-function chatSend() {
-  if (chatBusy) return;
-  var input = document.getElementById('docsChatInput');
-  var query = (input.value || '').trim();
-  if (!query) return;
-
-  // 隐藏欢迎信息
-  var welcome = document.getElementById('docsChatWelcome');
-  if (welcome) welcome.style.display = 'none';
-
-  // 添加用户消息
-  chatHistory.push({ role: 'user', content: query });
-  chatRenderBubble('user', query);
-  input.value = '';
-  chatAutoResize(input);
-
-  // 显示加载动画
-  chatBusy = true;
-  document.getElementById('docsChatSend').disabled = true;
-  var loadingId = 'chat-loading-' + Date.now();
-  var msgBox = document.getElementById('docsChatMessages');
-  var loadingHtml = '<div class="chat-bubble assistant" id="' + loadingId + '"><div class="chat-bubble-inner"><div class="chat-typing"><div class="chat-typing-dot"></div><div class="chat-typing-dot"></div><div class="chat-typing-dot"></div></div></div></div>';
-  msgBox.insertAdjacentHTML('beforeend', loadingHtml);
-  msgBox.scrollTop = msgBox.scrollHeight;
-
-  // 调用搜索 API
-  fetch('/api/chat', {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ query: query, limit: 5 })
-  }).then(function(r) { return r.json(); }).then(function(data) {
-    // 移除加载动画
-    var loadEl = document.getElementById(loadingId);
-    if (loadEl) loadEl.remove();
-
-    var replyHtml = '';
-
-    if (data.type === 'meta') {
-      // ---- 元信息直接回答 ----
-      replyHtml = chatFormatMarkdown(data.answer || '');
-    } else {
-      // ---- 文档搜索结果 ----
-      var results = data.results || [];
-      if (results.length > 0) {
-        replyHtml += '<div style="margin-bottom:8px;color:#9ca3af;font-size:12px;">找到 <strong style="color:#a5b4fc;">' + results.length + '</strong> 篇相关文档';
-        if (data.mode === 'hybrid') replyHtml += ' <span style="font-size:10px;color:#6b7280;">(语义+字面混合)</span>';
-        else if (data.mode === 'semantic') replyHtml += ' <span style="font-size:10px;color:#6b7280;">(语义搜索)</span>';
-        else replyHtml += ' <span style="font-size:10px;color:#6b7280;">(字面搜索)</span>';
-        replyHtml += '</div>';
-
-        for (var i = 0; i < results.length; i++) {
-          var r = results[i];
-          var docKey = r.section + (r.subSection ? '|' + r.subSection : '');
-          replyHtml += '<div class="chat-result-card" onclick="chatOpenDoc(\\x27' + docKey.replace(/'/g, "\\\\'") + '\\x27)">';
-          replyHtml += '<div class="chat-result-title">';
-          replyHtml += '<span>📄 ' + escHtml(r.title) + '</span>';
-          if (r.score != null) replyHtml += '<span class="chat-result-score">' + r.score.toFixed(3) + '</span>';
-          replyHtml += '</div>';
-          if (r.snippet) replyHtml += '<div class="chat-result-snippet">' + escHtml(r.snippet) + '</div>';
-          var metaParts = [];
-          if (r.section) metaParts.push(r.section);
-          if (r.updatedAt) metaParts.push(fmtDateShort(r.updatedAt));
-          if (r.version) metaParts.push('v' + r.version);
-          if (metaParts.length > 0) replyHtml += '<div class="chat-result-meta">' + metaParts.join(' · ') + '</div>';
-          replyHtml += '</div>';
-        }
-      } else {
-        replyHtml += '<div class="chat-no-result">🤔 未找到高度相关的文档。</div>';
-        replyHtml += '<div style="margin-top:8px;font-size:12px;color:#6b7280;line-height:1.6;">';
-        replyHtml += '建议：<br>';
-        replyHtml += '• 尝试使用更具体的 <strong>关键词</strong>（如 "向量搜索"、"GPU"、"LanceDB"）<br>';
-        replyHtml += '• 问项目统计问题（如 "有多少篇文档"、"项目进度"、"有哪些阶段"）<br>';
-        replyHtml += '• 输入 <strong>"帮助"</strong> 查看我的全部能力';
-        replyHtml += '</div>';
-      }
-    }
-
-    chatHistory.push({ role: 'assistant', content: replyHtml, results: data.results || [] });
-    chatRenderBubble('assistant', replyHtml, true);
-
-  }).catch(function(err) {
-    var loadEl = document.getElementById(loadingId);
-    if (loadEl) loadEl.remove();
-    chatRenderBubble('assistant', '<span style="color:#f87171;">搜索出错: ' + escHtml(err.message) + '</span>', true);
-  }).finally(function() {
-    chatBusy = false;
-    document.getElementById('docsChatSend').disabled = false;
-    document.getElementById('docsChatInput').focus();
-  });
-}
-
-/** 简单 Markdown → HTML 转换（用于元信息回答） */
-function chatFormatMarkdown(text) {
-  return text
-    .replace(/\\*\\*(.+?)\\*\\*/g, '<strong style="color:#a5b4fc;">$1</strong>')
-    .replace(/\\n/g, '<br>');
-}
-
-/** 渲染一条消息气泡 */
-function chatRenderBubble(role, content, isHtml) {
-  var msgBox = document.getElementById('docsChatMessages');
-  var bubble = document.createElement('div');
-  bubble.className = 'chat-bubble ' + role;
-  var inner = document.createElement('div');
-  inner.className = 'chat-bubble-inner';
-  if (isHtml) { inner.innerHTML = content; }
-  else { inner.textContent = content; }
-  bubble.appendChild(inner);
-  msgBox.appendChild(bubble);
-  msgBox.scrollTop = msgBox.scrollHeight;
-}
-
-/** 从聊天结果中点击打开文档 */
-function chatOpenDoc(docKey) {
-  selectDoc(docKey);
-}
-
-/** 返回聊天视图 */
-function backToChat() {
+/** 返回文档空状态 */
+function backToDocsEmpty() {
   document.getElementById('docsContentView').style.display = 'none';
   document.getElementById('docsEmptyState').style.display = 'flex';
   // 取消左侧选中
   currentDocKey = '';
   var items = document.querySelectorAll('.docs-item');
   for (var i = 0; i < items.length; i++) items[i].classList.remove('active');
-  // 聚焦输入框
-  var input = document.getElementById('docsChatInput');
-  if (input) input.focus();
 }
 
 // ========== Add Document ==========

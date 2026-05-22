@@ -606,6 +606,45 @@ export function createDevPlan(
 }
 
 /**
+ * 为可视化 HTTP 服务创建轻量 Graph store。
+ *
+ * 图谱/文档浏览首屏不需要语义搜索、BM25、TreeIndex 或 LLM rerank。
+ * 这里只在 visual server 使用，不修改项目级 .devplan/config.json，
+ * 因而 MCP 工具的搜索能力仍按原配置工作。
+ */
+export function createDevPlanVisualLite(
+  projectName: string,
+  basePath?: string,
+): IDevPlanStore {
+  const base = basePath || resolveBasePathForProject(projectName);
+  const resolvedEngine = readEngineConfig(projectName, base) || 'graph';
+  writeEngineConfig(projectName, base, resolvedEngine);
+  const defaultBase = getDefaultBasePath();
+  const gitCwd = base !== defaultBase ? path.dirname(base) : undefined;
+
+  if (resolvedEngine === 'graph') {
+    return new DevPlanGraphStore(projectName, {
+      graphPath: path.join(base, projectName, 'graph-data'),
+      enableSemanticSearch: false,
+      enableTextSearch: false,
+      enableTreeIndexRetrieval: false,
+      enableReranking: false,
+      llmGatewayMemory: { enable: false },
+      enableMilestonesEmbeddingOnAutoUpdate: false,
+      gitCwd,
+    });
+  }
+
+  return new DevPlanDocumentStore(projectName, {
+    documentPath: path.join(base, projectName, 'documents.jsonl'),
+    taskPath: path.join(base, projectName, 'tasks.jsonl'),
+    modulePath: path.join(base, projectName, 'modules.jsonl'),
+    promptPath: path.join(base, projectName, 'prompts.jsonl'),
+    gitCwd,
+  });
+}
+
+/**
  * 列出所有已有的 DevPlan 项目
  *
  * 多项目工作区支持：

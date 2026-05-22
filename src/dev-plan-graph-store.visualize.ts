@@ -340,7 +340,6 @@ export function exportGraph(
 
   // ── 6. Modules（按 moduleId 分组主任务，避免 listMainTasks({moduleId}) × Mod）──
   if (includeModules) {
-    const modules = store.listModules();
     const tasksByModuleId = new Map<string, MainTask[]>();
     for (const mt of mainTasks) {
       const modId = (mt as any).moduleId as string | undefined;
@@ -350,22 +349,28 @@ export function exportGraph(
       else tasksByModuleId.set(modId, [mt]);
     }
 
-    for (const mod of modules) {
+    // exportGraph 首屏只需要模块基础字段和 mainTaskCount。
+    // 避免 store.listModules() 计算每个模块的子任务统计，那里会触发明显的 N+1 扫描。
+    const moduleEntities = store.findEntitiesByType(ET.MODULE);
+    for (const moduleEntity of moduleEntities) {
+      const props = (moduleEntity.properties || {}) as any;
+      const moduleId = props.moduleId || '';
+      if (!moduleId) continue;
+      const moduleTasks = tasksByModuleId.get(moduleId) || [];
       nodes.push({
-        id: mod.id,
-        label: mod.name,
+        id: moduleEntity.id,
+        label: props.name || moduleEntity.name,
         type: 'module',
         properties: {
-          moduleId: mod.moduleId,
-          status: mod.status,
-          mainTaskCount: mod.mainTaskCount,
+          moduleId,
+          status: props.status || 'active',
+          mainTaskCount: moduleTasks.length,
         },
       });
-      edges.push({ from: projectId, to: mod.id, label: RT.HAS_MODULE });
+      edges.push({ from: projectId, to: moduleEntity.id, label: RT.HAS_MODULE });
 
-      const moduleTasks = tasksByModuleId.get(mod.moduleId) || [];
       for (const mt of moduleTasks) {
-        edges.push({ from: mod.id, to: mt.id, label: RT.MODULE_HAS_TASK });
+        edges.push({ from: moduleEntity.id, to: mt.id, label: RT.MODULE_HAS_TASK });
       }
     }
   }

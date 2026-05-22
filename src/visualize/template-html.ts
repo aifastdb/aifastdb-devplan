@@ -215,35 +215,13 @@ export function getHTML(projectName: string): string {
           </div>
           <!-- Phase-158: 分页加载栏已移除，统一使用 /api/docs/all 一次加载 -->
         </div>
-        <!-- Right: Document Content / Chat -->
+        <!-- Right: Document Content -->
         <div class="docs-content">
-          <!-- RAG Chat (default view) -->
           <div class="docs-content-empty" id="docsEmptyState">
-            <div class="docs-chat-container">
-              <div class="docs-chat-messages" id="docsChatMessages">
-                <div class="docs-chat-welcome" id="docsChatWelcome">
-                  <div class="welcome-icon">🔍</div>
-                  <div class="welcome-title">文档智能搜索</div>
-                  <div class="welcome-desc">输入问题，AI 将在文档库中搜索相关内容<br>支持语义搜索，理解你的意图而非仅匹配关键词</div>
-                  <div class="welcome-tips">
-                    <span class="tip-chip" onclick="chatSendTip(this)">有多少篇文档？</span>
-                    <span class="tip-chip" onclick="chatSendTip(this)">项目进度</span>
-                    <span class="tip-chip" onclick="chatSendTip(this)">有哪些阶段？</span>
-                    <span class="tip-chip" onclick="chatSendTip(this)">最近更新</span>
-                    <span class="tip-chip" onclick="chatSendTip(this)">帮助</span>
-                  </div>
-                  <div class="welcome-tips" style="margin-top:8px;">
-                    <span class="tip-chip" onclick="chatSendTip(this)">向量搜索</span>
-                    <span class="tip-chip" onclick="chatSendTip(this)">aifastdb vs LanceDB</span>
-                    <span class="tip-chip" onclick="chatSendTip(this)">GPU 加速</span>
-                    <span class="tip-chip" onclick="chatSendTip(this)">全文搜索</span>
-                  </div>
-                </div>
-              </div>
-              <div class="docs-chat-input-wrap">
-                <textarea class="docs-chat-input" id="docsChatInput" placeholder="发送消息搜索文档数据库..." rows="1" onkeydown="chatInputKeydown(event)" oninput="chatAutoResize(this)"></textarea>
-                <button class="docs-chat-send" id="docsChatSend" onclick="chatSend()" title="发送">↑</button>
-              </div>
+            <div style="text-align:center;padding:72px 40px;color:#6b7280;">
+              <div style="font-size:48px;opacity:0.35;margin-bottom:14px;">📄</div>
+              <div style="font-size:16px;font-weight:600;color:#9ca3af;margin-bottom:8px;">选择左侧文档查看内容</div>
+              <div style="font-size:13px;line-height:1.7;">可通过左侧搜索框按标题筛选文档。<br>文档语义搜索已移除，以加快可视化服务启动。</div>
             </div>
           </div>
           <!-- Document Content View -->
@@ -253,7 +231,7 @@ export function getHTML(projectName: string): string {
                 <div class="docs-content-title" id="docsContentTitle">文档标题</div>
                 <div class="docs-content-meta" id="docsContentMeta"></div>
               </div>
-              <button style="flex-shrink:0;background:none;border:1px solid #374151;border-radius:6px;padding:4px 10px;color:#9ca3af;font-size:11px;cursor:pointer;transition:all 0.15s;" onmouseover="this.style.borderColor='#6366f1';this.style.color='#a5b4fc'" onmouseout="this.style.borderColor='#374151';this.style.color='#9ca3af'" onclick="backToChat()" title="返回对话搜索">← 返回搜索</button>
+              <button style="flex-shrink:0;background:none;border:1px solid #374151;border-radius:6px;padding:4px 10px;color:#9ca3af;font-size:11px;cursor:pointer;transition:all 0.15s;" onmouseover="this.style.borderColor='#6366f1';this.style.color='#a5b4fc'" onmouseout="this.style.borderColor='#374151';this.style.color='#9ca3af'" onclick="backToDocsEmpty()" title="返回文档空状态">← 返回</button>
             </div>
             <div class="docs-reader-wrap">
             <div class="docs-content-body" id="docsContentBody">
