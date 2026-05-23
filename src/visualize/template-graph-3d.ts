@@ -266,11 +266,13 @@ function render3DGraph(container, visibleNodes, visibleEdges) {
   NODE_3D_SIZES = load3DSizesFromSettings();
 
   // ── 高亮状态追踪 ──
-  var _3dSelectedNodeId = null;       // 当前选中节点 ID
-  var _3dHighlightLinks = new Set();  // 选中节点的关联边 Set
-  var _3dHighlightNodes = new Set();  // 选中节点 + 邻居节点 Set
+  var _3dSelectedNodeId = null;       // 最近一次聚焦的节点 ID
+  var _3dFocusRootNodes = new Set();  // 用户连续点击扩展的聚焦根节点 Set
+  var _3dHighlightLinks = new Set();  // 累积聚焦关联边 Set
+  var _3dHighlightNodes = new Set();  // 累积聚焦节点 + 邻居节点 Set
   var _3dFocusHintEl = null;          // 节点聚焦模式提示
   var _3dKeydownHandler = null;       // Esc 退出聚焦模式
+  var _3dOutsideClickHandler = null;  // 点击图谱区域外退出聚焦模式
 
   // 使用全局 LINK_3D_HIGHLIGHT_COLORS (Phase-75: 提升为全局供增量注入使用)
 
@@ -326,10 +328,7 @@ function render3DGraph(container, visibleNodes, visibleEdges) {
     var l = links3d[i];
     var srcId = typeof l.source === 'object' ? l.source.id : l.source;
     var tgtId = typeof l.target === 'object' ? l.target.id : l.target;
-    if (!_3dNodeNeighbors[srcId]) _3dNodeNeighbors[srcId] = new Set();
-    if (!_3dNodeNeighbors[tgtId]) _3dNodeNeighbors[tgtId] = new Set();
-    _3dNodeNeighbors[srcId].add(tgtId);
-    _3dNodeNeighbors[tgtId].add(srcId);
+    add3DFocusNeighbor(srcId, tgtId);
     if (!_3dNodeLinks[srcId]) _3dNodeLinks[srcId] = new Set();
     if (!_3dNodeLinks[tgtId]) _3dNodeLinks[tgtId] = new Set();
     _3dNodeLinks[srcId].add(l);
@@ -343,6 +342,69 @@ function render3DGraph(container, visibleNodes, visibleEdges) {
   var _3dClickTimer = null;
   var _3dClickCount = 0;
   var _3dPendingClickNode = null;
+
+  function add3DFocusNeighbor(fromId, toId) {
+    if (!fromId || !toId) return;
+    if (!_3dNodeNeighbors[fromId]) _3dNodeNeighbors[fromId] = new Set();
+    if (!_3dNodeNeighbors[toId]) _3dNodeNeighbors[toId] = new Set();
+    _3dNodeNeighbors[fromId].add(toId);
+    _3dNodeNeighbors[toId].add(fromId);
+  }
+
+  function sync3DBusinessAdjacency(renderedNodes) {
+    if (typeof allEdges === 'undefined' || !allEdges || !renderedNodes) return;
+    var renderedIds = {};
+    for (var ni = 0; ni < renderedNodes.length; ni++) {
+      if (renderedNodes[ni] && renderedNodes[ni].id) renderedIds[renderedNodes[ni].id] = true;
+    }
+    var focusLabels = {
+      has_main_task: true,
+      has_sub_task: true,
+      has_document: true,
+      module_has_task: true,
+      task_has_doc: true,
+      doc_has_child: true,
+      has_memory: true,
+      memory_relates: true,
+      memory_from_task: true,
+      memory_from_doc: true,
+      module_memory: true
+    };
+    for (var ei = 0; ei < allEdges.length; ei++) {
+      var be = allEdges[ei];
+      if (!be) continue;
+      var beLabel = be.label || be._label || '';
+      if (!focusLabels[beLabel]) continue;
+      if (renderedIds[be.from] && renderedIds[be.to]) {
+        add3DFocusNeighbor(be.from, be.to);
+      }
+    }
+  }
+
+  sync3DBusinessAdjacency(nodes3d);
+
+  function has3DFocusChildren(nodeId) {
+    if (typeof allEdges === 'undefined' || !allEdges) return false;
+    var childLabels = {
+      has_main_task: true,
+      has_sub_task: true,
+      has_document: true,
+      module_has_task: true,
+      task_has_doc: true,
+      doc_has_child: true,
+      has_memory: true,
+      memory_from_task: true,
+      memory_from_doc: true,
+      module_memory: true
+    };
+    for (var ei = 0; ei < allEdges.length; ei++) {
+      var e = allEdges[ei];
+      if (!e || e.from !== nodeId) continue;
+      var label = e.label || e._label || '';
+      if (childLabels[label]) return true;
+    }
+    return false;
+  }
 
   /** 双击聚焦: 计算节点及其所有关联节点的包围球, 将摄像机拉到刚好能完整显示的位置 */
   function focus3DNodeWithNeighbors(node) {
@@ -393,17 +455,39 @@ function render3DGraph(container, visibleNodes, visibleEdges) {
   function update3DHighlight(nodeId) {
     _3dHighlightLinks.clear();
     _3dHighlightNodes.clear();
+    _3dFocusRootNodes.clear();
     _3dSelectedNodeId = nodeId;
 
     if (nodeId) {
-      _3dHighlightNodes.add(nodeId);
-      // 添加所有邻居节点
-      var neighbors = _3dNodeNeighbors[nodeId];
-      if (neighbors) neighbors.forEach(function(nId) { _3dHighlightNodes.add(nId); });
-      // 添加所有关联边
-      var links = _3dNodeLinks[nodeId];
-      if (links) links.forEach(function(link) { _3dHighlightLinks.add(link); });
+      expand3DHighlight(nodeId);
     }
+  }
+
+  /** 将一个已聚焦链路内的节点继续并入聚焦集合 */
+  function expand3DHighlight(nodeId) {
+    if (!nodeId) return;
+    _3dSelectedNodeId = nodeId;
+    _3dFocusRootNodes.add(nodeId);
+    _3dHighlightNodes.add(nodeId);
+    var neighbors = _3dNodeNeighbors[nodeId];
+    if (neighbors) neighbors.forEach(function(nId) { _3dHighlightNodes.add(nId); });
+    var links = _3dNodeLinks[nodeId];
+    if (links) links.forEach(function(link) { _3dHighlightLinks.add(link); });
+  }
+
+  function handle3DNodeFocusClick(node) {
+    if (!node) return false;
+    if (_3dSelectedNodeId && !_3dHighlightNodes.has(node.id)) {
+      clear3DNodeFocus();
+      return false;
+    }
+    if (_3dSelectedNodeId) expand3DHighlight(node.id);
+    else update3DHighlight(node.id);
+    refresh3DStyles();
+    panelHistory = [];
+    currentPanelNodeId = null;
+    showPanel(node.id);
+    return true;
   }
 
   function clear3DNodeFocus() {
@@ -414,7 +498,7 @@ function render3DGraph(container, visibleNodes, visibleEdges) {
 
   function get3DNodeFocusState(nodeId) {
     if (!_3dSelectedNodeId) return { active: false, primary: false, related: false, dimmed: false };
-    var primary = nodeId === _3dSelectedNodeId;
+    var primary = nodeId === _3dSelectedNodeId || (_3dFocusRootNodes.has(nodeId) && has3DFocusChildren(nodeId));
     var related = _3dHighlightNodes.has(nodeId);
     return {
       active: true,
@@ -428,7 +512,7 @@ function render3DGraph(container, visibleNodes, visibleEdges) {
     if (_3dFocusHintEl && _3dFocusHintEl.parentNode) _3dFocusHintEl.parentNode.removeChild(_3dFocusHintEl);
     _3dFocusHintEl = document.createElement('div');
     _3dFocusHintEl.className = 's3d-focus-hint';
-    _3dFocusHintEl.textContent = '点击节点聚焦其关联关系 · Esc 退出';
+    _3dFocusHintEl.textContent = '点击节点聚焦其关联关系 · 点击已聚焦节点继续扩展 · Esc 退出';
     _3dFocusHintEl.style.position = 'absolute';
     _3dFocusHintEl.style.top = '16px';
     _3dFocusHintEl.style.left = '50%';
@@ -741,24 +825,17 @@ function render3DGraph(container, visibleNodes, visibleEdges) {
         // 第一次点击: 等待判定是否双击
         _3dClickTimer = setTimeout(function() {
           _3dClickCount = 0;
-          // 单击: 高亮 + 面板
-          update3DHighlight(node.id);
-          refresh3DStyles();
-          panelHistory = [];
-          currentPanelNodeId = null;
-          showPanel(node.id);
+          // 单击: 建立或扩展节点聚焦链
+          handle3DNodeFocusClick(node);
         }, 280);
       } else if (_3dClickCount >= 2) {
         // 双击: 取消单击定时器
         clearTimeout(_3dClickTimer);
         _3dClickCount = 0;
-        // 高亮 + 面板 + 聚焦到节点及其关联节点
-        update3DHighlight(node.id);
-        refresh3DStyles();
-        panelHistory = [];
-        currentPanelNodeId = null;
-        showPanel(node.id);
-        focus3DNodeWithNeighbors(node);
+        // 双击: 仅在当前聚焦链内继续扩展，并将摄像机聚焦到该节点关联关系
+        if (handle3DNodeFocusClick(node)) {
+          focus3DNodeWithNeighbors(node);
+        }
       }
     })
     .onNodeDragEnd(function(node) {
@@ -781,6 +858,10 @@ function render3DGraph(container, visibleNodes, visibleEdges) {
     }
   };
   window.addEventListener('keydown', _3dKeydownHandler);
+  _3dOutsideClickHandler = function(e) {
+    if (_3dSelectedNodeId && !container.contains(e.target)) clear3DNodeFocus();
+  };
+  document.addEventListener('pointerdown', _3dOutsideClickHandler);
 
   /** 刷新节点与连线视觉样式 */
   function refresh3DStyles() {
@@ -1331,6 +1412,10 @@ function render3DGraph(container, visibleNodes, visibleEdges) {
         window.removeEventListener('keydown', _3dKeydownHandler);
         _3dKeydownHandler = null;
       }
+      if (_3dOutsideClickHandler) {
+        document.removeEventListener('pointerdown', _3dOutsideClickHandler);
+        _3dOutsideClickHandler = null;
+      }
       if (_3dFocusHintEl && _3dFocusHintEl.parentNode) {
         _3dFocusHintEl.parentNode.removeChild(_3dFocusHintEl);
       }
@@ -1524,6 +1609,7 @@ function render3DGraph(container, visibleNodes, visibleEdges) {
       // ── 2) 合并到 graph3d 数据 ──
       var mNodes = curData.nodes.concat(newNodes3d);
       var mLinks = curData.links.concat(newLinks3d);
+      sync3DBusinessAdjacency(mNodes);
       graph3d.graphData({ nodes: mNodes, links: mLinks });
       // ── 3) reheat 让力模拟推动新节点到正确轨道/层 ──
       setTimeout(function() {
