@@ -269,6 +269,8 @@ function render3DGraph(container, visibleNodes, visibleEdges) {
   var _3dSelectedNodeId = null;       // 当前选中节点 ID
   var _3dHighlightLinks = new Set();  // 选中节点的关联边 Set
   var _3dHighlightNodes = new Set();  // 选中节点 + 邻居节点 Set
+  var _3dFocusHintEl = null;          // 节点聚焦模式提示
+  var _3dKeydownHandler = null;       // Esc 退出聚焦模式
 
   // 使用全局 LINK_3D_HIGHLIGHT_COLORS (Phase-75: 提升为全局供增量注入使用)
 
@@ -404,6 +406,46 @@ function render3DGraph(container, visibleNodes, visibleEdges) {
     }
   }
 
+  function clear3DNodeFocus() {
+    update3DHighlight(null);
+    refresh3DStyles();
+    closePanel();
+  }
+
+  function get3DNodeFocusState(nodeId) {
+    if (!_3dSelectedNodeId) return { active: false, primary: false, related: false, dimmed: false };
+    var primary = nodeId === _3dSelectedNodeId;
+    var related = _3dHighlightNodes.has(nodeId);
+    return {
+      active: true,
+      primary: primary,
+      related: related,
+      dimmed: !related
+    };
+  }
+
+  function mount3DFocusHint() {
+    if (_3dFocusHintEl && _3dFocusHintEl.parentNode) _3dFocusHintEl.parentNode.removeChild(_3dFocusHintEl);
+    _3dFocusHintEl = document.createElement('div');
+    _3dFocusHintEl.className = 's3d-focus-hint';
+    _3dFocusHintEl.textContent = '点击节点聚焦其关联关系 · Esc 退出';
+    _3dFocusHintEl.style.position = 'absolute';
+    _3dFocusHintEl.style.top = '16px';
+    _3dFocusHintEl.style.left = '50%';
+    _3dFocusHintEl.style.transform = 'translateX(-50%)';
+    _3dFocusHintEl.style.zIndex = '35';
+    _3dFocusHintEl.style.padding = '6px 12px';
+    _3dFocusHintEl.style.borderRadius = '999px';
+    _3dFocusHintEl.style.border = '1px solid rgba(129,140,248,0.35)';
+    _3dFocusHintEl.style.background = 'rgba(15,23,42,0.58)';
+    _3dFocusHintEl.style.backdropFilter = 'blur(8px)';
+    _3dFocusHintEl.style.color = '#c7d2fe';
+    _3dFocusHintEl.style.fontSize = '12px';
+    _3dFocusHintEl.style.pointerEvents = 'none';
+    _3dFocusHintEl.style.boxShadow = '0 8px 28px rgba(0,0,0,0.22)';
+    container.appendChild(_3dFocusHintEl);
+  }
+
   var rect = container.getBoundingClientRect();
 
   // 创建 3D 图实例
@@ -427,7 +469,7 @@ function render3DGraph(container, visibleNodes, visibleEdges) {
         + '</div>';
     })
     .nodeColor(function(n) {
-      // 所有节点始终保持原色（不变暗），仅通过连线变化体现选中关系
+      // 自定义节点对象负责透明度与光晕，颜色保持原色以避免主题漂移
       return n._color;
     })
     .nodeVal(function(n) { return n._val; })
@@ -439,8 +481,13 @@ function render3DGraph(container, visibleNodes, visibleEdges) {
 
       var t = n._type || 'sub-task';
       var color = n._color;
-      // 节点始终保持原色（不变暗），仅通过连线变化体现选中关系
-      var isHighlighted = _3dSelectedNodeId && _3dHighlightNodes.has(n.id);
+      var focusState = get3DNodeFocusState(n.id);
+      var isHighlighted = focusState.related;
+      var isPrimaryFocus = focusState.primary;
+      var isDimmed = focusState.dimmed;
+      var focusScale = isPrimaryFocus ? 1.45 : (isHighlighted ? 1.18 : 1);
+      var nodeOpacity = isDimmed ? 0.16 : (isHighlighted ? Math.min(1, _s3d.nodeOpacity + 0.14) : _s3d.nodeOpacity);
+      var glowOpacity = isDimmed ? 0.08 : (isPrimaryFocus ? 0.92 : (isHighlighted ? 0.72 : 0.6));
 
       // ── 创建容器 Group ──
       var group = new THREE.Group();
@@ -453,8 +500,8 @@ function render3DGraph(container, visibleNodes, visibleEdges) {
         var layerCount = 12;
         for (var li = layerCount - 1; li >= 0; li--) {
           var lt = li / layerCount;
-          var lscale = 1.0 + (lt * 1.0);
-          var lopacity = 0.05 + (Math.pow(1 - lt, 3) * 0.32);
+          var lscale = (1.0 + (lt * 1.0)) * focusScale;
+          var lopacity = (0.05 + (Math.pow(1 - lt, 3) * 0.32)) * (isDimmed ? 0.35 : (isHighlighted ? 1.18 : 1));
           var layerGeo = new THREE.SphereGeometry(nodeSize * lscale, 18, 16);
           var layerMat = new THREE.MeshBasicMaterial({
             color: color,
@@ -468,36 +515,36 @@ function render3DGraph(container, visibleNodes, visibleEdges) {
         var blurCoreMat = new THREE.MeshBasicMaterial({
           color: color,
           transparent: true,
-          opacity: Math.min(1, _s3d.nodeOpacity + 0.06)
+          opacity: nodeOpacity
         });
         coreMesh = new THREE.Mesh(blurCoreGeo, blurCoreMat);
         group.add(coreMesh);
       } else {
         // Classic 预设: 现有 DevPlan 视觉
         if (t === 'module') {
-          var size = 10;
+          var size = 10 * focusScale;
           var geo = new THREE.BoxGeometry(size, size, size);
-          var mat = new THREE.MeshLambertMaterial({ color: color, transparent: true, opacity: _s3d.nodeOpacity, emissive: color, emissiveIntensity: 0.3 });
+          var mat = new THREE.MeshLambertMaterial({ color: color, transparent: true, opacity: nodeOpacity, emissive: color, emissiveIntensity: isHighlighted ? 0.65 : 0.3 });
           coreMesh = new THREE.Mesh(geo, mat);
         } else if (t === 'project') {
-          var geo = new THREE.OctahedronGeometry(14);
-          var mat = new THREE.MeshLambertMaterial({ color: color, transparent: true, opacity: _s3d.nodeOpacity, emissive: color, emissiveIntensity: 0.4 });
+          var geo = new THREE.OctahedronGeometry(14 * focusScale);
+          var mat = new THREE.MeshLambertMaterial({ color: color, transparent: true, opacity: nodeOpacity, emissive: color, emissiveIntensity: isHighlighted ? 0.75 : 0.4 });
           coreMesh = new THREE.Mesh(geo, mat);
         } else if (t === 'document') {
-          var geo = new THREE.BoxGeometry(7, 8.5, 2);
-          var mat = new THREE.MeshLambertMaterial({ color: color, transparent: true, opacity: _s3d.nodeOpacity * 0.92, emissive: color, emissiveIntensity: 0.25 });
+          var geo = new THREE.BoxGeometry(7 * focusScale, 8.5 * focusScale, 2 * focusScale);
+          var mat = new THREE.MeshLambertMaterial({ color: color, transparent: true, opacity: nodeOpacity * 0.92, emissive: color, emissiveIntensity: isHighlighted ? 0.58 : 0.25 });
           coreMesh = new THREE.Mesh(geo, mat);
         } else {
           // 主任务 / 子任务 → 球体
-          var radius = t === 'main-task' ? 5.5 : 3.5;
+          var radius = (t === 'main-task' ? 5.5 : 3.5) * focusScale;
           var geo = new THREE.SphereGeometry(radius, 16, 12);
-          var mat = new THREE.MeshLambertMaterial({ color: color, transparent: true, opacity: _s3d.nodeOpacity, emissive: color, emissiveIntensity: 0.3 });
+          var mat = new THREE.MeshLambertMaterial({ color: color, transparent: true, opacity: nodeOpacity, emissive: color, emissiveIntensity: isHighlighted ? 0.68 : 0.3 });
           coreMesh = new THREE.Mesh(geo, mat);
         }
         group.add(coreMesh);
 
         // ── 发光光晕 Sprite (Glow Aura) ──
-        var glowSize = { 'project': 60, 'module': 40, 'main-task': 26, 'sub-task': 18, 'document': 22 }[t] || 16;
+        var glowSize = ({ 'project': 60, 'module': 40, 'main-task': 26, 'sub-task': 18, 'document': 22 }[t] || 16) * focusScale;
         var cacheKey = color + '_' + glowSize;
         if (!_glowTextureCache[cacheKey]) {
           var canvas = createGlowTexture(color, 128);
@@ -507,13 +554,31 @@ function render3DGraph(container, visibleNodes, visibleEdges) {
         var spriteMat = new THREE.SpriteMaterial({
           map: glowTex,
           transparent: true,
-          opacity: 0.6,
+          opacity: glowOpacity,
           blending: THREE.AdditiveBlending,
           depthWrite: false
         });
         var sprite = new THREE.Sprite(spriteMat);
         sprite.scale.set(glowSize, glowSize, 1);
         group.add(sprite);
+
+        if (isHighlighted) {
+          var ringKey = (isPrimaryFocus ? '#c4b5fd' : '#93c5fd') + '_focus_ring';
+          if (!_glowTextureCache[ringKey]) {
+            _glowTextureCache[ringKey] = new THREE.CanvasTexture(createRingTexture(isPrimaryFocus ? '#c4b5fd' : '#93c5fd', 128));
+          }
+          var focusRingMat = new THREE.SpriteMaterial({
+            map: _glowTextureCache[ringKey],
+            transparent: true,
+            opacity: isPrimaryFocus ? 0.86 : 0.5,
+            blending: THREE.AdditiveBlending,
+            depthWrite: false
+          });
+          var focusRing = new THREE.Sprite(focusRingMat);
+          var ringSize = glowSize * (isPrimaryFocus ? 0.95 : 0.78);
+          focusRing.scale.set(ringSize, ringSize, 1);
+          group.add(focusRing);
+        }
       }
 
       // ── showLabels: 真实 3D 标签渲染 (Sprite Billboard) ──
@@ -528,7 +593,7 @@ function render3DGraph(container, visibleNodes, visibleEdges) {
             var labelMat = new THREE.SpriteMaterial({
               map: labelTex,
               transparent: true,
-              opacity: isHighlighted ? 1 : 0.84,
+              opacity: isDimmed ? 0.18 : (isHighlighted ? 1 : 0.84),
               depthWrite: false
             });
             var labelSprite = new THREE.Sprite(labelMat);
@@ -546,7 +611,7 @@ function render3DGraph(container, visibleNodes, visibleEdges) {
       if (t === 'main-task' && nodeStatus === 'in_progress') {
         // 增强核心球体自发光强度
         if (coreMesh && coreMesh.material) {
-          coreMesh.material.emissiveIntensity = 0.6;
+          coreMesh.material.emissiveIntensity = isHighlighted ? 0.82 : 0.6;
         }
 
         // 1) 外层脉冲光晕 Sprite (大范围弥散辉光, 类似 vis-network outerGlow)
@@ -559,7 +624,7 @@ function render3DGraph(container, visibleNodes, visibleEdges) {
         var pulseSpriteMat = new THREE.SpriteMaterial({
           map: _glowTextureCache[pulseCacheKey],
           transparent: true,
-          opacity: 0.25,
+          opacity: isDimmed ? 0.08 : 0.25,
           blending: THREE.AdditiveBlending,
           depthWrite: false
         });
@@ -576,7 +641,7 @@ function render3DGraph(container, visibleNodes, visibleEdges) {
         var outerRingMat = new THREE.SpriteMaterial({
           map: _glowTextureCache[outerRingCacheKey],
           transparent: true,
-          opacity: 0.55,
+          opacity: isDimmed ? 0.14 : 0.55,
           blending: THREE.AdditiveBlending,
           depthWrite: false
         });
@@ -593,7 +658,7 @@ function render3DGraph(container, visibleNodes, visibleEdges) {
         var innerRingMat = new THREE.SpriteMaterial({
           map: _glowTextureCache[innerRingCacheKey],
           transparent: true,
-          opacity: 0.4,
+          opacity: isDimmed ? 0.1 : 0.4,
           blending: THREE.AdditiveBlending,
           depthWrite: false
         });
@@ -623,13 +688,13 @@ function render3DGraph(container, visibleNodes, visibleEdges) {
     .linkColor(function(l) {
       if (_3dSelectedNodeId) {
         if (_3dHighlightLinks.has(l)) return l._highlightColor; // 关联边高亮
-        return 'rgba(30,30,50,0.08)'; // 非关联边几乎隐藏
+        return 'rgba(30,30,50,0.12)'; // 非关联边弱化
       }
       return l._color || 'rgba(75,85,99,0.2)';
     })
     .linkWidth(function(l) {
       if (_3dSelectedNodeId && _3dHighlightLinks.has(l)) {
-        return 1.5; // 高亮边加粗
+        return 2.2; // 高亮边加粗
       }
       // 极细的蛛网风格 (mitbunny style)
       var label = l._label || '';
@@ -640,7 +705,7 @@ function render3DGraph(container, visibleNodes, visibleEdges) {
     })
     .linkOpacity(function(l) {
       if (_3dSelectedNodeId) {
-        return _3dHighlightLinks.has(l) ? 0.9 : 0.03;
+        return _3dHighlightLinks.has(l) ? 0.95 : 0.08;
       }
       return Math.min(_s3d.linkOpacity, 0.35); // 更透明的蛛网效果
     })
@@ -703,18 +768,25 @@ function render3DGraph(container, visibleNodes, visibleEdges) {
       node.fz = node.z;
     })
     .onBackgroundClick(function() {
-      // 点击背景: 取消选中 + 关闭面板
-      update3DHighlight(null);
-      refresh3DStyles();
-      closePanel();
+      // 点击背景: 退出节点聚焦模式 + 关闭面板
+      clear3DNodeFocus();
     });
 
   // 暴露到 window，供主题切换时实时刷新背景色（见 template-core.ts → syncGraphBgToTheme）
   try { window._3dGraph = graph3d; } catch(e) {}
+  mount3DFocusHint();
+  _3dKeydownHandler = function(e) {
+    if (e.key === 'Escape' && _3dSelectedNodeId) {
+      clear3DNodeFocus();
+    }
+  };
+  window.addEventListener('keydown', _3dKeydownHandler);
 
-  /** 刷新连线视觉样式（节点不变，仅刷新边的颜色/宽度/粒子） */
+  /** 刷新节点与连线视觉样式 */
   function refresh3DStyles() {
-    graph3d.linkColor(graph3d.linkColor())
+    _3dBreathItems = [];
+    graph3d.nodeThreeObject(graph3d.nodeThreeObject())
+           .linkColor(graph3d.linkColor())
            .linkWidth(graph3d.linkWidth())
            .linkOpacity(graph3d.linkOpacity())
            .linkDirectionalParticles(graph3d.linkDirectionalParticles())
@@ -1255,6 +1327,14 @@ function render3DGraph(container, visibleNodes, visibleEdges) {
       // 停止 3D 呼吸灯动画
       stop3DBreathAnimation();
       _3dBreathItems = [];
+      if (_3dKeydownHandler) {
+        window.removeEventListener('keydown', _3dKeydownHandler);
+        _3dKeydownHandler = null;
+      }
+      if (_3dFocusHintEl && _3dFocusHintEl.parentNode) {
+        _3dFocusHintEl.parentNode.removeChild(_3dFocusHintEl);
+      }
+      _3dFocusHintEl = null;
       try {
         if (graph3d && graph3d._destructor) graph3d._destructor();
         else if (graph3d && graph3d.scene) {
