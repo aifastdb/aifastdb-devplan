@@ -249,6 +249,41 @@ import { isUuidLikeQuery, rankLiteralDocMatches } from './doc-search-utils';
 import { MemoryGatewayAdapter, type MemoryGatewayTelemetry } from './memory-gateway-adapter';
 
 // ============================================================================
+// Ollama-native embedding env defaults (aifastdb T426.14 forward-compat)
+// ============================================================================
+//
+// aifastdb >= 3.10.8 (containing T426.14) reads these env vars inside
+// RemoteEmbeddingEngine::from_config and switches embedding traffic from the
+// OpenAI-compat `/v1/embeddings` endpoint to Ollama's native `/api/embed`.
+// That switch is the only way to actually honor `options.num_ctx` — the
+// OpenAI-compat endpoint silently drops it, which causes large embedding
+// models (e.g. `qwen3-embedding:4b`) to be reloaded at their default 40960
+// context and inflate VRAM from ~3.2 GB to ~12 GB. That VRAM spike, combined
+// with same-disk WAL writes, has been observed to wedge Windows hosts at
+// "Disk 100%" (effectively a freeze).
+//
+// We pin safe operator defaults at module construction so DevPlan users do
+// not have to remember to export these env vars themselves. The defaults are
+// NO-OPs on:
+//   - aifastdb versions older than the T426.14 fix (env vars are simply not
+//     read, so behavior matches the previous release)
+//   - non-ollama perception backends (the switch is gated on
+//     `provider == "ollama"` inside aifastdb)
+// Operator-supplied env vars always win — we only fill in defaults when the
+// caller has not set them.
+let ollamaEmbedDefaultsApplied = false;
+function applyOllamaEmbedDefaults(): void {
+  if (ollamaEmbedDefaultsApplied) return;
+  ollamaEmbedDefaultsApplied = true;
+  if (!process.env.AIDB_OLLAMA_EMBED_NUM_CTX) {
+    process.env.AIDB_OLLAMA_EMBED_NUM_CTX = '2048';
+  }
+  if (!process.env.AIDB_OLLAMA_EMBED_KEEP_ALIVE) {
+    process.env.AIDB_OLLAMA_EMBED_KEEP_ALIVE = '30m';
+  }
+}
+
+// ============================================================================
 // DevPlanGraphStore Implementation
 // ============================================================================
 
@@ -376,6 +411,10 @@ export class DevPlanGraphStore implements IDevPlanStore {
   }
 
   constructor(projectName: string, config: DevPlanGraphStoreConfig) {
+    // Must run before any aifastdb constructor (SocialGraphV2 / VibeSynapse /
+    // LlmGateway.enableMemory) so the env defaults are visible to native
+    // RemoteEmbeddingEngine::from_config the first time it is created.
+    applyOllamaEmbedDefaults();
     this.projectName = projectName;
     this.gitCwd = config.gitCwd;
     this.semanticSearchConfigured = Boolean(config.enableSemanticSearch);

@@ -228,6 +228,51 @@ Engine selection priority:
 3. Auto-detect existing JSONL files → `document`
 4. New projects → `graph`
 
+### Ollama Embedding (local LLM) — Performance Tips
+
+If your project uses a local **Ollama embedding model** (e.g.
+`qwen3-embedding:0.6b` / `:4b` / `:8b`) — whether through DevPlan's semantic
+memory, LLM reranking, or the underlying `LlmGateway.enableMemory` — DevPlan
+sets two operator-friendly environment variable defaults at startup so the
+backing aifastdb engine never accidentally reloads large embedding models at
+their default huge context (`num_ctx = 40960` for the 4B model), which has
+been observed to inflate VRAM from ~3.2 GB to ~12 GB and trigger Windows
+"Disk 100%" freezes.
+
+| Env var | DevPlan default | What it does |
+|---|---|---|
+| `AIDB_OLLAMA_EMBED_NUM_CTX` | `2048` | Pins Ollama's `options.num_ctx` for every embedding request. Requires aifastdb ≥ 3.10.8 to take effect; on older aifastdb this is a harmless no-op. |
+| `AIDB_OLLAMA_EMBED_KEEP_ALIVE` | `30m` | Pins Ollama's `keep_alive` for embedding requests, so the model is not evicted between batches. |
+
+Both defaults are applied **only when the operator has not already set them**,
+so any pre-existing values in your shell, MCP launcher, or CI environment are
+respected. They are also no-ops for non-Ollama perception backends
+(`candle`, `fastembed`, `qwen3_local`, `embedding_gemma`, ...).
+
+**When to override**
+
+- Long documents / big chunks: bump to `4096` or `8192` (watch VRAM).
+- Bench / matrix runs that want the model to never evict:
+  `AIDB_OLLAMA_EMBED_KEEP_ALIVE=-1`.
+- Multi-tenant / shared GPU host: lower `AIDB_OLLAMA_EMBED_NUM_CTX` to `1024`
+  to leave headroom.
+
+PowerShell:
+
+```powershell
+$env:AIDB_OLLAMA_EMBED_NUM_CTX = "4096"
+$env:AIDB_OLLAMA_EMBED_KEEP_ALIVE = "-1"
+npx aifastdb-devplan
+```
+
+bash:
+
+```bash
+export AIDB_OLLAMA_EMBED_NUM_CTX=4096
+export AIDB_OLLAMA_EMBED_KEEP_ALIVE=-1
+npx aifastdb-devplan
+```
+
 ### Project Graph Page
 
 Visualize your development plan as an interactive graph:
@@ -708,6 +753,46 @@ console.log(progress);
 2. `.devplan/{project}/engine.json` 配置文件
 3. 已有 JSONL 数据文件 → 自动识别为 `document`
 4. 新项目 → 默认使用 `graph`
+
+### Ollama Embedding（本地大模型）—— 性能提示
+
+如果你的项目通过 DevPlan 使用了本地 **Ollama Embedding 模型**（例如
+`qwen3-embedding:0.6b` / `:4b` / `:8b`）——无论是语义记忆、LLM 重排，还是底
+层 `LlmGateway.enableMemory`——DevPlan 会在启动时为你自动设置两条运维友好
+的环境变量默认值，避免大模型被 Ollama 按它的默认大上下文（4B 模型默认
+`num_ctx = 40960`）悄悄重新加载，从而把 VRAM 从约 3.2 GB 撑到约 12 GB、
+引发 Windows "磁盘 100%" 假死。
+
+| 环境变量 | DevPlan 默认值 | 作用 |
+|---|---|---|
+| `AIDB_OLLAMA_EMBED_NUM_CTX` | `2048` | 钉死 Ollama 每次 embedding 调用的 `options.num_ctx`。需要 aifastdb ≥ 3.10.8 才会生效；在更老版本上是无害的 no-op。 |
+| `AIDB_OLLAMA_EMBED_KEEP_ALIVE` | `30m` | 钉死 embedding 请求的 `keep_alive`，让模型在两个 batch 之间不会被卸载。 |
+
+两个默认值**只在你尚未设置**时才会写入，因此你 shell / MCP launcher / CI
+中已经存在的值会被完全保留。对于非 Ollama 的 perception 后端
+（`candle` / `fastembed` / `qwen3_local` / `embedding_gemma` 等）也是无操作。
+
+**什么时候要覆盖默认值**
+
+- 长文档 / 大 chunk：上调到 `4096` 或 `8192`（注意观察显存）
+- 跑评测 / 矩阵希望模型永不卸载：`AIDB_OLLAMA_EMBED_KEEP_ALIVE=-1`
+- 多租户 / 共享 GPU 机器：把 `AIDB_OLLAMA_EMBED_NUM_CTX` 降到 `1024` 给别人留余量
+
+PowerShell：
+
+```powershell
+$env:AIDB_OLLAMA_EMBED_NUM_CTX = "4096"
+$env:AIDB_OLLAMA_EMBED_KEEP_ALIVE = "-1"
+npx aifastdb-devplan
+```
+
+bash：
+
+```bash
+export AIDB_OLLAMA_EMBED_NUM_CTX=4096
+export AIDB_OLLAMA_EMBED_KEEP_ALIVE=-1
+npx aifastdb-devplan
+```
 
 ### 项目图谱
 
