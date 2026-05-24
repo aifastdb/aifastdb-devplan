@@ -483,6 +483,7 @@ function render3DGraph(container, visibleNodes, visibleEdges) {
     }
     if (_3dSelectedNodeId) expand3DHighlight(node.id);
     else update3DHighlight(node.id);
+    set3DFocusHintVisible(true);
     refresh3DStyles();
     panelHistory = [];
     currentPanelNodeId = null;
@@ -492,6 +493,7 @@ function render3DGraph(container, visibleNodes, visibleEdges) {
 
   function clear3DNodeFocus() {
     update3DHighlight(null);
+    set3DFocusHintVisible(false);
     refresh3DStyles();
     closePanel();
   }
@@ -512,7 +514,7 @@ function render3DGraph(container, visibleNodes, visibleEdges) {
     if (_3dFocusHintEl && _3dFocusHintEl.parentNode) _3dFocusHintEl.parentNode.removeChild(_3dFocusHintEl);
     _3dFocusHintEl = document.createElement('div');
     _3dFocusHintEl.className = 's3d-focus-hint';
-    _3dFocusHintEl.textContent = '点击节点聚焦其关联关系 · 点击已聚焦节点继续扩展 · Esc 退出';
+    _3dFocusHintEl.textContent = '进入聚集模式，按ESC退出';
     _3dFocusHintEl.style.position = 'absolute';
     _3dFocusHintEl.style.top = '16px';
     _3dFocusHintEl.style.left = '50%';
@@ -527,7 +529,12 @@ function render3DGraph(container, visibleNodes, visibleEdges) {
     _3dFocusHintEl.style.fontSize = '12px';
     _3dFocusHintEl.style.pointerEvents = 'none';
     _3dFocusHintEl.style.boxShadow = '0 8px 28px rgba(0,0,0,0.22)';
+    _3dFocusHintEl.style.display = 'none';
     container.appendChild(_3dFocusHintEl);
+  }
+
+  function set3DFocusHintVisible(visible) {
+    if (_3dFocusHintEl) _3dFocusHintEl.style.display = visible ? 'block' : 'none';
   }
 
   var rect = container.getBoundingClientRect();
@@ -1473,11 +1480,23 @@ function render3DGraph(container, visibleNodes, visibleEdges) {
     },
     selectNodes: function(ids) {
       if (ids && ids.length > 0) {
-        update3DHighlight(ids[0]);
-        refresh3DStyles();
+        var targetId = ids[0];
+        var targetNode = null;
+        var nodes3dAll = graph3d.graphData().nodes;
+        for (var i = 0; i < nodes3dAll.length; i++) {
+          if (nodes3dAll[i].id === targetId) { targetNode = nodes3dAll[i]; break; }
+        }
+        if (targetNode) {
+          if (_3dSelectedNodeId && _3dHighlightNodes.has(targetNode.id)) {
+            expand3DHighlight(targetNode.id);
+          } else {
+            update3DHighlight(targetNode.id);
+          }
+          set3DFocusHintVisible(true);
+          refresh3DStyles();
+        }
       } else {
-        update3DHighlight(null);
-        refresh3DStyles();
+        clear3DNodeFocus();
       }
     },
     getConnectedEdges: function(nodeId) {
