@@ -437,6 +437,96 @@ function mdEnhanceContent(container) {
 
 var _mdvMermaidCounter = 0;
 
+function mdvPreprocessMermaid(source) {
+  function mdvShouldQuoteSquareLabel(label) {
+    if (!label) return false;
+    var trimmed = label.trim();
+    if (!trimmed) return false;
+
+    var first = trimmed.charAt(0);
+    var last = trimmed.charAt(trimmed.length - 1);
+    if ((first === '"' && last === '"') || (first === "'" && last === "'")) return false;
+    if ((first === '/' && last === '/') || (first === '\\' && last === '\\')) return false;
+
+    return /[\[\]\{\}\(\)%]/.test(label);
+  }
+
+  function mdvQuoteSquareLabelsInLine(line) {
+    var out = '';
+    var i = 0;
+
+    while (i < line.length) {
+      if (line.charAt(i) !== '[') {
+        out += line.charAt(i);
+        i += 1;
+        continue;
+      }
+
+      var prev = i > 0 ? line.charAt(i - 1) : '';
+      if (!/[A-Za-z0-9_]/.test(prev)) {
+        out += '[';
+        i += 1;
+        continue;
+      }
+
+      var depth = 1;
+      var quote = '';
+      var j = i + 1;
+      for (; j < line.length; j++) {
+        var ch = line.charAt(j);
+        var prevCh = j > i + 1 ? line.charAt(j - 1) : '';
+
+        if (quote) {
+          if (ch === quote && prevCh !== '\\') quote = '';
+          continue;
+        }
+
+        if (ch === '"' || ch === "'") {
+          quote = ch;
+          continue;
+        }
+        if (ch === '[') depth += 1;
+        else if (ch === ']') {
+          depth -= 1;
+          if (depth === 0) break;
+        }
+      }
+
+      if (j >= line.length) {
+        out += line.slice(i);
+        break;
+      }
+
+      var label = line.slice(i + 1, j);
+      if (!mdvShouldQuoteSquareLabel(label)) {
+        out += '[' + label + ']';
+        i = j + 1;
+        continue;
+      }
+
+      var start = 0;
+      var end = label.length;
+      while (start < end && /\s/.test(label.charAt(start))) start += 1;
+      while (end > start && /\s/.test(label.charAt(end - 1))) end -= 1;
+
+      var leading = label.slice(0, start);
+      var core = label.slice(start, end).replace(/\\/g, '\\\\').replace(/"/g, '\\"');
+      var trailing = label.slice(end);
+
+      out += '[' + leading + '"' + core + '"' + trailing + ']';
+      i = j + 1;
+    }
+
+    return out;
+  }
+
+  var lines = source.split('\n');
+  for (var i = 0; i < lines.length; i++) {
+    lines[i] = mdvQuoteSquareLabelsInLine(lines[i]);
+  }
+  return lines.join('\n');
+}
+
 function mdvRenderMermaidBlocks(container) {
   if (!container) return;
   if (!mdvMermaidReady || typeof mermaid === 'undefined') return;
@@ -465,6 +555,7 @@ function mdvRenderMermaidBlocks(container) {
 
       var source = codeEl.textContent || '';
       if (!source.trim()) return;
+      source = mdvPreprocessMermaid(source.trim());
 
       var containerId = 'mermaid-graph-' + (++_mdvMermaidCounter);
       var wrapperDiv = document.createElement('div');
@@ -472,7 +563,7 @@ function mdvRenderMermaidBlocks(container) {
       wrapperDiv.id = containerId + '-wrap';
 
       try {
-        mermaid.render(containerId, source.trim()).then(function(result) {
+        mermaid.render(containerId, source).then(function(result) {
           wrapperDiv.innerHTML = '<span class="mermaid-label">mermaid</span>' + result.svg;
           pre.parentNode.replaceChild(wrapperDiv, pre);
         }).catch(function(err) {
