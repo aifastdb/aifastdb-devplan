@@ -271,6 +271,7 @@ function render3DGraph(container, visibleNodes, visibleEdges) {
   var _3dHighlightLinks = new Set();  // 累积聚焦关联边 Set
   var _3dHighlightNodes = new Set();  // 累积聚焦节点 + 邻居节点 Set
   var _3dFocusHintEl = null;          // 节点聚焦模式提示
+  var _3dFocusHintTimer = null;       // 节点聚焦模式提示自动关闭定时器
   var _3dKeydownHandler = null;       // Esc 退出聚焦模式
   var _3dOutsideClickHandler = null;  // 点击图谱区域外退出聚焦模式
 
@@ -508,15 +509,25 @@ function render3DGraph(container, visibleNodes, visibleEdges) {
     };
   }
 
+  function unmount3DFocusHint() {
+    if (_3dFocusHintTimer) {
+      clearTimeout(_3dFocusHintTimer);
+      _3dFocusHintTimer = null;
+    }
+    if (_3dFocusHintEl && _3dFocusHintEl.parentNode) {
+      _3dFocusHintEl.parentNode.removeChild(_3dFocusHintEl);
+    }
+    _3dFocusHintEl = null;
+  }
+
   function mount3DFocusHint() {
-    if (_3dFocusHintEl && _3dFocusHintEl.parentNode) _3dFocusHintEl.parentNode.removeChild(_3dFocusHintEl);
+    unmount3DFocusHint();
     _3dFocusHintEl = document.createElement('div');
     _3dFocusHintEl.className = 's3d-focus-hint';
     _3dFocusHintEl.textContent = '点击节点聚焦其关联关系 · 点击已聚焦节点继续扩展 · Esc 退出';
     _3dFocusHintEl.style.position = 'absolute';
-    _3dFocusHintEl.style.top = '16px';
-    _3dFocusHintEl.style.left = '50%';
-    _3dFocusHintEl.style.transform = 'translateX(-50%)';
+    _3dFocusHintEl.style.right = '20px';
+    _3dFocusHintEl.style.bottom = '20px';
     _3dFocusHintEl.style.zIndex = '35';
     _3dFocusHintEl.style.padding = '6px 12px';
     _3dFocusHintEl.style.borderRadius = '999px';
@@ -527,7 +538,17 @@ function render3DGraph(container, visibleNodes, visibleEdges) {
     _3dFocusHintEl.style.fontSize = '12px';
     _3dFocusHintEl.style.pointerEvents = 'none';
     _3dFocusHintEl.style.boxShadow = '0 8px 28px rgba(0,0,0,0.22)';
+    _3dFocusHintEl.style.opacity = '1';
+    _3dFocusHintEl.style.transition = 'opacity 0.25s ease';
+    _3dFocusHintEl.style.maxWidth = 'min(420px, calc(100% - 40px))';
     container.appendChild(_3dFocusHintEl);
+    _3dFocusHintTimer = setTimeout(function() {
+      if (!_3dFocusHintEl) return;
+      _3dFocusHintEl.style.opacity = '0';
+      _3dFocusHintTimer = setTimeout(function() {
+        unmount3DFocusHint();
+      }, 250);
+    }, 5000);
   }
 
   var rect = container.getBoundingClientRect();
@@ -1416,10 +1437,7 @@ function render3DGraph(container, visibleNodes, visibleEdges) {
         document.removeEventListener('pointerdown', _3dOutsideClickHandler);
         _3dOutsideClickHandler = null;
       }
-      if (_3dFocusHintEl && _3dFocusHintEl.parentNode) {
-        _3dFocusHintEl.parentNode.removeChild(_3dFocusHintEl);
-      }
-      _3dFocusHintEl = null;
+      unmount3DFocusHint();
       try {
         if (graph3d && graph3d._destructor) graph3d._destructor();
         else if (graph3d && graph3d.scene) {
