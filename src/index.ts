@@ -108,6 +108,11 @@ export {
   type MigrateResult,
   type MigrateOptions,
 } from './dev-plan-migrate';
+export {
+  rebuildProjectFromWal,
+  type RebuildProjectFromWalOptions,
+  type RebuildProjectFromWalResult,
+} from './dev-plan-import';
 
 // Autopilot
 export {
