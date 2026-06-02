@@ -136,7 +136,6 @@ export function getStyles(): string {
     .sidebar {
       width: var(--ds-sidebar-w-collapsed);
       background: var(--ds-sidebar-bg);
-      border-right: 1px solid var(--ds-sidebar-border);
       flex-shrink: 0;
       display: flex;
       flex-direction: column;
