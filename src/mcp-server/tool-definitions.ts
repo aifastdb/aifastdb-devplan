@@ -748,7 +748,7 @@ RETURNS: { success, projectName, engine, basePath, autoRegistered, cursorRuleGen
   },
   {
     name: 'devplan_complete_task',
-    description: 'Mark a task as completed. For sub-tasks: auto-updates parent main task progress count and completedAt timestamp. If all sub-tasks are done, the main task is also auto-completed. For main tasks: directly marks as completed.\n将任务标记为已完成。子任务完成时自动更新主任务的进度计数和完成时间戳。当所有子任务完成时，主任务也会自动标记为完成。',
+    description: 'Mark a task as completed. For sub-tasks: auto-updates parent main task progress count and completedAt timestamp. If all sub-tasks are done, the main task is also auto-completed. For main tasks: directly marks as completed.\n\n**Completion-note SOP (Phase-435 follow-up — anti status-drift)**: providing `artifactPath` + `conclusion` is strongly recommended. When provided, the handler auto-saves a summary memory linked to this task, indexing the actual deliverable so devplan stays in sync with reality (eliminates the "Phase-426 drift" pattern where tasks are marked done without a trail). Missing fields are reported in `completionNoteWarnings` (response stays success). Set env `AIFASTDB_DEVPLAN_REQUIRE_COMPLETION_NOTE=1` to hard-require `artifactPath` + `conclusion`.\n\n将任务标记为已完成。子任务完成时自动更新主任务的进度计数和完成时间戳。当所有子任务完成时，主任务也会自动标记为完成。\n\n**Completion-note SOP（Phase-435 配套 — 反状态漂移）**：强烈建议同时传入 `artifactPath` + `conclusion`。提供时 handler 会自动写一条关联本任务的 summary memory，把交付物索引下来，防止 "Phase-426 漂移"（任务标完成但无证据追溯）。字段缺失时通过 `completionNoteWarnings` 返回（不阻塞）。设置环境变量 `AIFASTDB_DEVPLAN_REQUIRE_COMPLETION_NOTE=1` 可硬性要求 `artifactPath` + `conclusion`。',
     inputSchema: {
       type: 'object' as const,
       properties: {
@@ -764,6 +764,26 @@ RETURNS: { success, projectName, engine, basePath, autoRegistered, cursorRuleGen
           type: 'string',
           enum: ['sub', 'main'],
           description: 'Whether this is a sub-task or main task (default: "sub")\n任务类型：子任务 (sub) 或主任务 (main)，默认 "sub"',
+        },
+        artifactPath: {
+          type: 'string',
+          description: 'Recommended (SOP field 1/4): path / URL of the concrete deliverable that proves completion — e.g. `docs/data/PHASE_428_LONGMEMEVAL_MATRIX_ANALYSIS.md`, a PR URL, or a test report path. When provided together with `conclusion`, an auto-summary memory is written linking this task to the artifact.\n推荐 (SOP 字段 1/4)：可证明完成的具体交付物路径 / URL — 例如 `docs/data/PHASE_428_...md`、PR 链接、测试报告路径。与 `conclusion` 一起提供时，会自动写一条 summary memory 把任务关联到交付物。',
+        },
+        conclusion: {
+          type: 'string',
+          description: 'Recommended (SOP field 2/4): 1–2 sentence key conclusion / outcome of this task (numbers preferred when relevant — e.g. "chunked +2pp accuracy, recall held at 72%"). Becomes the body of the auto-saved completion-note memory.\n推荐 (SOP 字段 2/4)：1–2 句关键结论 / 产出（带数字更佳，例如 "chunked +2pp accuracy, recall 持平 72%"）。会作为自动保存的 completion-note memory 主体。',
+        },
+        divergenceNote: {
+          type: 'string',
+          description: 'Optional (SOP field 3/4): if the actual work diverged from the original sub-task description (e.g. "原 T426.1 50-case A/B 被 matrix 24-combo 覆盖"), record the substitution here. Prevents silent goal loss in the devplan graph.\n可选 (SOP 字段 3/4)：实际工作偏离原子任务描述时（例如 "原 T426.1 50-case A/B 被 matrix 24-combo 覆盖"），在此记录替代说明。防止 devplan 图谱中目标静默丢失。',
+        },
+        verification: {
+          type: 'string',
+          description: 'Optional (SOP field 4/4): how completion was verified — test counts, sanity check results, commit hash, etc. Examples: "matrix 24 combo 全部跑完", "346/346 tests passed", "smoke 11/11 ok at commit a46466f".\n可选 (SOP 字段 4/4)：完成是如何验证的 — 测试数、smoke 结果、commit 哈希等。例如 "matrix 24 combo 全部跑完"、"346/346 tests passed"、"smoke 11/11 ok at commit a46466f"。',
+        },
+        completionNoteImportance: {
+          type: 'number',
+          description: 'Optional: importance score (0~1) for the auto-saved completion-note memory. Default 0.85 (high — completion notes are durable knowledge).\n可选：自动保存的 completion-note memory 重要性评分（0~1）。默认 0.85（completion note 属于长期可复用知识）。',
         },
       },
       required: ['projectName', 'taskId'],
@@ -1667,7 +1687,7 @@ RETURNS: { success, projectName, engine, basePath, autoRegistered, cursorRuleGen
         profile: { type: 'string', description: 'Optional profile: cursor | generic\n可选 profile' },
         contentSessionId: { type: 'string', description: 'Optional Cursor content session ID\n可选内容会话 ID' },
         memorySessionId: { type: 'string', description: 'Optional Cursor memory session ID\n可选记忆会话 ID' },
-        hookPhase: { type: 'string', description: 'Optional hook phase: pre_prompt | post_response | manual\n可选 hook 阶段' },
+        hookPhase: { type: 'string', description: 'Optional Cursor lifecycle hook phase. Canonical: pre_prompt | post_response | manual | precompact | stop | session_start | session_end. Spelling variants (camelCase / dashes / case) are normalised by ai_db kernel; unknown values pass through verbatim.\n可选 Cursor 生命周期 hook 阶段。规范取值: pre_prompt | post_response | manual | precompact | stop | session_start | session_end。大小写/连字符等拼写变体由 ai_db 内核自动归一化，未知值原样透传。' },
         hookName: { type: 'string', description: 'Optional hook name\n可选 hook 名称' },
       },
       required: ['projectName', 'conversationId', 'userId', 'userContent', 'assistantContent'],
@@ -1692,10 +1712,63 @@ RETURNS: { success, projectName, engine, basePath, autoRegistered, cursorRuleGen
         profile: { type: 'string', description: 'Optional profile: cursor | generic\n可选 profile' },
         contentSessionId: { type: 'string', description: 'Optional Cursor content session ID\n可选内容会话 ID' },
         memorySessionId: { type: 'string', description: 'Optional Cursor memory session ID\n可选记忆会话 ID' },
-        hookPhase: { type: 'string', description: 'Optional hook phase: pre_prompt | post_response | manual\n可选 hook 阶段' },
+        hookPhase: { type: 'string', description: 'Optional Cursor lifecycle hook phase. Canonical: pre_prompt | post_response | manual | precompact | stop | session_start | session_end. Spelling variants (camelCase / dashes / case) are normalised by ai_db kernel; unknown values pass through verbatim.\n可选 Cursor 生命周期 hook 阶段。规范取值: pre_prompt | post_response | manual | precompact | stop | session_start | session_end。大小写/连字符等拼写变体由 ai_db 内核自动归一化，未知值原样透传。' },
         hookName: { type: 'string', description: 'Optional hook name\n可选 hook 名称' },
       },
       required: ['projectName', 'conversationId', 'userId', 'userContent', 'assistantContent'],
+    },
+  },
+  {
+    name: 'devplan_cursor_hooks_drain',
+    description:
+      'Phase-435 T435.9 — Drain the .cursor/.hooks-autosave/ directory left by the T435.5 Cursor lifecycle hook dispatchers (preCompact / stop / sessionEnd). For each unconsumed dump file, writes ONE "lifecycle marker" memory through the same gatewayMemorizeWithCursorProfile path used by devplan_gateway_memorize_cursor_profile (so the kernel-level attach_cursor_binding + normalize_hook_phase plumbing applies uniformly), then archives the dump to <hooksDir>/processed/. Failures append to <hooksDir>/errors.log and leave the dump in place for retry. Use dryRun: true to preview without writing or archiving.\n消费 T435.5 Cursor 生命周期 hook 留下的 .cursor/.hooks-autosave/ dump 文件：每个文件写一条 lifecycle marker memory（走与 devplan_gateway_memorize_cursor_profile 相同的 gateway 路径以共享 attach_cursor_binding + normalize_hook_phase），成功后归档到 processed/，失败追加 errors.log 并保留原文件。dryRun: true 仅预览不写入也不归档。',
+    inputSchema: {
+      type: 'object' as const,
+      properties: {
+        projectName: {
+          type: 'string',
+          description: `Project name (default: "${DEFAULT_PROJECT_NAME}")\n项目名称（默认："${DEFAULT_PROJECT_NAME}"）`,
+        },
+        hooksDir: {
+          type: 'string',
+          description:
+            'Optional hooks autosave directory. Relative paths resolve against process.cwd(). Default: .cursor/.hooks-autosave\n可选 dump 目录，相对路径相对于进程 cwd 解析。默认: .cursor/.hooks-autosave',
+        },
+        maxEntries: {
+          type: 'number',
+          description:
+            'Max number of dump files to process in this call (default: 50). Older files (smaller timestamp prefix) are drained first.\n本次调用最多处理的 dump 文件数（默认 50），按时间戳从旧到新顺序。',
+        },
+        dryRun: {
+          type: 'boolean',
+          description:
+            'If true, perform the full scan + parse but skip the gateway write and archival. Useful for previewing what would be consumed.\n仅预览：不写入也不归档。',
+        },
+        defaultConversationId: {
+          type: 'string',
+          description:
+            'Fallback conversationId when the dump payload does not carry one. If neither dump nor this default is available, the entry is skipped with status=skipped_no_id.\n当 dump 中未提供时使用的 conversationId 兜底；两者都缺时跳过该条 (status=skipped_no_id)。',
+        },
+        defaultUserId: {
+          type: 'string',
+          description:
+            'Fallback userId when the dump payload does not carry one. Same semantics as defaultConversationId.\n当 dump 中未提供时使用的 userId 兜底。',
+        },
+        writeScope: {
+          type: 'string',
+          description:
+            'Optional scope passed to gatewayMemorizeWithCursorProfile (user_global | user_role | ai_global | ai_role).\n可选 scope 透传。',
+        },
+        roleId: {
+          type: 'string',
+          description: 'Optional role ID for scoped writes.\n可选 roleId 透传。',
+        },
+        profile: {
+          type: 'string',
+          description: 'Optional profile override. Defaults to "cursor" when omitted so attach_cursor_binding fires.\n可选 profile，缺省 "cursor" 以触发 attach_cursor_binding。',
+        },
+      },
+      required: ['projectName'],
     },
   },
   {
@@ -2183,7 +2256,7 @@ RETURNS: { success, projectName, engine, basePath, autoRegistered, cursorRuleGen
         },
         hookPhase: {
           type: 'string',
-          description: 'Optional hook phase: pre_prompt | post_response | manual.\n可选 hook 阶段。',
+          description: 'Optional Cursor lifecycle hook phase. Canonical: pre_prompt | post_response | manual | precompact | stop | session_start | session_end. Spelling variants (camelCase / dashes / case) are normalised by ai_db kernel; unknown values pass through verbatim.\n可选 Cursor 生命周期 hook 阶段。规范取值: pre_prompt | post_response | manual | precompact | stop | session_start | session_end。大小写/连字符等拼写变体由 ai_db 内核自动归一化，未知值原样透传。',
         },
         hookName: {
           type: 'string',
@@ -2206,6 +2279,86 @@ RETURNS: { success, projectName, engine, basePath, autoRegistered, cursorRuleGen
         clear: {
           type: 'boolean',
           description: 'If true, delete the cache file after reporting status. (default: false)\n如果为 true，报告状态后删除缓存文件。',
+        },
+      },
+      required: ['projectName'],
+    },
+  },
+  {
+    name: 'devplan_audit_active_layer',
+    description: 'Phase-435 follow-up: weekly "active-layer audit" tool. Lists every main task with status `in_progress` and surfaces drift signals (Phase-426 pattern) — stale phases that have not moved for N days, large pending sub-tasks (≥ 8h hint at "should-be-its-own-phase"), and pending / in_progress sub-task counts. Emits structured suggested actions per phase. **Read-only**; produces no writes. Anchors the §4.1 weekly routine of docs/devplan-cursor-sync-workflow.md.\n\nPhase-435 配套：每周"活跃层审计"工具。列出所有 in_progress 主任务，标出漂移信号（Phase-426 模式）—— 距上次活动 > N 天的僵尸 phase、估时 ≥8h 的 pending 子任务（可选大项嫌疑）、pending / in_progress 子任务计数。按 phase 输出建议动作。**只读**不写入。承载 sync-workflow §4.1 周审计流程。',
+    inputSchema: {
+      type: 'object' as const,
+      properties: {
+        projectName: {
+          type: 'string',
+          description: `Project name (default: "${DEFAULT_PROJECT_NAME}")\n项目名称（默认："${DEFAULT_PROJECT_NAME}"）`,
+        },
+        staleDays: {
+          type: 'number',
+          description: 'Days without activity to flag a phase as stale (default: 7). Activity = max(createdAt, sub-task updatedAt, sub-task completedAt).\n距上次活动多少天算僵尸（默认 7）。活动 = max(createdAt, 子任务 updatedAt, 子任务 completedAt)。',
+        },
+        maxPhases: {
+          type: 'number',
+          description: 'Maximum number of in_progress phases to audit per call (default: 50). Older phases are skipped.\n单次最多审计的 in_progress phase 数（默认 50）。较旧的 phase 会被跳过。',
+        },
+        largeSubtaskHourThreshold: {
+          type: 'number',
+          description: 'Hour threshold above which a pending sub-task is flagged as "optional large item" (default: 8). Maps to sync-workflow §4.3.\n超过此工时的 pending 子任务被标为"可选大项"（默认 8）。对应 sync-workflow §4.3。',
+        },
+      },
+      required: ['projectName'],
+    },
+  },
+  {
+    name: 'devplan_phase_alignment_check',
+    description: 'Phase-435 follow-up: detect "description vs sub-task mismatch" (Phase-426 root cause — "LLM-as-judge" lived only in the description, never became a sub-task, and silently vanished). Extracts goal candidates from the phase description (list items, **bold** phrases, quoted/backtick terms) and reports which are NOT covered by any sub-task title/description. **Read-only**; emits suggested fixes — either add a sub-task or remove the goal from the description.\n\nPhase-435 配套：检测"描述 vs 子任务不一致"（Phase-426 根因 — "LLM-as-judge" 只在描述里出现、从未拆子任务，最终静默消失）。从主任务描述里抽取目标候选（列表项 / 加粗短语 / 反引号术语），输出哪些没有被任何子任务覆盖。**只读**，给出建议修复（补子任务或从描述删除目标）。',
+    inputSchema: {
+      type: 'object' as const,
+      properties: {
+        projectName: {
+          type: 'string',
+          description: `Project name (default: "${DEFAULT_PROJECT_NAME}")\n项目名称（默认："${DEFAULT_PROJECT_NAME}"）`,
+        },
+        taskId: {
+          type: 'string',
+          description: 'Main task ID to check (e.g. "phase-426"). Required.\n要检查的主任务 ID（如 "phase-426"）。必填。',
+        },
+      },
+      required: ['projectName', 'taskId'],
+    },
+  },
+  {
+    name: 'devplan_session_close',
+    description: 'Phase-435 follow-up: pre-flight "session close" checklist that pairs with the Cursor stop / sessionEnd hooks landed in T435.5. Encodes the three end-of-session scenarios from sync-workflow.md §3 (fully completed / partial / diverged) and the §2.4 phase-close checklist. For each task in `recentTaskIds`, lists: open sub-tasks, description-vs-subtask alignment issues, candidates for completion, candidates for cancellation, and a `nextActions` script the caller (or the user) should run before truly ending the session. **Read-only** by default (`preflight: true`). Designed to be wired up via the existing `devplan_cursor_hooks_drain` consumer pipeline.\n\nPhase-435 配套：与 T435.5 落地的 Cursor stop / sessionEnd hook 配对的"会话收尾"预检清单。内化了 sync-workflow §3 的三种结束场景（完全完成 / 部分完成 / 路径偏离）和 §2.4 phase 关闭清单。对 `recentTaskIds` 中的每个任务列出：未关闭子任务、描述 vs 子任务对齐问题、可关闭候选、可取消候选、以及调用方/用户在真正结束会话前应当执行的 `nextActions` 脚本。默认**只读**（preflight: true）。设计为通过已有的 `devplan_cursor_hooks_drain` 消费管道接入。',
+    inputSchema: {
+      type: 'object' as const,
+      properties: {
+        projectName: {
+          type: 'string',
+          description: `Project name (default: "${DEFAULT_PROJECT_NAME}")\n项目名称（默认："${DEFAULT_PROJECT_NAME}"）`,
+        },
+        recentTaskIds: {
+          type: 'array',
+          items: { type: 'string' },
+          description: 'Optional: explicit list of task IDs (main or sub) touched in this session. When omitted, the handler falls back to all currently `in_progress` main tasks.\n可选：本会话实际涉及的任务 ID 列表（主或子）。省略时回退到所有当前 in_progress 主任务。',
+        },
+        conversationId: {
+          type: 'string',
+          description: 'Optional: Cursor conversation ID, recorded in the suggested next-action scripts for memory linkage.\n可选：Cursor 会话 ID，写入建议动作脚本里方便 memory 关联。',
+        },
+        sessionOutcome: {
+          type: 'string',
+          enum: ['completed', 'partial', 'diverged'],
+          description: 'Optional: which of the three sync-workflow §3 end-of-session scenarios applies. When provided, `nextActions` is tailored. When omitted, all three branches are emitted for inspection.\n可选：sync-workflow §3 三种会话结束场景的一种。提供时 nextActions 会针对性裁剪；省略时三种分支都会输出供用户选择。',
+        },
+        preflight: {
+          type: 'boolean',
+          description: 'If true (default), only report — no writes. Currently the only supported mode; reserved for future auto-execution.\n为 true（默认）时仅报告不写入。当前仅支持此模式，留待将来自动执行。',
+        },
+        largeSubtaskHourThreshold: {
+          type: 'number',
+          description: 'Hour threshold for "optional large item" identification (default: 8). Same semantics as in devplan_audit_active_layer.\n"可选大项"识别的工时阈值（默认 8）。语义与 devplan_audit_active_layer 一致。',
         },
       },
       required: ['projectName'],
@@ -2236,6 +2389,9 @@ export const TOOL_GROUPS = {
     'devplan_list_tasks',
     'devplan_search_tasks',
     'devplan_start_phase',
+    'devplan_audit_active_layer',
+    'devplan_phase_alignment_check',
+    'devplan_session_close',
   ],
   memory: [
     'devplan_memory_save',
@@ -2299,6 +2455,9 @@ export const SLIM_EXPOSED_TOOL_NAMES = [
   'devplan_list_tasks',
   'devplan_search_tasks',
   'devplan_start_phase',
+  'devplan_audit_active_layer',
+  'devplan_phase_alignment_check',
+  'devplan_session_close',
   'devplan_memory_save',
   'devplan_recall_unified',
   'devplan_memory_context',
@@ -2343,6 +2502,9 @@ const TOOL_SHORT_DESCRIPTION_BY_NAME: Record<string, string> = {
   devplan_list_tasks: 'list tasks or sub-tasks',
   devplan_search_tasks: 'search tasks by taskId or title',
   devplan_start_phase: 'start or resume a phase',
+  devplan_audit_active_layer: 'audit in_progress phases for drift (Phase-426 pattern)',
+  devplan_phase_alignment_check: 'find phase description goals not covered by sub-tasks',
+  devplan_session_close: 'pre-flight session close checklist (pairs with Cursor stop/sessionEnd hooks)',
   devplan_memory_save: 'save a memory',
   devplan_recall_unified: 'recall memories and docs together',
   devplan_memory_context: 'get recent context for a topic',
@@ -2773,6 +2935,36 @@ export interface ToolArgs {
   hookPhase?: string;
   /** devplan_gateway_memorize_cursor_profile: 可选 hookName */
   hookName?: string;
+  /** devplan_complete_task: SOP 字段 1/4 — 交付物路径 / URL */
+  artifactPath?: string;
+  /** devplan_complete_task: SOP 字段 2/4 — 1–2 句关键结论 */
+  conclusion?: string;
+  /** devplan_complete_task: SOP 字段 3/4 — 与原描述偏离时的替代说明 */
+  divergenceNote?: string;
+  /** devplan_complete_task: SOP 字段 4/4 — 完成验证说明 */
+  verification?: string;
+  /** devplan_complete_task: 自动保存的 completion-note memory 重要性（默认 0.85） */
+  completionNoteImportance?: number;
+  /** devplan_audit_active_layer: 距离上次活动多少天算僵尸（默认 7） */
+  staleDays?: number;
+  /** devplan_audit_active_layer: 单次最多审计的 phase 数（默认 50） */
+  maxPhases?: number;
+  /** devplan_audit_active_layer / devplan_session_close: 大子任务工时阈值（默认 8） */
+  largeSubtaskHourThreshold?: number;
+  /** devplan_session_close: 三种结束场景 — completed / partial / diverged */
+  sessionOutcome?: string;
+  /** devplan_session_close: 会话中实际涉及的 main / sub task ID 列表 */
+  recentTaskIds?: string[];
+  /** devplan_session_close: 是否仅预览不建议关闭主 Phase（默认 true） */
+  preflight?: boolean;
+  /** devplan_cursor_hooks_drain: dump 目录（默认 .cursor/.hooks-autosave） */
+  hooksDir?: string;
+  /** devplan_cursor_hooks_drain: 单次最多消费的 dump 文件数（默认 50） */
+  maxEntries?: number;
+  /** devplan_cursor_hooks_drain: 当 dump 中未提供时使用的默认 conversationId */
+  defaultConversationId?: string;
+  /** devplan_cursor_hooks_drain: 当 dump 中未提供时使用的默认 userId */
+  defaultUserId?: string;
   /** devplan_memory_clear: 确认删除（安全保护） */
   confirm?: boolean;
   /** devplan_set_feature_flags: 特性开关 Patch */

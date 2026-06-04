@@ -103,6 +103,50 @@ devplan_create_main_task(
 
 - 在 Cursor 场景保存记忆时，默认优先调用 \`devplan_memory_save_cursor_profile\`（支持双会话 ID + hook 语义）。
 - 非 Cursor 或无需会话绑定时，继续使用 \`devplan_memory_save\`。
+- \`hookPhase\` 规范取值（Phase-435 T435.5）：\`pre_prompt\` | \`post_response\` | \`manual\` | \`precompact\` | \`stop\` | \`session_start\` | \`session_end\`。
+  - \`precompact\` 用于会话压缩前抢救高保真上下文（最优先级）。
+  - \`stop\` / \`session_end\` 用于会话归档时机自动落盘。
+  - 大小写 / 连字符等拼写变体由 ai_db 内核自动归一化为规范 token，未知值原样透传以保持前向兼容。
+  - 由 \`.cursor/hooks.json\` 注册的生命周期 hook 自动设值，手工调用一般用 \`manual\` 即可。
+
+## DevPlan 同步纪律（Phase-435 配套 — 反状态漂移）
+
+> 摘自 \`docs/devplan-cursor-sync-workflow.md\` §5「Agent 专用规则」。这套纪律解决文档 \`docs/devplan-cursor-benefits-and-drawbacks.md\` 列举的核心痛点：**状态漂移 / 目标 vs 子任务不一致 / 虚假完成感**。Phase-426 是反面教材，Phase-435 (T435.5 / T435.9) 是配套基础设施。
+
+### 五条强制规则
+
+1. **会话开始**：先调用 \`devplan_search_tasks\` 或 \`devplan_list_tasks\` 查询当前 Phase / 子任务状态，**不假设**之前会话的状态。
+2. **会话结束**：必须更新 devplan，**禁止只改代码不更新状态**。若 stop / sessionEnd hook 已注册，会触发 \`.cursor/.hooks-autosave/\` 落盘，由 \`devplan_cursor_hooks_drain\` 后置消费；但代码层任务状态仍需手动更新。
+3. **完成子任务**：调用 \`devplan_complete_task\` 时**推荐**显式提供 4 字段：
+   - \`artifactPath\`：交付物路径（报告 / PR / 文件）
+   - \`conclusion\`：1–2 句关键结论
+   - \`divergenceNote\`（可选）：与原描述不一致时的替代说明
+   - \`verification\`（可选）：测试数 / smoke 结果 / commit 哈希
+   - 提供 \`artifactPath\` + \`conclusion\` 时，handler 自动写一条 summary memory 关联本任务；缺字段会在响应里返回 \`completionNoteWarnings\`。
+4. **发现描述目标无子任务**：（例如 Phase-426 描述里写了 "LLM-as-judge" 但从未拆子任务）必须**提醒用户**补子任务或显式延期到新 Phase。这是目标静默丢失的最大来源。
+5. **不主动**把主 Phase 标 \`completed\`，除非：
+   - 所有「必做」子任务都已 \`completed\` 或 \`cancelled\`（cancelled 必须附理由）
+   - 描述里的目标都有对应子任务或明确延期记录
+   - 用户**确认**关闭
+
+### Phase-426 式漂移的快速修复流程
+
+当发现「实质完成但 devplan 卡住」（如 Phase-426 卡 15/18 但核心目标已通过 matrix 跑通）：
+
+\`\`\`
+1. 列出未完成子任务（用 devplan_list_tasks + parentTaskId + status=in_progress|pending）
+2. 逐个判定：
+   - 已有替代交付物？ → devplan_complete_task + divergenceNote 指向真实 artifact
+   - 还有真活？       → 保持 pending，写估工时
+   - 范围外 / 可选大项？→ devplan_update_task_status status=cancelled + 理由，或迁出新 Phase
+3. 必做项全部 closed 后 → devplan_complete_task 主 Phase
+\`\`\`
+
+### 可选大项识别
+
+像「12-24h 全量采样」「200+ case 全能力扫描」这类大子任务，**不要**挂在当前 Phase 尾巴上当 pending。
+- **应该** \`cancelled\` + 新开 Phase，或显式标 \`deferred\`。
+- 否则主 Phase 永远完不成（Phase-426 T426.5 即此类）。
 
 ## 批量写操作后必读回验证（防止 MCP 状态丢失）
 

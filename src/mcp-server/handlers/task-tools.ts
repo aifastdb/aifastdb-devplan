@@ -22,6 +22,143 @@ function isTaskHandlerProfileEnabled(): boolean {
   return raw === '1' || raw === 'true' || raw === 'yes';
 }
 
+/**
+ * Phase-435 follow-up — Completion-note SOP guard.
+ *
+ * Implements the 4-field completion-note SOP from
+ * `docs/devplan-cursor-sync-workflow.md` §2.3:
+ *   1. artifactPath  — deliverable path / URL
+ *   2. conclusion    — 1-2 sentence key outcome
+ *   3. divergenceNote (optional) — substitution rationale
+ *   4. verification  (optional) — how completion was verified
+ *
+ * Behaviour:
+ *   - "Soft" by default: missing fields are reported via
+ *     `completionNoteWarnings` so the success response is unchanged for
+ *     backward compatibility.
+ *   - "Hard" via env `AIFASTDB_DEVPLAN_REQUIRE_COMPLETION_NOTE=1|true|yes`:
+ *     throws InvalidParams when `artifactPath` + `conclusion` are missing.
+ *   - When both `artifactPath` and `conclusion` are present, the caller
+ *     should auto-save a summary memory (see buildCompletionNoteMemory).
+ */
+function isCompletionNoteHardRequired(): boolean {
+  const raw = String(process.env.AIFASTDB_DEVPLAN_REQUIRE_COMPLETION_NOTE || '').trim().toLowerCase();
+  return raw === '1' || raw === 'true' || raw === 'yes';
+}
+
+function trimOrUndef(v: unknown): string | undefined {
+  if (typeof v !== 'string') return undefined;
+  const t = v.trim();
+  return t ? t : undefined;
+}
+
+interface CompletionNoteFields {
+  artifactPath?: string;
+  conclusion?: string;
+  divergenceNote?: string;
+  verification?: string;
+}
+
+function collectCompletionNote(args: ToolArgs): CompletionNoteFields {
+  return {
+    artifactPath: trimOrUndef(args.artifactPath),
+    conclusion: trimOrUndef(args.conclusion),
+    divergenceNote: trimOrUndef(args.divergenceNote),
+    verification: trimOrUndef(args.verification),
+  };
+}
+
+function buildCompletionNoteWarnings(note: CompletionNoteFields): string[] {
+  const warnings: string[] = [];
+  if (!note.artifactPath) {
+    warnings.push(
+      'missing recommended field "artifactPath": link to the concrete deliverable ' +
+        '(report / PR / file path) so devplan can be re-verified against reality. ' +
+        'See docs/devplan-cursor-sync-workflow.md §2.3.',
+    );
+  }
+  if (!note.conclusion) {
+    warnings.push(
+      'missing recommended field "conclusion": 1–2 sentence key outcome ' +
+        '(numbers preferred). Required for the auto-saved completion-note memory.',
+    );
+  }
+  if (note.artifactPath && note.conclusion && !note.verification) {
+    warnings.push(
+      'optional field "verification" not provided: consider adding test counts / ' +
+        'smoke result / commit hash to make the audit trail self-contained.',
+    );
+  }
+  return warnings;
+}
+
+function buildCompletionNoteMemoryContent(
+  taskId: string,
+  taskType: 'sub' | 'main',
+  title: string | undefined,
+  note: CompletionNoteFields,
+): string {
+  const lines: string[] = [];
+  lines.push(`## ${taskId} 完成 (${taskType === 'main' ? '主任务' : '子任务'})`);
+  if (title) lines.push(`- 标题: ${title}`);
+  if (note.artifactPath) lines.push(`- 交付物: ${note.artifactPath}`);
+  if (note.conclusion) lines.push(`- 关键结论: ${note.conclusion}`);
+  if (note.divergenceNote) lines.push(`- 替代说明: ${note.divergenceNote}`);
+  if (note.verification) lines.push(`- 验证: ${note.verification}`);
+  return lines.join('\n');
+}
+
+interface CompletionNoteSaveOutcome {
+  saved: boolean;
+  memoryId?: string;
+  reason?: string;
+}
+
+function saveCompletionNoteMemory(
+  plan: IDevPlanStore,
+  projectName: string,
+  taskId: string,
+  taskType: 'sub' | 'main',
+  title: string | undefined,
+  note: CompletionNoteFields,
+  importance: number,
+): CompletionNoteSaveOutcome {
+  if (typeof plan.saveMemory !== 'function') {
+    return { saved: false, reason: 'plan.saveMemory not available on this engine' };
+  }
+  if (!note.artifactPath || !note.conclusion) {
+    return { saved: false, reason: 'artifactPath + conclusion required to auto-save completion-note memory' };
+  }
+  const content = buildCompletionNoteMemoryContent(taskId, taskType, title, note);
+  const tags = ['completion-note', taskId];
+  if (taskType === 'main') tags.push('phase-completion');
+  try {
+    const mem = plan.saveMemory({
+      projectName,
+      memoryType: 'summary',
+      content,
+      tags,
+      relatedTaskId: taskId,
+      importance,
+      recallProfile: 'default',
+      sourceRef: { sourceId: taskId, variant: 'completion-note' },
+      provenance: {
+        origin: 'devplan_complete_task',
+        note: 'auto-saved 4-field completion-note (sync-workflow §2.3)',
+        evidences: [
+          { kind: 'task', refId: taskId, locator: note.artifactPath },
+        ],
+      },
+    });
+    return { saved: true, memoryId: mem.id };
+  } catch (err) {
+    return {
+      saved: false,
+      reason: `saveMemory failed: ${err instanceof Error ? err.message : String(err)}`,
+    };
+  }
+}
+
 export async function handleTaskToolCall(
   name: string,
   args: ToolArgs,
@@ -266,6 +403,28 @@ export async function handleTaskToolCall(
       const plan = getDevPlan(args.projectName);
       const taskType = args.taskType || 'sub';
 
+      const completionNote = collectCompletionNote(args);
+      const completionNoteWarnings = buildCompletionNoteWarnings(completionNote);
+      if (
+        isCompletionNoteHardRequired() &&
+        (!completionNote.artifactPath || !completionNote.conclusion)
+      ) {
+        throw new McpError(
+          ErrorCode.InvalidParams,
+          'AIFASTDB_DEVPLAN_REQUIRE_COMPLETION_NOTE is set: devplan_complete_task requires ' +
+            'both `artifactPath` and `conclusion` (sync-workflow §2.3). ' +
+            `Missing: ${[
+              !completionNote.artifactPath ? 'artifactPath' : null,
+              !completionNote.conclusion ? 'conclusion' : null,
+            ].filter(Boolean).join(', ')}.`,
+        );
+      }
+      const completionNoteImportance =
+        typeof args.completionNoteImportance === 'number' &&
+        Number.isFinite(args.completionNoteImportance)
+          ? Math.min(1, Math.max(0, args.completionNoteImportance))
+          : 0.85;
+
       const getPhaseCompletionSummary = () => {
         const allMainTasks = plan.listMainTasks();
         const inProgress = allMainTasks.find(t => t.status === 'in_progress');
@@ -286,6 +445,15 @@ export async function handleTaskToolCall(
       try {
         if (taskType === 'main') {
           const mainTask = plan.completeMainTask(args.taskId);
+          const completionNoteOutcome = saveCompletionNoteMemory(
+            plan,
+            args.projectName,
+            mainTask.taskId,
+            'main',
+            mainTask.title,
+            completionNote,
+            completionNoteImportance,
+          );
           const { nextPhase, remainingCount } = getPhaseCompletionSummary();
           const response: Record<string, unknown> = {
             success: true,
@@ -297,6 +465,13 @@ export async function handleTaskToolCall(
               completedAt: mainTask.completedAt,
               totalSubtasks: mainTask.totalSubtasks,
               completedSubtasks: mainTask.completedSubtasks,
+            },
+            completionNote: {
+              provided: completionNote,
+              warnings: completionNoteWarnings,
+              memorySaved: completionNoteOutcome.saved,
+              memoryId: completionNoteOutcome.memoryId,
+              memorySkipReason: completionNoteOutcome.saved ? undefined : completionNoteOutcome.reason,
             },
           };
           if (nextPhase) {
@@ -310,6 +485,15 @@ export async function handleTaskToolCall(
           return JSON.stringify(response);
         } else {
           const result = plan.completeSubTask(args.taskId);
+          const completionNoteOutcome = saveCompletionNoteMemory(
+            plan,
+            args.projectName,
+            result.subTask.taskId,
+            'sub',
+            result.subTask.title,
+            completionNote,
+            completionNoteImportance,
+          );
           const response: Record<string, unknown> = {
             success: true,
             taskType: 'sub',
@@ -329,6 +513,13 @@ export async function handleTaskToolCall(
             },
             mainTaskCompleted: result.mainTaskCompleted,
             completedAtCommit: result.completedAtCommit || null,
+            completionNote: {
+              provided: completionNote,
+              warnings: completionNoteWarnings,
+              memorySaved: completionNoteOutcome.saved,
+              memoryId: completionNoteOutcome.memoryId,
+              memorySkipReason: completionNoteOutcome.saved ? undefined : completionNoteOutcome.reason,
+            },
           };
           // 当主任务也随之完成时，查询下一个待处理阶段
           if (result.mainTaskCompleted) {

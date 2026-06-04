@@ -63,6 +63,8 @@ import { handleInitToolCall } from './handlers/init-tools';
 import { handlePromptToolCall } from './handlers/prompt-tools';
 import { handleLlmAnalyzeToolCall } from './handlers/llm-analyze-tools';
 import { handleCodeToolCall } from './handlers/code-tools';
+import { handleCursorHooksToolCall } from './handlers/cursor-hooks-tools';
+import { handleSyncDisciplineToolCall } from './handlers/sync-discipline-tools';
 
 // ============================================================================
 // Async Mutex — 串行化重型操作（embedding + decompose），防止并发过载崩溃
@@ -167,6 +169,8 @@ async function handleToolCall(name: string, args: ToolArgs): Promise<string> {
     (n, a) => handlePromptToolCall(n, a, { getDevPlan }),
     (n, a) => handleLlmAnalyzeToolCall(n, a, { getDevPlan }),
     (n, a) => handleCodeToolCall(n, a),
+    (n, a) => handleCursorHooksToolCall(n, a, { getDevPlan, memorySaveMutex }),
+    (n, a) => handleSyncDisciplineToolCall(n, a, { getDevPlan }),
   ];
 
   for (const dispatch of dispatchers) {
