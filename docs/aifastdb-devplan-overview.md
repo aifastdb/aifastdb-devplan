@@ -254,6 +254,127 @@ POST /api/auto/heartbeat        # 心跳上报
 { "engine": "graph", "version": "1.0.0" }
 ```
 
+### 8.3 文档自动 embedding 模式（Phase-44 / Phase-251）
+
+当 `enableSemanticSearch: true` 时，`saveSection` / `addSection` 会为每篇文档生成向量并写入 HNSW 索引。生成 embedding 是 NAPI 同步调用（典型 100ms~3s），写入路径上同步执行会撑长 `taskWriteMutex` 持有时间。
+
+通过 `docIndexing.mode` 切换执行模式：
+
+| mode | embed 在哪 | HNSW 写入 | saveSection 阻塞 | 主线程阻塞 | 适用场景 |
+|---|---|---|---|---|---|
+| `'sync'`（默认） | 主线程同步 | `indexEntity` 同步 | 是 | 是 | 写入少 + 写完立即可被搜索；测试默认 |
+| `'async'` | 主线程 setImmediate | `indexEntityAsync` 异步 | 否 | embed 仍阻塞 | 写入频繁但不愿付双倍内存 |
+| `'async-worker'` | **worker_threads** | `indexEntityAsync` 异步 | 否 | **零阻塞** | 高吞吐 + 长文档 + 内存充裕 |
+| `'disabled'` | — | — | 否 | 否 | 临时禁用，靠 `devplan_rebuild_index` 重建 |
+
+> ⚠️ Phase-251：`async-worker` mode 会在 worker 进程加载一份 embedding 模型，**内存翻倍**（BGE-M3 ~1GB / qwen3-0.6b ~1.2GB / MiniLM ~80MB）。机器内存紧张时建议用 `async`。
+
+`.devplan/config.json`：
+```json
+{
+  "docIndexing": {
+    "mode": "async-worker",
+    "maxQueueLength": 256,
+    "drainOnSync": true,
+    "worker": {
+      "embedTimeoutMs": 30000,
+      "startTimeoutMs": 60000
+    }
+  }
+}
+```
+
+env 覆盖（最高优先级）：
+```
+AIFASTDB_DEVPLAN_DOC_INDEX_MODE=async-worker
+```
+
+各 mode 共同特性（Phase-251）：
+- 所有 async / async-worker 路径上 HNSW 写入都走 `graph.indexEntityAsync`，aifastdb 内部 spawn 到 napi worker pool，主线程不再被 WAL 写入阻塞。
+- `'sync'` mode 仍走 `graph.indexEntity`，保留"写入即可被搜索命中"的强一致语义，适合测试与小流量项目。
+
+诊断：
+- `devplan_doc_index_status` — 查看 mode、队列长度、enqueued/processed/failed/dropped 计数器
+- `devplan_doc_index_status` 带 `drain: true` — 强制等待队列清空再返回（用于显式持久化检查点）
+- 进程退出时通过 `beforeExit` / `SIGINT` / `SIGTERM` hook 自动 drain（10s 超时兜底），随后 terminate worker（5s 超时兜底）
+
+`async-worker` 模式的工作流：
+1. 第一次 `saveSection` 触发 `EmbedQueue.enqueue`，handle lazy spawn worker（首次 ~1-3s 模型加载）
+2. 后续 enqueue 立即返回；worker 在独立线程串行 `embed`，主线程持续响应 mutex / MCP 心跳
+3. embed 完成后回主线程，`graph.indexEntityAsync` 把向量写入 HNSW（aifastdb 内部 spawn）
+4. worker 启动失败自动降级回 `async`（主线程 setImmediate embed），日志会打 warning
+
+### 8.4 Embedding 引擎选择 —— **首选远程 HTTP/Ollama**（Phase-110）
+
+§8.3 解决的是"embed **怎么调度**（同步/异步/worker）"，本节解决"embed **在哪算**"。两者正交，可以自由组合。
+
+aifastdb 自 Phase-110 起内置远程 embedding 后端，由 `perceptionConfig.engineType` 切换：
+
+| engineType | embed 位置 | 模型加载 | Node 主线程 | 适用场景 |
+|---|---|---|---|---|
+| `"fastembed"` / `"qwen3_local"` / `"candle"` | **Node 进程内** NAPI 同步调用 | Node 启动时 | 被 100ms~3s 阻塞 | 离线 / 无 GPU |
+| `"ollama"` | 远程 Ollama HTTP | Ollama 进程独占 | 仅发 HTTP，~5-30ms | **推荐**：本机 Ollama / 远程 GPU 机器 |
+| `"http"` | 任意 OpenAI-compatible 服务 | 远端服务自管 | 仅发 HTTP，~5-30ms | vLLM / TEI / OpenAI / 自建 Python embedding 服务 |
+
+**为什么远程是首选：**
+
+1. **Node 主线程零阻塞** — embed 不再走 NAPI 边界，HTTP 请求天然 async；无需开 worker_threads，无内存翻倍。
+2. **模型只加载一份** — 不像 `async-worker` mode 在 worker 进程也加载一份模型；GPU 服务器上模型常驻显存，多客户端共享。
+3. **吞吐可独立扩展** — vLLM / TEI / Ollama 可以多进程 / 多 GPU 并行，Node 端只是发请求。
+4. **与 §8.3 docIndexing 正交** — 远程 embedding + `docIndexing.mode='sync'` 已经够快（saveSection 等 5-30ms HTTP 而不是 100-3000ms NAPI），通常**不需要再开 async-worker**。
+
+**关于"Python API 比 NAPI 快很多倍"的澄清**：ai_db 项目实测 (`packages/python/benchmarks/results/cross_binding/`) 显示 Python PyO3 在 **CRUD 操作**（put/get/delete）上比 NAPI 快 5-10 倍，但这是因为 NAPI 没暴露批量 API（putMany/getMany/deleteMany）和 fields projection；**embed 不在该 bench 里**。embed 是 CPU bound 计算（100-3000ms 矩阵运算），FFI 边界开销占比 < 0.001%，PyO3 vs NAPI 在 embed 单次性能上**没有可观测差距**。所以"换 Python API 加速 embed"是个误判 —— 真正的加速来自 §8.3（异步化调度）和本节（远程服务并发）。
+
+**配置示例 1：本机 Ollama 远程 embedding**
+
+```json
+// .devplan/config.json
+{
+  "enableSemanticSearch": true,
+  "perceptionConfig": {
+    "engineType": "ollama",
+    "modelId": "qwen3-embedding:0.6b",
+    "endpoint": "http://localhost:11434",
+    "dimension": 1024,
+    "timeoutSecs": 30,
+    "fallbackEngineType": "qwen3_local",
+    "fallbackModelId": "qwen3-embedding:0.6b"
+  },
+  "docIndexing": { "mode": "sync" }
+}
+```
+
+要点：
+- `endpoint` 是 Ollama 服务地址；本机用 `localhost:11434`，跨机器换成 IP/域名即可。
+- `fallbackEngineType` / `fallbackModelId` 给 Ollama 不可用时的本地兜底（即不联网也能写）。
+- 因为 HTTP 已经够快，`docIndexing.mode` 用默认 `'sync'` 就行，不必开 worker。
+
+**配置示例 2：vLLM / TEI / 任意 OpenAI-compatible 服务**
+
+```json
+{
+  "perceptionConfig": {
+    "engineType": "http",
+    "modelId": "BAAI/bge-m3",
+    "endpoint": "https://my-embedding-service.example.com/v1/embeddings",
+    "apiKey": "sk-...",
+    "dimension": 1024,
+    "timeoutSecs": 30
+  }
+}
+```
+
+要点：
+- 服务侧用什么实现都行（Python + vLLM、Rust + Candle、TEI、OpenAI、Together、Voyage…）。
+- 服务必须暴露 OpenAI-style `/v1/embeddings` 接口。
+- API key 通过 `apiKey` 字段传；不需要 auth 时省略即可。
+
+**三种 embedding 路径的总体推荐顺序**：
+
+1. **首选**：远程 HTTP/Ollama（§8.4）+ `docIndexing.mode='sync'` —— 主线程零阻塞 + 服务端可水平扩展 + 无内存翻倍
+2. **次选**：本地 NAPI + `docIndexing.mode='async-worker'`（§8.3）—— 完全离线场景；接受模型内存翻倍换主线程零阻塞
+3. **保底**：本地 NAPI + `docIndexing.mode='sync'` —— 测试 / 写入量小 / 强一致语义需求
+
 ---
 
 ## 9. 数据存储位置

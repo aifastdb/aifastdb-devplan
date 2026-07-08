@@ -10,6 +10,23 @@ import type { DevPlanConfig } from '../../dev-plan-factory';
 
 type GetDevPlan = (projectName: string) => IDevPlanStore;
 
+/**
+ * 新建 config 的默认 docIndexing。
+ *
+ * 历史默认是 'sync'：开启语义搜索后，saveSection 会在主线程同步 `synapse.embed()`，
+ * 对重型模型（如 Ollama qwen3-embedding:8b）阻塞事件循环数秒~数十秒，
+ * MCP 心跳超时 → Cursor 端表现为"死机"。
+ *
+ * 这里把新生成的 config 显式落 'async-worker'：embed 走 worker_threads，主线程零阻塞；
+ * worker 启动失败会自动降级到 'async'（见 ensureEmbedWorker），因此对各类环境都安全。
+ * 用户可在生成后的 config.json 里改成 sync / async / disabled。
+ */
+const DEFAULT_DOC_INDEXING: NonNullable<DevPlanConfig['docIndexing']> = {
+  mode: 'async-worker',
+  maxQueueLength: 256,
+  drainOnSync: true,
+};
+
 function findProjectRootFromCwd(): string | null {
   let dir = process.cwd();
   const root = path.parse(dir).root;
@@ -57,6 +74,7 @@ function buildProjectLocalConfig(workspaceConfig: DevPlanConfig | null | undefin
     ...(workspaceConfig || {}),
     defaultProject: projectName,
     enableSemanticSearch: workspaceConfig?.enableSemanticSearch ?? true,
+    docIndexing: workspaceConfig?.docIndexing ?? { ...DEFAULT_DOC_INDEXING },
     projects: {
       ...(workspaceConfig?.projects || {}),
       [projectName]: { rootPath: projectRoot },
@@ -119,6 +137,7 @@ export async function handleInitToolCall(
         writeDevPlanConfig({
           defaultProject: args.projectName,
           enableSemanticSearch: true,
+          docIndexing: { ...DEFAULT_DOC_INDEXING },
         });
       }
 
@@ -131,6 +150,7 @@ export async function handleInitToolCall(
       const workspaceConfig = readDevPlanConfig(defaultBase) || {
         defaultProject: args.projectName,
         enableSemanticSearch: true,
+        docIndexing: { ...DEFAULT_DOC_INDEXING },
       };
       // 优先从当前 cwd 所在项目和 defaultBase 推断工作区同级项目根目录。
       const candidateRoot = findCandidateProjectRoot(args.projectName, defaultBase);

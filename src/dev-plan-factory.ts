@@ -79,6 +79,28 @@ export interface DevPlanConfig {
    * 关闭时仅更新 milestones 文本内容，不触发 embedding 计算。
    */
   enableMilestonesEmbeddingOnAutoUpdate?: boolean;
+
+  /**
+   * Phase-44 / Phase-251: 文档自动 embedding 的执行模式
+   *
+   * - `'sync'`         — 默认（向后兼容）：保存路径同步 embed（阻塞 mutex，写入即可搜）
+   * - `'async'`        — fire-and-forget 后台队列；embed 仍主线程，HNSW 走 indexEntityAsync
+   * - `'async-worker'` — Phase-251：embed 走独立 worker_threads，主线程零阻塞
+   *                      ⚠️ 模型在 worker 加载一份，内存翻倍
+   * - `'disabled'`     — 完全跳过，依赖 `devplan_rebuild_index` 手动重建
+   *
+   * env 覆盖：`AIFASTDB_DEVPLAN_DOC_INDEX_MODE=sync|async|async-worker|disabled`（最高优先级）
+   */
+  docIndexing?: {
+    mode?: 'sync' | 'async' | 'async-worker' | 'disabled';
+    maxQueueLength?: number;
+    drainOnSync?: boolean;
+    worker?: {
+      embedTimeoutMs?: number;
+      startTimeoutMs?: number;
+      workerScript?: string;
+    };
+  };
   /**
    * Embedding 向量维度覆盖（Matryoshka 截断）
    *
@@ -567,6 +589,25 @@ export function createDevPlan(
     ?? workspaceConfig?.enableMilestonesEmbeddingOnAutoUpdate
     ?? true;
 
+  // Phase-44 / Phase-251: docIndexing 模式 — env > project > workspace > 默认 'sync'（向后兼容）
+  // 想加速 saveSection 的用户在 .devplan/config.json 显式设置：
+  //   { "docIndexing": { "mode": "async" } }            // embed 仍主线程，HNSW async
+  //   { "docIndexing": { "mode": "async-worker" } }      // embed 走 worker，模型内存翻倍
+  // 或导出环境变量： AIFASTDB_DEVPLAN_DOC_INDEX_MODE=async-worker
+  const envDocIndexMode = (process.env.AIFASTDB_DEVPLAN_DOC_INDEX_MODE || '').trim().toLowerCase();
+  const validModes = new Set(['sync', 'async', 'async-worker', 'disabled']);
+  const cfgDocIndexing = projectConfig?.docIndexing ?? workspaceConfig?.docIndexing;
+  type DocIndexMode = 'sync' | 'async' | 'async-worker' | 'disabled';
+  const resolvedDocIndexMode: DocIndexMode = validModes.has(envDocIndexMode)
+    ? (envDocIndexMode as DocIndexMode)
+    : ((cfgDocIndexing?.mode as DocIndexMode | undefined) ?? 'sync');
+  const docIndexing = {
+    mode: resolvedDocIndexMode,
+    maxQueueLength: cfgDocIndexing?.maxQueueLength,
+    drainOnSync: cfgDocIndexing?.drainOnSync,
+    worker: cfgDocIndexing?.worker,
+  };
+
   // 推导项目根目录（用于 git 操作的 cwd）
   // base 是 .devplan 目录路径（如 D:\xxx\project\.devplan），dirname 即项目根
   const gitCwd = base !== defaultBase ? path.dirname(base) : undefined;
@@ -592,6 +633,7 @@ export function createDevPlan(
       llmGatewayMemory,
       memoryGatewayAdapter,
       enableMilestonesEmbeddingOnAutoUpdate,
+      docIndexing,
       gitCwd,
     });
   } else {

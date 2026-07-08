@@ -569,6 +569,33 @@ export interface IDevPlanStore {
    * Phase-216: 获取向量搜索诊断信息
    */
   getVectorStatus?(): VectorSearchStatus;
+
+  /**
+   * Phase-44 / Phase-251: 获取文档自动 embedding 队列状态
+   * 仅 DevPlanGraphStore 在 docIndexMode='async' 或 'async-worker' 时返回非空 queue。
+   */
+  getDocIndexStatus?(): {
+    mode: 'sync' | 'async' | 'async-worker' | 'disabled';
+    semanticSearchConfigured: boolean;
+    drainOnSync: boolean;
+    queue: {
+      queueLength: number;
+      running: boolean;
+      enqueued: number;
+      processed: number;
+      failed: number;
+      dropped: number;
+      replaced: number;
+      lastEmbedMs: number | null;
+      lastError: string | null;
+    } | null;
+  };
+
+  /**
+   * Phase-44: 等待文档 embedding 队列清空
+   * 同步模式或无队列时立即 resolve。
+   */
+  drainDocIndexQueue?(): Promise<void>;
 }
 
 /**

@@ -1217,6 +1217,24 @@ RETURNS: { success, projectName, engine, basePath, autoRegistered, cursorRuleGen
       required: ['projectName'],
     },
   },
+  {
+    name: 'devplan_doc_index_status',
+    description: 'Phase-44: Inspect the document auto-embedding queue (mode, queue length, running flag, enqueued/processed/failed/dropped counters, last embed latency). Use to verify whether saveSection deferred embedding to the background, and to estimate backlog.\nPhase-44: 查看文档自动 embedding 队列状态（mode、队列长度、运行中标志、计数器、上次 embed 耗时）。用于验证 saveSection 是否把 embedding 推迟到后台，以及预估积压。',
+    inputSchema: {
+      type: 'object' as const,
+      properties: {
+        projectName: {
+          type: 'string',
+          description: `Project name (required)\n项目名称（必需）`,
+        },
+        drain: {
+          type: 'boolean',
+          description: 'When true, await the queue to drain before returning status. Useful for explicit persistence checkpoints.\n为 true 时先等待队列清空再返回状态，用于显式持久化检查点。',
+        },
+      },
+      required: ['projectName'],
+    },
+  },
   // ========================================================================
   // Autopilot Tools (3 个)
   // ========================================================================
@@ -2793,6 +2811,8 @@ export interface ToolArgs {
   scope?: string | { moduleId?: string; taskId?: string; anchorType?: string; anchorName?: string };
   /** devplan_sync_git: 是否仅预览不实际修改 */
   dryRun?: boolean;
+  /** Phase-44: devplan_doc_index_status: 是否在返回前 drain embedding 队列 */
+  drain?: boolean;
   /** devplan_upsert_task: 是否保留已有更高级状态 */
   preserveStatus?: boolean;
   /** 功能模块 ID */

@@ -30,7 +30,7 @@
     "@highlightjs/cdn-assets": "^11.11.1",
     "@modelcontextprotocol/sdk": "^1.0.0",
     "3d-force-graph": "^1.78.4",
-    "aifastdb": "3.10.9",
+    "aifastdb": "3.10.13",
     "deck.gl": "^9.2.11",
     "highlight.js": "^11.11.1",
     "marked": "^18.0.0",

@@ -342,6 +342,47 @@ export async function handleSectionToolCall(
       });
     }
 
+    case 'devplan_doc_index_status': {
+      if (!args.projectName) {
+        throw new McpError(ErrorCode.InvalidParams, 'Missing required: projectName');
+      }
+      const plan = getDevPlan(args.projectName);
+
+      if (!plan.getDocIndexStatus) {
+        return JSON.stringify({
+          success: false,
+          error: 'Doc index status is only available for graph engine stores.',
+          hint: 'Use .devplan/config.json with engine="graph" and enableSemanticSearch: true',
+        });
+      }
+
+      if (args.drain === true && plan.drainDocIndexQueue) {
+        await plan.drainDocIndexQueue();
+      }
+
+      const status = plan.getDocIndexStatus();
+      const q = status.queue;
+      const summary = status.mode === 'disabled'
+        ? '⏸ docIndex DISABLED — saveSection skips embedding; rely on devplan_rebuild_index'
+        : status.mode === 'sync'
+          ? '⏳ docIndex SYNC — saveSection blocks until embedding completes (legacy behavior)'
+          : q
+            ? `🚀 docIndex ASYNC — queue=${q.queueLength}${q.running ? '(running)' : '(idle)'} ` +
+              `enqueued=${q.enqueued} processed=${q.processed} failed=${q.failed} ` +
+              `dropped=${q.dropped} replaced=${q.replaced}` +
+              (q.lastEmbedMs != null ? ` lastEmbedMs=${q.lastEmbedMs}` : '') +
+              (q.lastError ? ` lastError="${q.lastError}"` : '')
+            : '🚀 docIndex ASYNC (queue not active — semantic search disabled)';
+
+      return JSON.stringify({
+        success: true,
+        projectName: args.projectName,
+        ...status,
+        drained: args.drain === true,
+        summary,
+      });
+    }
+
     // ==================================================================
     // Autopilot Tool Handlers
     // ==================================================================

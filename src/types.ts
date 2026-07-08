@@ -564,6 +564,39 @@ export interface DevPlanGraphStoreConfig {
    * 关闭时仅更新 milestones 文本内容，不触发 embedding 计算。
    */
   enableMilestonesEmbeddingOnAutoUpdate?: boolean;
+
+  /**
+   * Phase-44 / Phase-251: saveSection / addSection 自动 embedding 的执行模式
+   *
+   * - `'sync'`         — **默认（向后兼容）**：在 saveSection 路径同步执行 embed，
+   *                      阻塞 mutex 直到完成；写入即可被语义搜索命中
+   * - `'async'`        — fire-and-forget 入队，saveSection 立即返回；embed 仍在主线程
+   *                      （setImmediate 推迟），HNSW 写入用 indexEntityAsync 不阻塞
+   * - `'async-worker'` — Phase-251：embed 走独立 worker_threads，主线程完全不被
+   *                      NAPI embed 阻塞；HNSW 写入仍走 indexEntityAsync
+   *                      ⚠️ 代价：模型在 worker 进程加载一份（内存翻倍）
+   * - `'disabled'`     — 完全跳过自动 embedding，依赖 `devplan_rebuild_index` 手动重建
+   *
+   * env 覆盖：`AIFASTDB_DEVPLAN_DOC_INDEX_MODE=sync|async|async-worker|disabled`
+   */
+  docIndexing?: {
+    mode?: 'sync' | 'async' | 'async-worker' | 'disabled';
+    /** async / async-worker 模式下队列最大长度（默认 256），超出时丢弃最老任务 */
+    maxQueueLength?: number;
+    /** sync()/进程退出 hook 时是否等待队列清空（默认 true） */
+    drainOnSync?: boolean;
+    /**
+     * Phase-251: async-worker 专属配置
+     */
+    worker?: {
+      /** 单次 embed 调用超时（毫秒，默认 30000） */
+      embedTimeoutMs?: number;
+      /** 启动 + 模型加载超时（毫秒，默认 60000） */
+      startTimeoutMs?: number;
+      /** 自定义 worker 入口脚本绝对路径（不传时由 graph-store 解析 dist/embed-worker.js） */
+      workerScript?: string;
+    };
+  };
   /**
    * Embedding 向量维度覆盖（Matryoshka 截断）
    *

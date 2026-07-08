@@ -247,6 +247,7 @@ import {
 } from './dev-plan-graph-store.git';
 import { isUuidLikeQuery, rankLiteralDocMatches } from './doc-search-utils';
 import { MemoryGatewayAdapter, type MemoryGatewayTelemetry } from './memory-gateway-adapter';
+import { EmbedQueue, type EmbedQueueStats } from './embed-queue';
 
 // ============================================================================
 // DevPlanGraphStore Implementation
@@ -321,6 +322,33 @@ export class DevPlanGraphStore implements IDevPlanStore {
     lastLatencyMs: 0,
     lastError: undefined as string | undefined,
   };
+  /**
+   * Phase-44 / Phase-251: 文档 embedding 执行模式
+   * - 'sync'         — 默认（向后兼容）：在 saveSection 路径同步 embed
+   * - 'async'        — 入队后由 embedQueue 后台 drain，saveSection 立即返回；embed 仍主线程
+   * - 'async-worker' — Phase-251：embed 走 worker_threads，主线程零阻塞
+   * - 'disabled'     — 完全跳过，依赖 devplan_rebuild_index 重建
+   */
+  private docIndexMode: 'sync' | 'async' | 'async-worker' | 'disabled' = 'sync';
+  /** Phase-44: 文档 embedding 异步队列（仅 docIndexMode='async' 或 'async-worker' 时存在） */
+  private embedQueue: EmbedQueue | null = null;
+  /** Phase-44: sync()/退出 hook 是否等待队列清空 */
+  private drainOnSync: boolean = true;
+  /** Phase-251: embed worker handle（仅 docIndexMode='async-worker' 时 lazy 创建） */
+  private embedWorkerHandle: import('./embed-worker-handle').EmbedWorkerHandle | null = null;
+  /** Phase-251: worker 启动 promise（避免重复 spawn） */
+  private embedWorkerStarting: Promise<void> | null = null;
+  /** Phase-251: 用户配置的 worker 选项（startTimeoutMs/embedTimeoutMs/workerScript） */
+  private embedWorkerOptions: {
+    embedTimeoutMs?: number;
+    startTimeoutMs?: number;
+    workerScript?: string;
+  } = {};
+  /** Phase-44: 是否已注册进程退出 drain hook（避免重复注册） */
+  private static processExitHookRegistered = false;
+  /** Phase-44: 全局所有 store 实例（用于进程退出时统一 drain） */
+  private static activeStores = new Set<DevPlanGraphStore>();
+
   /** Phase-52: Recall/BM25 调优参数（可通过 .devplan/config.json 外部化） */
   private recallSearchTuning: ResolvedRecallSearchTuning = {
     rrfK: 60,
@@ -499,6 +527,169 @@ export class DevPlanGraphStore implements IDevPlanStore {
     if (config.enableTreeIndexRetrieval && !this.treeIndexRetrievalEnabled) {
       console.warn('[DevPlan] TreeIndex retrieval requested but LLM Gateway is unavailable. TreeIndex channel disabled.');
     }
+
+    // Phase-44 / Phase-251: 文档自动 embedding 执行模式（默认 sync，保持向后兼容）
+    const requestedMode = config.docIndexing?.mode ?? 'sync';
+    this.docIndexMode = this.semanticSearchConfigured ? requestedMode : 'disabled';
+    this.drainOnSync = config.docIndexing?.drainOnSync !== false;
+    this.embedWorkerOptions = config.docIndexing?.worker ?? {};
+
+    const isQueueMode = this.docIndexMode === 'async' || this.docIndexMode === 'async-worker';
+    if (isQueueMode && this.semanticSearchConfigured) {
+      // embed 函数：'async' 走主线程同步 NAPI；'async-worker' 走 worker_threads
+      const embedFn: (text: string) => number[] | Promise<number[]> =
+        this.docIndexMode === 'async-worker'
+          ? async (text) => {
+              const handle = await this.ensureEmbedWorker(config);
+              return handle.embed(text);
+            }
+          : (text) => {
+              if (!this.ensureSynapseReady() || !this.synapse) {
+                throw new Error('Synapse not ready');
+              }
+              return this.synapse.embed(text);
+            };
+
+      this.embedQueue = new EmbedQueue(
+        embedFn,
+        // Phase-251：HNSW 写入升级到 indexEntityAsync —— aifastdb 内部 spawn
+        // 到 napi worker pool，主线程不再被 WAL 写入阻塞。
+        async (entityId, embedding) => {
+          await this.graph.indexEntityAsync(entityId, embedding);
+        },
+        {
+          maxQueueLength: config.docIndexing?.maxQueueLength,
+          warn: (msg) => console.warn(msg),
+        },
+      );
+      DevPlanGraphStore.activeStores.add(this);
+      DevPlanGraphStore.ensureProcessExitHook();
+    }
+  }
+
+  /**
+   * Phase-251: 懒启动 embed worker（仅在第一次 enqueue 触发时 spawn）。
+   *
+   * 失败时清理状态、降级到 docIndexMode='async' 主线程同步 embed。
+   * 多次并发调用幂等（共享同一 starting Promise）。
+   */
+  private async ensureEmbedWorker(
+    config: DevPlanGraphStoreConfig,
+  ): Promise<import('./embed-worker-handle').EmbedWorkerHandle> {
+    if (this.embedWorkerHandle && this.embedWorkerHandle.isReady()) {
+      return this.embedWorkerHandle;
+    }
+    if (this.embedWorkerStarting) {
+      await this.embedWorkerStarting;
+      if (this.embedWorkerHandle && this.embedWorkerHandle.isReady()) {
+        return this.embedWorkerHandle;
+      }
+    }
+
+    const start = (async (): Promise<void> => {
+      const { EmbedWorkerHandle } = await import('./embed-worker-handle');
+      const perception = resolvePerceptionConfig(config);
+      const dimension = resolveModelDimension(
+        perception.modelId,
+        config.embeddingDimension ?? perception.dimension,
+      );
+      // 默认 worker 入口：编译产物 dist/embed-worker.js 与本文件同目录
+      const defaultScript = path.join(__dirname, 'embed-worker.js');
+      const workerScript = this.embedWorkerOptions.workerScript ?? defaultScript;
+
+      const handle = new EmbedWorkerHandle({
+        workerScript,
+        perception,
+        dimension,
+        embedTimeoutMs: this.embedWorkerOptions.embedTimeoutMs,
+        startTimeoutMs: this.embedWorkerOptions.startTimeoutMs,
+        warn: (m) => console.warn(m),
+      });
+      try {
+        await handle.start();
+        this.embedWorkerHandle = handle;
+      } catch (e) {
+        // 启动失败：降级到主线程 'async' 模式，让 saveSection 路径仍可用。
+        console.warn(
+          `[DevPlan] EmbedWorker failed to start (${e instanceof Error ? e.message : String(e)}); ` +
+          `falling back to 'async' mode (main-thread embed).`
+        );
+        try { await handle.terminate(); } catch { /* ignore */ }
+        this.docIndexMode = 'async';
+        throw e;
+      }
+    })();
+
+    this.embedWorkerStarting = start;
+    try {
+      await start;
+    } finally {
+      this.embedWorkerStarting = null;
+    }
+
+    if (!this.embedWorkerHandle) {
+      throw new Error('Embed worker unavailable after start attempt');
+    }
+    return this.embedWorkerHandle;
+  }
+
+  /**
+   * Phase-44 / Phase-251: 注册一次性进程退出 drain hook，保证后台未刷的向量被尽量保存。
+   *
+   * - `beforeExit`：事件循环空闲时触发，可 await drain（正常退出路径）
+   * - `SIGINT/SIGTERM`：MCP/CLI 被外部信号中止时触发，drain 后再退出
+   *   （Node 默认 SIGINT 会立即退出，注册 listener 后会等 listener 完成）
+   *
+   * Phase-251：drain 完成后再 terminate embed worker（让队列里 in-flight 的 embed 完成）。
+   * 所有路径都包 10 秒超时，避免坏掉的 embed 阻止进程退出。
+   */
+  private static ensureProcessExitHook(): void {
+    if (DevPlanGraphStore.processExitHookRegistered) return;
+    DevPlanGraphStore.processExitHookRegistered = true;
+
+    const drainAndTerminateAll = async (): Promise<void> => {
+      const drains: Array<Promise<void>> = [];
+      for (const store of DevPlanGraphStore.activeStores) {
+        if (store.embedQueue && store.drainOnSync) {
+          drains.push(store.embedQueue.drainNow());
+        }
+      }
+      if (drains.length > 0) {
+        await Promise.race([
+          Promise.all(drains).then(() => undefined),
+          new Promise<void>((resolve) => setTimeout(resolve, 10_000)),
+        ]);
+      }
+      // Phase-251：drain 后关闭所有 worker（独立超时 5s，避免 worker 卡住挡住进程退出）
+      const terminations: Array<Promise<void>> = [];
+      for (const store of DevPlanGraphStore.activeStores) {
+        if (store.embedWorkerHandle) {
+          terminations.push(store.embedWorkerHandle.terminate().catch(() => undefined));
+        }
+      }
+      if (terminations.length > 0) {
+        await Promise.race([
+          Promise.all(terminations).then(() => undefined),
+          new Promise<void>((resolve) => setTimeout(resolve, 5_000)),
+        ]);
+      }
+    };
+
+    process.on('beforeExit', () => {
+      void drainAndTerminateAll();
+    });
+
+    const handleSignal = (signal: NodeJS.Signals): void => {
+      drainAndTerminateAll()
+        .catch(() => undefined)
+        .finally(() => {
+          // listener 已经处理；用 default exit code 让 Node 终止
+          // 用 setImmediate 避免与可能的其他 signal listener 竞争
+          setImmediate(() => process.exit(signal === 'SIGINT' ? 130 : 143));
+        });
+    };
+    process.on('SIGINT', handleSignal);
+    process.on('SIGTERM', handleSignal);
   }
 
   /**
@@ -3838,6 +4029,9 @@ export class DevPlanGraphStore implements IDevPlanStore {
 
   sync(): void {
     this.graph.flush();
+    // 注意：sync() 是同步签名，无法 await embed queue。
+    // 如需保证向量持久化，请在调用方使用 await store.drainDocIndexQueue()。
+    // 进程退出时已通过 beforeExit hook 自动 drain（含 10s 超时兜底）。
   }
 
   getProjectName(): string {
@@ -4129,12 +4323,27 @@ export class DevPlanGraphStore implements IDevPlanStore {
   /**
    * 自动为文档生成 Embedding 并索引到 SocialGraphV2 向量搜索层
    *
-   * 将 title + content 拼接后生成 Embedding，以 entity.id 为 key 存入 HNSW 索引。
+   * Phase-44 / Phase-251: 根据 docIndexMode 选择执行路径：
+   * - 'disabled'     — 直接返回（依赖 devplan_rebuild_index 手动重建）
+   * - 'sync'         — 旧行为：同步 embed + indexEntity，阻塞调用栈直到完成
+   * - 'async'        — 入队后台 worker；embed 仍主线程，HNSW 走 indexEntityAsync
+   * - 'async-worker' — 入队后台 worker；embed 走 worker_threads，主线程零阻塞
+   *
    * 失败时仅输出警告，不影响文档保存。
    */
   private autoIndexDocument(entityId: string, title: string, content: string): void {
-    if (!this.ensureSynapseReady() || !this.synapse) return;
+    if (this.docIndexMode === 'disabled') return;
 
+    if (
+      (this.docIndexMode === 'async' || this.docIndexMode === 'async-worker') &&
+      this.embedQueue
+    ) {
+      this.embedQueue.enqueue({ entityId, title, content });
+      return;
+    }
+
+    // sync 路径
+    if (!this.ensureSynapseReady() || !this.synapse) return;
     try {
       const text = `${title}\n${content}`;
       const embedding = this.synapse.embed(text);
@@ -4146,6 +4355,34 @@ export class DevPlanGraphStore implements IDevPlanStore {
         }`
       );
     }
+  }
+
+  /**
+   * Phase-44: 文档 embedding 队列状态（供 MCP devplan_doc_index_status 查询）
+   */
+  getDocIndexStatus(): {
+    mode: 'sync' | 'async' | 'async-worker' | 'disabled';
+    semanticSearchConfigured: boolean;
+    drainOnSync: boolean;
+    queue: EmbedQueueStats | null;
+  } {
+    return {
+      mode: this.docIndexMode,
+      semanticSearchConfigured: this.semanticSearchConfigured,
+      drainOnSync: this.drainOnSync,
+      queue: this.embedQueue ? this.embedQueue.getStats() : null,
+    };
+  }
+
+  /**
+   * Phase-44: 强制清空 embedding 队列（await 直到完成）
+   *
+   * 用于：测试、显式持久化、进程退出前。
+   * 同步模式或队列为空时立即 resolve。
+   */
+  async drainDocIndexQueue(): Promise<void> {
+    if (!this.embedQueue) return;
+    await this.embedQueue.drainNow();
   }
 
 }
