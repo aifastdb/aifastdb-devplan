@@ -1431,7 +1431,7 @@ RETURNS: { success, projectName, engine, basePath, autoRegistered, cursorRuleGen
         decompose: {
           type: 'string',
           enum: ['false', 'true', 'rule', 'llm'],
-          description: 'Optional: Memory decomposition mode (Phase-47). Decomposes content into an Episode + Entities + Relations sub-graph using the Rust memory tree engine.\n可选：记忆分解模式（Phase-47）。将内容分解为 Episode + Entities + Relations 子图。\n- "false" (default): Traditional single-entity storage\n- "true" or "rule": Rule-based decomposer\n- "llm": Parse LLM-generated decomposition JSON (requires llmDecompositionJson)',
+          description: 'Optional: Memory decomposition mode (Phase-47). Decomposes content into an Episode + Entities + Relations sub-graph using the Rust memory tree engine.\n可选：记忆分解模式（Phase-47）。将内容分解为 Episode + Entities + Relations 子图。\n- "rule" or "true" (default since Phase-252): Rule-based decomposer\n- "false": Traditional single-entity storage (opt-out)\n- "llm": Parse LLM-generated decomposition JSON (requires llmDecompositionJson)',
         },
         llmDecompositionJson: {
           type: 'string',

@@ -30,7 +30,8 @@ describe('DevPlan memory recall ranking', () => {
     }
   });
 
-  test('technical keyword queries should rank high-value backfill memory ahead of probe memory', () => {
+  // Phase-252: 非测试查询对 recallProfile=test_probe 记忆做硬过滤（不再只软降权）
+  test('technical keyword queries should exclude probe memories entirely', () => {
     const tempRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'devplan-recall-ranking-'));
     tempDirs.push(tempRoot);
     const projectName = 'ranking_probe_penalty';
@@ -62,9 +63,10 @@ describe('DevPlan memory recall ranking', () => {
       deterministicFirst: true,
     });
 
-    expect(results.length).toBeGreaterThanOrEqual(2);
+    expect(results.length).toBeGreaterThanOrEqual(1);
     expect(results[0]?.sourceRef?.sourceId).toBe('backfill-real-memory');
-    expect(results[1]?.sourceRef?.sourceId).toBe('anchor-merge-test');
+    // 硬过滤：test_probe 记忆不允许出现在非测试查询结果中
+    expect(results.some((r) => r.sourceRef?.sourceId === 'anchor-merge-test')).toBe(false);
   });
 
   test('test-intent queries should still allow probe memories to rank first', () => {
@@ -99,7 +101,9 @@ describe('DevPlan memory recall ranking', () => {
       deterministicFirst: true,
     });
 
-    expect(results.length).toBeGreaterThanOrEqual(2);
+    // 测试意图查询：test_probe 记忆保留且可排第一（BM25-only 环境下
+    // 生产记忆可能因词项不匹配而缺席，因此只断言 probe 的存在与排序）
+    expect(results.length).toBeGreaterThanOrEqual(1);
     expect(results[0]?.sourceRef?.sourceId).toBe('merge-probe-memory');
   });
 });

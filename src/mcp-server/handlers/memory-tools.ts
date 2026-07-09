@@ -43,12 +43,17 @@ export async function handleMemoryToolCall(name: string, args: ToolArgs, deps: {
         }
 
         // Phase-47: 解析 decompose 参数
+        // Phase-252: 默认改为 'rule' — 规则分解在 Rust 层构建 mem:* 知识子图
+        // （Episode→Fact→Decision），是 memory_tree 激活引擎的扩展基础。
+        // 显式传 "false" 才关闭。native 缺 memoryTreeStore 时由 store 层守卫跳过。
         let decompose: boolean | 'rule' | 'llm' | undefined;
         const decomposeArg = args.decompose as string | undefined;
-        if (decomposeArg === 'true' || decomposeArg === 'rule') {
-          decompose = 'rule';
-        } else if (decomposeArg === 'llm') {
+        if (decomposeArg === 'llm') {
           decompose = 'llm';
+        } else if (decomposeArg === 'false') {
+          decompose = undefined;
+        } else {
+          decompose = 'rule';
         }
 
         const memory = (plan as any).saveMemory({
@@ -163,6 +168,8 @@ export async function handleMemoryToolCall(name: string, args: ToolArgs, deps: {
       const docCount = memories.filter((m: any) => m.sourceKind === 'doc').length;
       // Phase-125: 统计 guided 文档数量
       const guidedDocCount = memories.filter((m: any) => m.sourceKind === 'doc' && m.guidedReasons?.length > 0).length;
+      // Phase-253: 统计激活引擎返回的分解子实体数量
+      const decomposedCount = memories.filter((m: any) => m.sourceKind === 'decomposed').length;
 
       // Phase-125: 解析实际使用的 docStrategy
       const effectiveDocStrategy = docStrategy || (includeDocs ? 'vector' : 'none');
@@ -177,6 +184,7 @@ export async function handleMemoryToolCall(name: string, args: ToolArgs, deps: {
         memoryCount,
         docCount,
         guidedDocCount,  // Phase-125: guided 文档数
+        decomposedCount, // Phase-253: 激活引擎分解子实体数
         uri: args.uri || null,
         recursive,
         unifiedRecall: effectiveDocStrategy !== 'none',

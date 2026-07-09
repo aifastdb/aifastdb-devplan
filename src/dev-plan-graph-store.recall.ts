@@ -11,6 +11,7 @@ import {
 import { ET, RT } from './dev-plan-graph-store.shared';
 import {
   applyTagBoost as applyTagBoostUtil,
+  filterTestProbeMemories as filterTestProbeMemoriesUtil,
   normalizeScores as normalizeScoresUtil,
   rerankMemoriesByQuery as rerankMemoriesByQueryUtil,
   rrfMergeMemories as rrfMergeMemoriesUtil,
@@ -48,7 +49,7 @@ type RecallGraphLike = {
   getEntity(entityId: string): GraphEntityLike | null;
   updateEntity(entityId: string, update: { properties: Record<string, any> }): void;
   flush(): void;
-  memoryTreeSearch(embedding: number[], userId: string): any;
+  memoryTreeSearch(embedding: number[], userId: string, config?: Record<string, any>): any;
   memoryTreeStrengthen(entityIds: string[]): void;
   hybridSearchTantivy(embedding: number[], query: string, entityType: string, topK: number, rrfK: number): any[];
   searchEntitiesByVector(embedding: number[], topK: number, entityType: string): Array<{ entityId: string; score: number }>;
@@ -122,6 +123,7 @@ export function recallUnified(store: RecallStoreBindings, query: string, options
       : 'vector';
 
   let memoryResults: ScoredMemory[] = [];
+  let activationResults: ScoredMemory[] = [];
   let activationUsed = false;
   let fallbackTriggered = false;
   let lastError: string | undefined;
@@ -129,15 +131,17 @@ export function recallUnified(store: RecallStoreBindings, query: string, options
   try {
     if (useActivation && store.nativeMemoryTreeSearchReady && store.ensureSynapseReady() && store.synapse) {
       try {
-        memoryResults = recallViaActivationEngine(
+        activationResults = recallViaActivationEngine(
           store,
           augmentedQuery,
           limit,
           minScore,
           options?.memoryType,
           now,
+          getSharedQueryEmbedding(),
+          depth,
         );
-        activationUsed = memoryResults.length > 0;
+        activationUsed = activationResults.length > 0;
       } catch (e) {
         fallbackTriggered = true;
         lastError = e instanceof Error ? e.message : String(e);
@@ -145,28 +149,38 @@ export function recallUnified(store: RecallStoreBindings, query: string, options
       }
     }
 
-    if (!activationUsed) {
-      memoryResults = recallViaLegacySearch(
-        store,
-        augmentedQuery,
-        limit,
-        minScore,
-        options?.memoryType,
-        now,
-        getSharedQueryEmbedding(),
-      );
+    // Phase-252: 激活通道与 legacy hybrid 通道并行召回后 RRF 融合（不再二选一）。
+    // 激活引擎强在图谱关联发现，hybrid 强在 BM25 精确词命中，互补而非互斥。
+    memoryResults = recallViaLegacySearch(
+      store,
+      augmentedQuery,
+      limit,
+      minScore,
+      options?.memoryType,
+      now,
+      getSharedQueryEmbedding(),
+    );
 
-      if (graphExpand && memoryResults.length > 0) {
-        const graphExpanded = expandMemoriesByGraph(store, memoryResults, options?.memoryType, limit);
-        if (graphExpanded.length > 0) {
-          memoryResults = rrfMergeMemoriesUtil(memoryResults, graphExpanded, limit, store.recallSearchTuning);
-        }
-      }
-
-      if (memoryResults.length >= 2) {
-        hebbianStrengthen(store, memoryResults.filter((m: ScoredMemory) => m.sourceKind === 'memory'));
+    if (graphExpand && memoryResults.length > 0) {
+      const graphExpanded = expandMemoriesByGraph(store, memoryResults, options?.memoryType, limit);
+      if (graphExpanded.length > 0) {
+        memoryResults = rrfMergeMemoriesUtil(memoryResults, graphExpanded, limit, store.recallSearchTuning);
       }
     }
+
+    if (activationUsed) {
+      // 激活结果作为"图谱通道"参与融合（graphWeight），hybrid 结果走 vectorWeight
+      memoryResults = memoryResults.length > 0
+        ? rrfMergeMemoriesUtil(memoryResults, activationResults, limit, store.recallSearchTuning)
+        : activationResults.slice(0, limit);
+    }
+
+    if (memoryResults.length >= 2) {
+      hebbianStrengthen(store, memoryResults.filter((m: ScoredMemory) => m.sourceKind === 'memory'));
+    }
+
+    // Phase-252: 非测试查询硬过滤 test_probe 记忆（此前软降权挡不住 mock 污染）
+    memoryResults = filterTestProbeMemoriesUtil(memoryResults, augmentedQuery);
 
     if (scope) {
       memoryResults = store.filterMemoriesByScope(memoryResults, scope);
@@ -445,6 +459,50 @@ export function vectorSearchDocuments(
   return docResults;
 }
 
+/**
+ * Phase-252: 构建激活引擎的完整 MemoryTreeConfig。
+ *
+ * Rust 层 MemoryTreeConfig 无 serde(default)，部分字段的 JSON 会反序列化失败，
+ * 因此必须镜像 Rust 默认值给出全量字段，仅覆盖需要调整的项：
+ * - activation_top_k: 默认 10 太小 — 锚点向量搜索不过滤实体类型时，
+ *   要和全图的文档/任务/Prompt 实体竞争，调大避免记忆锚点被稀释。
+ *
+ * Phase-253（依赖 ai_db Phase-467 二进制，旧二进制忽略未知字段）：
+ * - anchor_entity_type_filter: 锚点只在 devplan-memory 实体中选取，
+ *   治锚点稀释的根本解法（调大 top_k 只是缓解）。
+ * - extra_relation_types: 子图扩展在 mem:* 全集基础上追加 devplan 自有
+ *   关系类型，让激活引擎能从记忆实体走到分解子图与关联记忆。
+ */
+export function buildActivationConfig(limit: number): Record<string, any> {
+  return {
+    activation_alpha: 0.5,
+    activation_beta: 0.3,
+    activation_gamma: 0.2,
+    activation_max_hops: 2,
+    activation_max_nodes: 50,
+    activation_top_k: Math.min(50, Math.max(30, limit * 3)),
+    conflict_min_similarity: 0.8,
+    supports_gain: 0.15,
+    inhibits_gain: 0.2,
+    supersedes_inhibit_gain: 0.35,
+    conflict_penalty_gain: 0.25,
+    min_effective_relation_weight: 0.05,
+    hebbian_enabled: true,
+    hebbian_increment: 0.05,
+    hebbian_max_weight: 1.0,
+    promote_hit_threshold: 5,
+    demote_idle_timeout_secs: 86400 * 7,
+    preserve_entity_types: ['mem:episode', 'mem:decision'],
+    anchor_entity_type_filter: ET.MEMORY,
+    extra_relation_types: [
+      RT.MEMORY_RELATES,
+      RT.MEMORY_SUPERSEDES,
+      RT.MEMORY_CONFLICTS,
+      'memory_has_episode',
+    ],
+  };
+}
+
 export function recallViaActivationEngine(
   store: RecallStoreBindings,
   query: string,
@@ -452,65 +510,125 @@ export function recallViaActivationEngine(
   minScore: number,
   memoryType: MemoryType | undefined,
   now: number,
+  queryEmbedding?: number[],
+  depth?: RecallDepth,
 ): ScoredMemory[] {
   if (!store.synapse) return [];
   if (!store.nativeMemoryTreeSearchReady) return [];
 
-  const embedding = store.synapse.embed(query);
+  const embedding = queryEmbedding || store.synapse.embed(query);
   let activation: any;
   try {
     activation = store.graph.memoryTreeSearch(
       embedding,
       store.projectName,
+      buildActivationConfig(limit),
     );
-  } catch (e) {
-    console.warn(
-      `[DevPlan] memoryTreeSearch unavailable, fallback to legacy search: ${
-        e instanceof Error ? e.message : String(e)
-      }`,
-    );
-    return [];
+  } catch (configErr) {
+    // config 结构与当前 aifastdb 版本不兼容时降级为无 config 调用（走 Rust 默认配置）
+    try {
+      activation = store.graph.memoryTreeSearch(
+        embedding,
+        store.projectName,
+      );
+    } catch (e) {
+      console.warn(
+        `[DevPlan] memoryTreeSearch unavailable, fallback to legacy search: ${
+          e instanceof Error ? e.message : String(e)
+        } (config attempt: ${configErr instanceof Error ? configErr.message : String(configErr)})`,
+      );
+      return [];
+    }
   }
 
   if (!activation || !activation.memories || activation.memories.length === 0) {
     return [];
   }
 
+  // Phase-253: L2/L3 深度时把激活引擎命中的 mem:* 分解子实体作为补充结果返回
+  // （此前全部丢弃，分解子图的价值只剩冲突检测）。mem:episode 根节点内容是母
+  // 记忆的截断副本，天然重复，排除。
+  const includeDecomposed = depth === 'L2' || depth === 'L3';
+  const decomposedCap = Math.max(2, Math.floor(limit / 2));
+  const decomposed: ScoredMemory[] = [];
+
   const results: ScoredMemory[] = [];
   let hasPersistedAccessUpdate = false;
 
   for (const mem of activation.memories) {
-    if (minScore > 0 && mem.score.combined < minScore) continue;
+    // Rust ActivationScore 序列化字段是 combined_score（旧代码误用 .combined，
+    // 导致激活结果 score 一直是 undefined）。优先用裁决后的 effective_recall_score。
+    const combinedScore: number = mem.score?.combined_score ?? 0;
+    const effectiveScore: number = typeof mem.effective_recall_score === 'number'
+      ? mem.effective_recall_score
+      : combinedScore;
+    if (minScore > 0 && effectiveScore < minScore) continue;
 
     const entity = store.graph.getEntity(mem.entity_id);
     if (!entity) continue;
 
-    const p = entity.properties as any;
-    if (p.projectName !== store.projectName) continue;
-    if (memoryType && p.memoryType !== memoryType) continue;
-
-    if (shouldPersistRecallAccessUpdate(store, p, now)) {
-      store.graph.updateEntity(entity.id, {
-        properties: {
-          ...p,
-          hitCount: (p.hitCount || 0) + 1,
-          lastAccessedAt: now,
-        },
-      });
-      hasPersistedAccessUpdate = true;
-    }
+    const p = (entity.properties || {}) as any;
 
     if (entity.entity_type === ET.MEMORY) {
+      if (p.projectName !== store.projectName) continue;
+      if (memoryType && p.memoryType !== memoryType) continue;
+      if (results.length >= limit) continue;
+
+      if (shouldPersistRecallAccessUpdate(store, p, now)) {
+        store.graph.updateEntity(entity.id, {
+          properties: {
+            ...p,
+            hitCount: (p.hitCount || 0) + 1,
+            lastAccessedAt: now,
+          },
+        });
+        hasPersistedAccessUpdate = true;
+      }
+
       results.push({
         ...store.entityToMemory(entity),
         hitCount: (p.hitCount || 0) + 1,
         lastAccessedAt: now,
-        score: mem.score.combined,
+        score: effectiveScore,
         sourceKind: 'memory',
+      });
+    } else if (
+      includeDecomposed
+      && decomposed.length < decomposedCap
+      && typeof entity.entity_type === 'string'
+      && entity.entity_type.startsWith('mem:')
+      && entity.entity_type !== 'mem:episode'
+    ) {
+      // 分解子实体只有 episode 根带 user_id，子实体属性为空对象；
+      // 有 user_id 时校验归属，没有时放行（graph-data 本身按项目隔离）。
+      if (p.user_id && p.user_id !== store.projectName) continue;
+      const content = p.content || mem.content || '';
+      if (!content) continue;
+
+      decomposed.push({
+        id: entity.id,
+        projectName: store.projectName,
+        memoryType: entity.entity_type === 'mem:decision'
+          ? 'decision'
+          : entity.entity_type === 'mem:pattern'
+            ? 'pattern'
+            : 'insight',
+        content: String(content),
+        tags: [entity.entity_type],
+        importance: typeof p.confidence === 'number' ? p.confidence : 0.5,
+        hitCount: 0,
+        lastAccessedAt: null,
+        createdAt: typeof p.timestamp === 'number' ? p.timestamp : 0,
+        updatedAt: typeof p.timestamp === 'number' ? p.timestamp : 0,
+        score: effectiveScore,
+        sourceKind: 'decomposed',
+        decomposedEntityType: entity.entity_type,
       });
     }
 
-    if (results.length >= limit) break;
+    if (results.length >= limit && (!includeDecomposed || decomposed.length >= decomposedCap)) {
+      break;
+    }
   }
 
   if (hasPersistedAccessUpdate) {
@@ -522,6 +640,17 @@ export function recallViaActivationEngine(
       }
     } catch (e) {
       console.warn(`[DevPlan] memoryTreeStrengthen failed: ${e instanceof Error ? e.message : String(e)}`);
+    }
+  }
+
+  // 补充结果排在正主记忆之后，去掉与正主记忆内容完全重复的子实体
+  if (decomposed.length > 0) {
+    const seenContents = new Set(results.map((m) => m.content));
+    for (const d of decomposed) {
+      if (!seenContents.has(d.content)) {
+        results.push(d);
+        seenContents.add(d.content);
+      }
     }
   }
 

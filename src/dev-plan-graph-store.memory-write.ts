@@ -254,11 +254,15 @@ export function autoLinkSimilarMemories(
 
     if (relationsToCreate.length === 0) return;
 
+    // Phase-252: 除 MEMORY_RELATES 外双写一条 mem:RELATES，
+    // 使 ai_db memory_tree 激活引擎（只遍历 mem:* 关系）能沿记忆网络扩展。
     if (store.nativeApplyMutationsReady) {
       const mutations: any[] = [];
       for (const { targetId, score } of relationsToCreate) {
         mutations.push(buildPutRelationMutation(newMemoryId, targetId, RT.MEMORY_RELATES, score));
         mutations.push(buildPutRelationMutation(targetId, newMemoryId, RT.MEMORY_RELATES, score));
+        mutations.push(buildPutRelationMutation(newMemoryId, targetId, RT.MEM_RELATES, score));
+        mutations.push(buildPutRelationMutation(targetId, newMemoryId, RT.MEM_RELATES, score));
       }
       store.graph.applyMutations(mutations).catch((e: any) => {
         console.warn(`[DevPlan] applyMutations for memory links failed: ${e}`);
@@ -267,6 +271,8 @@ export function autoLinkSimilarMemories(
       for (const { targetId, score } of relationsToCreate) {
         store.graph.putRelation(newMemoryId, targetId, RT.MEMORY_RELATES, score, false);
         store.graph.putRelation(targetId, newMemoryId, RT.MEMORY_RELATES, score, false);
+        store.graph.putRelation(newMemoryId, targetId, RT.MEM_RELATES, score, false);
+        store.graph.putRelation(targetId, newMemoryId, RT.MEM_RELATES, score, false);
       }
     }
   } catch (e) {

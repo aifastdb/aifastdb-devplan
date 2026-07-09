@@ -146,6 +146,27 @@ function looksLikeTestMemory(memory: ScoredMemory): boolean {
   return tokens.some(token => TEST_LIKE_TOKENS.has(token));
 }
 
+/**
+ * Phase-252: test_probe 记忆硬过滤。
+ *
+ * 非测试意图的查询直接剔除 `recallProfile === 'test_probe'` 的记忆
+ * （此前仅通过 rerankMemoriesByQuery 软降权，实测挡不住语义相近的 mock 干扰）。
+ * 查询本身带测试意图（含 test/mock/probe 等 token）时保留，便于测试场景自查。
+ *
+ * 仅按显式 recallProfile 过滤；"看起来像测试"的 token 启发式仍走软降权，避免误伤
+ * 正文提到 benchmark/demo 等词的正常业务记忆。
+ */
+export function filterTestProbeMemories(
+  memories: ScoredMemory[],
+  query: string,
+): ScoredMemory[] {
+  if (memories.length === 0) return memories;
+  if (hasTestIntent(splitToSearchTokens(query))) return memories;
+  return memories.filter(
+    (m) => !(m.sourceKind === 'memory' && m.recallProfile === 'test_probe'),
+  );
+}
+
 export function rerankMemoriesByQuery(
   memories: ScoredMemory[],
   query: string,

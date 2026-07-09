@@ -1671,8 +1671,10 @@ export interface ScoredMemory extends Memory {
   score: number;
   /** Phase-215: 归一化前的原始分数（RRF/BM25/hotness 混合分数），供调试使用 */
   rawScore?: number;
-  /** 来源类型（统一召回时区分 memory / doc） */
-  sourceKind?: 'memory' | 'doc';
+  /** 来源类型（统一召回时区分 memory / doc / 激活引擎分解子实体） */
+  sourceKind?: 'memory' | 'doc' | 'decomposed';
+  /** 当 sourceKind='decomposed' 时，子实体的原始 mem:* 实体类型（如 mem:fact） */
+  decomposedEntityType?: string;
   /** 当 sourceKind='doc' 时，文档的 section */
   docSection?: string;
   /** 当 sourceKind='doc' 时，文档的 subSection */

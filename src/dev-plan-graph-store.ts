@@ -289,6 +289,8 @@ export class DevPlanGraphStore implements IDevPlanStore {
   private memoryGatewayAdapter: MemoryGatewayAdapter | null = null;
   /** NAPI 能力探测：memoryTreeSearch 是否可用（避免 wrapper 存在但 native 缺失时报错） */
   private nativeMemoryTreeSearchReady: boolean = false;
+  /** Phase-252: NAPI 能力探测：memoryTreeStore 是否可用（decompose 默认开启后需前置守卫，避免白做 embed） */
+  private nativeMemoryTreeStoreReady: boolean = false;
   /** NAPI 能力探测：anchorExtractFromText 是否可用 */
   private nativeAnchorExtractReady: boolean = false;
   /** NAPI 能力探测：applyMutations 是否可用 */
@@ -704,6 +706,7 @@ export class DevPlanGraphStore implements IDevPlanStore {
         typeof (this.graph as any)[name] === 'function';
 
       this.nativeMemoryTreeSearchReady = hasNativeFn('memoryTreeSearch');
+      this.nativeMemoryTreeStoreReady = hasNativeFn('memoryTreeStore');
       this.nativeAnchorExtractReady = hasNativeFn('anchorExtractFromText');
       this.nativeApplyMutationsReady = hasNativeFn('applyMutations');
       // Phase-7: 这两个走 wrapper 层探测（wrapper 是 native 的 thin pass-through，存在性一致）
@@ -2620,12 +2623,14 @@ export class DevPlanGraphStore implements IDevPlanStore {
         let relationCreated: string | undefined;
         if (shouldCreateRelation) {
           if (conflictType === 'Supersedes') {
-            // new → old (MEMORY_SUPERSEDES)
+            // new → old (MEMORY_SUPERSEDES)；Phase-252: 双写 mem:SUPERSEDES 供激活引擎抑制降权
             this.graph.putRelation(newEntity.id, existing.id, RT.MEMORY_SUPERSEDES, similarity, false);
+            this.graph.putRelation(newEntity.id, existing.id, RT.MEM_SUPERSEDES, similarity, false);
             relationCreated = RT.MEMORY_SUPERSEDES;
           } else if (conflictType === 'Conflicts') {
-            // new → old (MEMORY_CONFLICTS)
+            // new → old (MEMORY_CONFLICTS)；Phase-252: 双写 mem:CONFLICTS 供激活引擎抑制降权
             this.graph.putRelation(newEntity.id, existing.id, RT.MEMORY_CONFLICTS, similarity, false);
+            this.graph.putRelation(newEntity.id, existing.id, RT.MEM_CONFLICTS, similarity, false);
             relationCreated = RT.MEMORY_CONFLICTS;
           }
         }
@@ -2671,6 +2676,12 @@ export class DevPlanGraphStore implements IDevPlanStore {
     context?: string,
     llmJson?: string,
   ): Memory['decomposition'] | undefined {
+    // Phase-252: decompose 默认开启后的前置守卫 —
+    // native 缺 memoryTreeStore（未编 llm-gateway feature 的二进制）时直接跳过，
+    // 避免每次 saveMemory 白做规则分解 + 批量 embed 后在 Step 3 抛错。
+    if (!this.nativeMemoryTreeStoreReady) {
+      return undefined;
+    }
     try {
       // Step 1: 分解文本
       let decomposition: DecompositionResult;

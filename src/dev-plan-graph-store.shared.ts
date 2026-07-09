@@ -38,6 +38,21 @@ export const RT = {
   MEMORY_SUPERSEDES: 'memory_supersedes',
   /** 记忆 → 记忆 冲突关系（两条记忆互相矛盾，如 decision 冲突） */
   MEMORY_CONFLICTS: 'memory_conflicts',
+  /**
+   * Phase-252: 与 ai_db Rust memory_tree 激活引擎对齐的语义关联关系。
+   *
+   * 激活引擎（MemoryActivator）的子图扩展只遍历 `mem:*` 前缀关系
+   * （见 ai_db packages/core/src/llm/memory_tree/types.rs relation_types::ALL），
+   * 因此记忆间关联在写 MEMORY_RELATES 的同时双写一条 MEM_RELATES，
+   * 让激活引擎的"图谱近邻"维度能看到 devplan 的记忆网络。
+   * 注意：必须用 Rust core 的 `mem:RELATES` 字面量，wrapper 导出的
+   * MemoryRelationTypes.RELATES（无前缀）是旧版常量，不匹配。
+   */
+  MEM_RELATES: 'mem:RELATES',
+  /** Phase-252: mem:* 双写 — 替代关系（激活引擎对被替代记忆施加抑制降权） */
+  MEM_SUPERSEDES: 'mem:SUPERSEDES',
+  /** Phase-252: mem:* 双写 — 冲突关系（激活引擎对冲突记忆施加抑制降权） */
+  MEM_CONFLICTS: 'mem:CONFLICTS',
 } as const;
 
 export type ResolvedRecallSearchTuning = {
